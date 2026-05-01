@@ -550,7 +550,7 @@ export function NewTaskDialog(props: NewTaskDialogProps) {
       onClose={props.onClose}
       width={store.availableAgents.length > 8 ? 'min(840px, calc(100vw - 48px))' : '560px'}
       labelledBy={titleId}
-      panelStyle={{ gap: '20px' }}
+      panelStyle={{ padding: '0', overflow: 'hidden', gap: '0' }}
     >
       <form
         ref={formRef}
@@ -558,210 +558,66 @@ export function NewTaskDialog(props: NewTaskDialogProps) {
         style={{
           display: 'flex',
           'flex-direction': 'column',
-          gap: '20px',
+          'min-height': '0',
+          overflow: 'hidden',
         }}
       >
-        <div>
-          <h2
-            id={titleId}
-            style={{
-              margin: '0',
-              'font-size': '17px',
-              color: theme.fg,
-              'font-weight': '600',
-            }}
-          >
-            New Task
-          </h2>
-        </div>
-
-        {/* Project selector */}
         <div
-          data-nav-field="project"
-          style={{ display: 'flex', 'flex-direction': 'column', gap: '8px' }}
+          style={{
+            'overflow-y': 'auto',
+            'min-height': '0',
+            flex: '1 1 auto',
+            display: 'flex',
+            'flex-direction': 'column',
+            gap: '20px',
+            padding: '28px 28px 20px',
+          }}
         >
-          <label style={sectionLabelStyle}>Project</label>
-          <ProjectSelect value={selectedProjectId()} onChange={setSelectedProjectId} />
-        </div>
-
-        {/* Prompt input (optional) */}
-        <div
-          data-nav-field="prompt"
-          style={{ display: 'flex', 'flex-direction': 'column', gap: '8px' }}
-        >
-          <label style={sectionLabelStyle}>
-            Prompt <span style={{ opacity: '0.5', 'text-transform': 'none' }}>(optional)</span>
-          </label>
-          <textarea
-            ref={promptRef}
-            class="input-field"
-            value={prompt()}
-            onInput={(e) => setPrompt(e.currentTarget.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-                e.preventDefault();
-                e.stopPropagation();
-                if (canSubmit()) handleSubmit(e);
-              }
-            }}
-            placeholder="What should the agent work on?"
-            rows={3}
-            style={{
-              background: theme.bgInput,
-              border: `1px solid ${theme.border}`,
-              'border-radius': '8px',
-              padding: '10px 14px',
-              color: theme.fg,
-              'font-size': '14px',
-              'font-family': "'JetBrains Mono', monospace",
-              outline: 'none',
-              resize: 'vertical',
-            }}
-          />
-        </div>
-
-        <div
-          data-nav-field="task-name"
-          style={{ display: 'flex', 'flex-direction': 'column', gap: '8px' }}
-        >
-          <label style={sectionLabelStyle}>
-            Task name{' '}
-            <span style={{ opacity: '0.5', 'text-transform': 'none' }}>
-              (optional — derived from prompt)
-            </span>
-          </label>
-          <input
-            class="input-field"
-            type="text"
-            value={name()}
-            onInput={(e) => setName(e.currentTarget.value)}
-            placeholder={effectiveName() || 'Add user authentication'}
-            style={{
-              background: theme.bgInput,
-              border: `1px solid ${theme.border}`,
-              'border-radius': '8px',
-              padding: '10px 14px',
-              color: theme.fg,
-              'font-size': '14px',
-              outline: 'none',
-            }}
-          />
-          <Show when={gitIsolation() === 'direct' && !isNonGitProject() && selectedProjectPath()}>
-            <div
+          <div>
+            <h2
+              id={titleId}
               style={{
-                'font-size': '12px',
-                'font-family': "'JetBrains Mono', monospace",
-                color: theme.fgSubtle,
-                display: 'flex',
-                'flex-direction': 'column',
-                gap: '2px',
-                padding: '4px 2px 0',
+                margin: '0',
+                'font-size': '17px',
+                color: theme.fg,
+                'font-weight': '600',
               }}
             >
-              <span style={{ display: 'flex', 'align-items': 'center', gap: '6px' }}>
-                <svg
-                  width="11"
-                  height="11"
-                  viewBox="0 0 16 16"
-                  fill="currentColor"
-                  style={{ 'flex-shrink': '0' }}
-                >
-                  <path d="M5 3.25a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0Zm6.25 7.5a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5ZM5 7.75a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0Zm0 0h5.5a2.5 2.5 0 0 0 2.5-2.5v-.5a.75.75 0 0 0-1.5 0v.5a1 1 0 0 1-1 1H5a3.25 3.25 0 1 0 0 6.5h6.25a.75.75 0 0 0 0-1.5H5a1.75 1.75 0 1 1 0-3.5Z" />
-                </svg>
-                main branch (detected on create)
-              </span>
-              <span style={{ display: 'flex', 'align-items': 'center', gap: '6px' }}>
-                <svg
-                  width="11"
-                  height="11"
-                  viewBox="0 0 16 16"
-                  fill="currentColor"
-                  style={{ 'flex-shrink': '0' }}
-                >
-                  <path d="M1.75 1A1.75 1.75 0 0 0 0 2.75v10.5C0 14.216.784 15 1.75 15h12.5A1.75 1.75 0 0 0 16 13.25v-8.5A1.75 1.75 0 0 0 14.25 3H7.5a.25.25 0 0 1-.2-.1l-.9-1.2C6.07 1.26 5.55 1 5 1H1.75Z" />
-                </svg>
-                {selectedProjectPath()}
-              </span>
-            </div>
-          </Show>
-        </div>
+              New Task
+            </h2>
+          </div>
 
-        <Show when={gitIsolation() === 'worktree'}>
-          <BranchPrefixField
-            branchPrefix={branchPrefix()}
-            branchPreview={branchPreview()}
-            projectPath={selectedProjectPath()}
-            onPrefixChange={setBranchPrefix}
-          />
-        </Show>
-
-        <AgentSelector
-          agents={store.availableAgents}
-          selectedAgent={selectedAgent()}
-          onSelect={setSelectedAgent}
-          wrap={false}
-        />
-
-        {/* Isolation mode selector — hidden for non-git projects */}
-        <Show when={!isNonGitProject()}>
+          {/* Project selector */}
           <div
-            data-nav-field="git-isolation"
+            data-nav-field="project"
             style={{ display: 'flex', 'flex-direction': 'column', gap: '8px' }}
           >
-            <label style={sectionLabelStyle}>Git Isolation</label>
-            <SegmentedButtons
-              options={[
-                {
-                  value: 'worktree',
-                  label: 'Worktree',
-                  title:
-                    'Creates a git branch and worktree so the AI agent can work in isolation without affecting your current branch.',
-                },
-                {
-                  value: 'direct',
-                  label: 'Current Branch',
-                  disabled: directDisabled(),
-                  title: 'The AI agent will work on your current branch in the project root.',
-                },
-              ]}
-              value={gitIsolation()}
-              onChange={setGitIsolation}
-            />
-            <Show when={directDisabled()}>
-              <span style={{ 'font-size': '12px', color: theme.fgSubtle }}>
-                This project already has a task on the current branch
-              </span>
-            </Show>
-            <Show when={gitIsolation() === 'direct'}>
-              <div style={{ ...bannerStyle(theme.warning), 'font-size': '13px' }}>
-                Changes will be made on the selected branch without worktree isolation.
-              </div>
-            </Show>
+            <label style={sectionLabelStyle}>Project</label>
+            <ProjectSelect value={selectedProjectId()} onChange={setSelectedProjectId} />
           </div>
-        </Show>
 
-        {/* Branch picker — hidden for non-git projects */}
-        <Show when={!isNonGitProject()}>
+          {/* Prompt input (optional) */}
           <div
-            data-nav-field="base-branch"
+            data-nav-field="prompt"
             style={{ display: 'flex', 'flex-direction': 'column', gap: '8px' }}
           >
             <label style={sectionLabelStyle}>
-              {gitIsolation() === 'worktree' ? 'Base branch' : 'Branch'}
-              <Show when={branchesLoading()}>
-                {' '}
-                <span
-                  class="inline-spinner"
-                  aria-hidden="true"
-                  style={{ 'vertical-align': 'middle' }}
-                />
-              </Show>
+              Prompt <span style={{ opacity: '0.5', 'text-transform': 'none' }}>(optional)</span>
             </label>
-            <select
+            <textarea
+              ref={promptRef}
               class="input-field"
-              value={baseBranch()}
-              onChange={(e) => setBaseBranch(e.currentTarget.value)}
-              disabled={branchesLoading()}
+              value={prompt()}
+              onInput={(e) => setPrompt(e.currentTarget.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  if (canSubmit()) handleSubmit(e);
+                }
+              }}
+              placeholder="What should the agent work on?"
+              rows={3}
               style={{
                 background: theme.bgInput,
                 border: `1px solid ${theme.border}`,
@@ -771,94 +627,176 @@ export function NewTaskDialog(props: NewTaskDialogProps) {
                 'font-size': '14px',
                 'font-family': "'JetBrains Mono', monospace",
                 outline: 'none',
-                opacity: branchesLoading() ? '0.5' : '1',
+                resize: 'vertical',
               }}
-            >
-              <For each={branches()}>{(b) => <option value={b}>{b}</option>}</For>
-            </select>
+            />
           </div>
-        </Show>
 
-        {/* Checkboxes group */}
-        <div style={{ display: 'flex', 'flex-direction': 'column', gap: '10px' }}>
-          {/* Steps tracking toggle */}
-          <div data-nav-field="steps-enabled">
-            <label
-              title="Instructs the agent to append progress entries to .claude/steps.json. Each entry is shown live in the Steps panel as the agent works."
-              style={{
-                display: 'flex',
-                'align-items': 'center',
-                gap: '8px',
-                'font-size': '13px',
-                color: theme.fg,
-                cursor: 'pointer',
-              }}
-            >
-              <input
-                type="checkbox"
-                checked={stepsEnabled()}
-                onChange={(e) => setStepsEnabled(e.currentTarget.checked)}
-                style={{ 'accent-color': theme.accent, cursor: 'inherit' }}
-              />
-              Steps tracking
+          <div
+            data-nav-field="task-name"
+            style={{ display: 'flex', 'flex-direction': 'column', gap: '8px' }}
+          >
+            <label style={sectionLabelStyle}>
+              Task name{' '}
+              <span style={{ opacity: '0.5', 'text-transform': 'none' }}>
+                (optional — derived from prompt)
+              </span>
             </label>
-          </div>
-
-          {/* Skip permissions toggle */}
-          <Show when={agentSupportsSkipPermissions()}>
-            <div
-              data-nav-field="skip-permissions"
-              style={{ display: 'flex', 'flex-direction': 'column', gap: '8px' }}
-            >
-              <label
+            <input
+              class="input-field"
+              type="text"
+              value={name()}
+              onInput={(e) => setName(e.currentTarget.value)}
+              placeholder={effectiveName() || 'Add user authentication'}
+              style={{
+                background: theme.bgInput,
+                border: `1px solid ${theme.border}`,
+                'border-radius': '8px',
+                padding: '10px 14px',
+                color: theme.fg,
+                'font-size': '14px',
+                outline: 'none',
+              }}
+            />
+            <Show when={gitIsolation() === 'direct' && !isNonGitProject() && selectedProjectPath()}>
+              <div
                 style={{
+                  'font-size': '12px',
+                  'font-family': "'JetBrains Mono', monospace",
+                  color: theme.fgSubtle,
                   display: 'flex',
-                  'align-items': 'center',
-                  gap: '8px',
-                  'font-size': '13px',
-                  color: theme.fg,
-                  cursor: 'pointer',
+                  'flex-direction': 'column',
+                  gap: '2px',
+                  padding: '4px 2px 0',
                 }}
               >
-                <input
-                  type="checkbox"
-                  checked={skipPermissions()}
-                  onChange={(e) => setSkipPermissions(e.currentTarget.checked)}
-                  style={{ 'accent-color': theme.accent, cursor: 'inherit' }}
-                />
-                Dangerously skip all confirms
-              </label>
-              <Show when={skipPermissions()}>
-                <div
-                  style={{
-                    ...bannerStyle(theme.warning),
-                    'font-size': '13px',
-                  }}
-                >
-                  The agent will run without asking for confirmation. It can read, write, and delete
-                  files, and execute commands without your approval.
+                <span style={{ display: 'flex', 'align-items': 'center', gap: '6px' }}>
+                  <svg
+                    width="11"
+                    height="11"
+                    viewBox="0 0 16 16"
+                    fill="currentColor"
+                    style={{ 'flex-shrink': '0' }}
+                  >
+                    <path d="M5 3.25a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0Zm6.25 7.5a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5ZM5 7.75a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0Zm0 0h5.5a2.5 2.5 0 0 0 2.5-2.5v-.5a.75.75 0 0 0-1.5 0v.5a1 1 0 0 1-1 1H5a3.25 3.25 0 1 0 0 6.5h6.25a.75.75 0 0 0 0-1.5H5a1.75 1.75 0 1 1 0-3.5Z" />
+                  </svg>
+                  main branch (detected on create)
+                </span>
+                <span style={{ display: 'flex', 'align-items': 'center', gap: '6px' }}>
+                  <svg
+                    width="11"
+                    height="11"
+                    viewBox="0 0 16 16"
+                    fill="currentColor"
+                    style={{ 'flex-shrink': '0' }}
+                  >
+                    <path d="M1.75 1A1.75 1.75 0 0 0 0 2.75v10.5C0 14.216.784 15 1.75 15h12.5A1.75 1.75 0 0 0 16 13.25v-8.5A1.75 1.75 0 0 0 14.25 3H7.5a.25.25 0 0 1-.2-.1l-.9-1.2C6.07 1.26 5.55 1 5 1H1.75Z" />
+                  </svg>
+                  {selectedProjectPath()}
+                </span>
+              </div>
+            </Show>
+          </div>
+
+          <Show when={gitIsolation() === 'worktree'}>
+            <BranchPrefixField
+              branchPrefix={branchPrefix()}
+              branchPreview={branchPreview()}
+              projectPath={selectedProjectPath()}
+              onPrefixChange={setBranchPrefix}
+            />
+          </Show>
+
+          <AgentSelector
+            agents={store.availableAgents}
+            selectedAgent={selectedAgent()}
+            onSelect={setSelectedAgent}
+            wrap={false}
+          />
+
+          {/* Isolation mode selector — hidden for non-git projects */}
+          <Show when={!isNonGitProject()}>
+            <div
+              data-nav-field="git-isolation"
+              style={{ display: 'flex', 'flex-direction': 'column', gap: '8px' }}
+            >
+              <label style={sectionLabelStyle}>Git Isolation</label>
+              <SegmentedButtons
+                options={[
+                  {
+                    value: 'worktree',
+                    label: 'Worktree',
+                    title:
+                      'Creates a git branch and worktree so the AI agent can work in isolation without affecting your current branch.',
+                  },
+                  {
+                    value: 'direct',
+                    label: 'Current Branch',
+                    disabled: directDisabled(),
+                    title: 'The AI agent will work on your current branch in the project root.',
+                  },
+                ]}
+                value={gitIsolation()}
+                onChange={setGitIsolation}
+              />
+              <Show when={directDisabled()}>
+                <span style={{ 'font-size': '12px', color: theme.fgSubtle }}>
+                  This project already has a task on the current branch
+                </span>
+              </Show>
+              <Show when={gitIsolation() === 'direct'}>
+                <div style={{ ...bannerStyle(theme.warning), 'font-size': '13px' }}>
+                  Changes will be made on the selected branch without worktree isolation.
                 </div>
-                <Show when={!dockerMode() && store.dockerAvailable}>
-                  <div style={{ 'font-size': '12px', color: theme.fgMuted }}>
-                    Tip: Enable Docker isolation to limit the blast radius of skip-permissions mode.
-                  </div>
-                </Show>
-                <Show when={!store.dockerAvailable}>
-                  <div style={{ 'font-size': '12px', color: theme.fgMuted }}>
-                    Install Docker to enable container isolation for safer skip-permissions mode.
-                  </div>
-                </Show>
               </Show>
             </div>
           </Show>
 
-          {/* Docker isolation toggle */}
-          <Show when={store.dockerAvailable}>
+          {/* Branch picker — hidden for non-git projects */}
+          <Show when={!isNonGitProject()}>
             <div
-              data-nav-field="docker-mode"
+              data-nav-field="base-branch"
               style={{ display: 'flex', 'flex-direction': 'column', gap: '8px' }}
             >
+              <label style={sectionLabelStyle}>
+                {gitIsolation() === 'worktree' ? 'Base branch' : 'Branch'}
+                <Show when={branchesLoading()}>
+                  {' '}
+                  <span
+                    class="inline-spinner"
+                    aria-hidden="true"
+                    style={{ 'vertical-align': 'middle' }}
+                  />
+                </Show>
+              </label>
+              <select
+                class="input-field"
+                value={baseBranch()}
+                onChange={(e) => setBaseBranch(e.currentTarget.value)}
+                disabled={branchesLoading()}
+                style={{
+                  background: theme.bgInput,
+                  border: `1px solid ${theme.border}`,
+                  'border-radius': '8px',
+                  padding: '10px 14px',
+                  color: theme.fg,
+                  'font-size': '14px',
+                  'font-family': "'JetBrains Mono', monospace",
+                  outline: 'none',
+                  opacity: branchesLoading() ? '0.5' : '1',
+                }}
+              >
+                <For each={branches()}>{(b) => <option value={b}>{b}</option>}</For>
+              </select>
+            </div>
+          </Show>
+
+          {/* Checkboxes group */}
+          <div style={{ display: 'flex', 'flex-direction': 'column', gap: '10px' }}>
+            {/* Steps tracking toggle */}
+            <div data-nav-field="steps-enabled">
               <label
+                title="Instructs the agent to append progress entries to .claude/steps.json. Each entry is shown live in the Steps panel as the agent works."
                 style={{
                   display: 'flex',
                   'align-items': 'center',
@@ -870,177 +808,257 @@ export function NewTaskDialog(props: NewTaskDialogProps) {
               >
                 <input
                   type="checkbox"
-                  checked={dockerMode()}
-                  onChange={(e) => setDockerMode(e.currentTarget.checked)}
+                  checked={stepsEnabled()}
+                  onChange={(e) => setStepsEnabled(e.currentTarget.checked)}
                   style={{ 'accent-color': theme.accent, cursor: 'inherit' }}
                 />
-                Run in Docker container
+                Steps tracking
               </label>
-              <Show when={dockerMode()}>
-                <div
+            </div>
+
+            {/* Skip permissions toggle */}
+            <Show when={agentSupportsSkipPermissions()}>
+              <div
+                data-nav-field="skip-permissions"
+                style={{ display: 'flex', 'flex-direction': 'column', gap: '8px' }}
+              >
+                <label
                   style={{
+                    display: 'flex',
+                    'align-items': 'center',
+                    gap: '8px',
                     'font-size': '13px',
-                    color: theme.success ?? theme.accent,
-                    background: `color-mix(in srgb, ${theme.success ?? theme.accent} 8%, transparent)`,
-                    padding: '8px 12px',
-                    'border-radius': '8px',
-                    border: `1px solid color-mix(in srgb, ${theme.success ?? theme.accent} 20%, transparent)`,
+                    color: theme.fg,
+                    cursor: 'pointer',
                   }}
                 >
-                  The agent will run inside a Docker container. Only the project directory is
-                  mounted — files outside the project are protected from accidental deletion.
-                </div>
-                <Show when={projectDockerfile()}>
+                  <input
+                    type="checkbox"
+                    checked={skipPermissions()}
+                    onChange={(e) => setSkipPermissions(e.currentTarget.checked)}
+                    style={{ 'accent-color': theme.accent, cursor: 'inherit' }}
+                  />
+                  Dangerously skip all confirms
+                </label>
+                <Show when={skipPermissions()}>
                   <div
                     style={{
-                      'font-size': '12px',
-                      color: theme.accent,
-                      display: 'flex',
-                      'align-items': 'center',
-                      gap: '4px',
+                      ...bannerStyle(theme.warning),
+                      'font-size': '13px',
                     }}
                   >
-                    <span aria-hidden="true">📁</span>
-                    Using project Dockerfile:{' '}
-                    <code style={{ 'font-family': "'JetBrains Mono', monospace" }}>
-                      {PROJECT_DOCKERFILE_RELATIVE_PATH}
-                    </code>
+                    The agent will run without asking for confirmation. It can read, write, and
+                    delete files, and execute commands without your approval.
                   </div>
-                </Show>
-                <Show when={!projectDockerfile()}>
-                  <div style={{ display: 'flex', 'align-items': 'center', gap: '8px' }}>
-                    <label
-                      style={{ 'font-size': '12px', color: theme.fgMuted, 'white-space': 'nowrap' }}
-                    >
-                      Image:
-                    </label>
-                    <input
-                      type="text"
-                      value={store.dockerImage}
-                      onInput={(e) => setDockerImage(e.currentTarget.value)}
-                      placeholder={DEFAULT_DOCKER_IMAGE}
-                      style={{
-                        flex: '1',
-                        background: theme.bgInput,
-                        border: `1px solid ${theme.border}`,
-                        'border-radius': '6px',
-                        padding: '5px 10px',
-                        color: theme.fg,
-                        'font-size': '13px',
-                        'font-family': "'JetBrains Mono', monospace",
-                        outline: 'none',
-                      }}
-                    />
-                  </div>
-                </Show>
-                <Show when={dockerImageReady() === false && !dockerBuilding()}>
-                  <div
-                    style={{
-                      display: 'flex',
-                      'align-items': 'center',
-                      gap: '8px',
-                      'font-size': '12px',
-                      color: theme.fgMuted,
-                    }}
-                  >
-                    <span>Image not found locally.</span>
-                    <Show
-                      when={
-                        projectDockerfile() ||
-                        store.dockerImage === DEFAULT_DOCKER_IMAGE ||
-                        !store.dockerImage
-                      }
-                    >
-                      <button
-                        type="button"
-                        onClick={handleBuildImage}
-                        style={{
-                          background: theme.accent,
-                          color: theme.accentText,
-                          border: 'none',
-                          'border-radius': '4px',
-                          padding: '3px 10px',
-                          'font-size': '12px',
-                          cursor: 'pointer',
-                        }}
-                      >
-                        Build Image
-                      </button>
-                    </Show>
-                  </div>
-                </Show>
-                <Show when={dockerBuilding()}>
-                  <div
-                    style={{
-                      'font-size': '12px',
-                      color: theme.fgMuted,
-                      display: 'flex',
-                      'align-items': 'center',
-                      gap: '6px',
-                    }}
-                  >
-                    <span class="inline-spinner" aria-hidden="true" />
-                    Building image... this may take a few minutes.
-                  </div>
-                  <Show when={dockerBuildOutput()}>
-                    <pre
-                      ref={buildOutputRef}
-                      style={{
-                        'font-size': '11px',
-                        color: theme.fgSubtle,
-                        background: theme.bgInput,
-                        'border-radius': '4px',
-                        padding: '6px 8px',
-                        'max-height': '120px',
-                        'overflow-y': 'auto',
-                        'white-space': 'pre-wrap',
-                        'word-break': 'break-all',
-                        margin: '0',
-                      }}
-                    >
-                      {dockerBuildOutput()}
-                    </pre>
+                  <Show when={!dockerMode() && store.dockerAvailable}>
+                    <div style={{ 'font-size': '12px', color: theme.fgMuted }}>
+                      Tip: Enable Docker isolation to limit the blast radius of skip-permissions
+                      mode.
+                    </div>
+                  </Show>
+                  <Show when={!store.dockerAvailable}>
+                    <div style={{ 'font-size': '12px', color: theme.fgMuted }}>
+                      Install Docker to enable container isolation for safer skip-permissions mode.
+                    </div>
                   </Show>
                 </Show>
-                <Show when={dockerBuildError()}>
-                  <div style={{ 'font-size': '12px', color: theme.error }}>
-                    Build failed: {dockerBuildError()}
+              </div>
+            </Show>
+
+            {/* Docker isolation toggle */}
+            <Show when={store.dockerAvailable}>
+              <div
+                data-nav-field="docker-mode"
+                style={{ display: 'flex', 'flex-direction': 'column', gap: '8px' }}
+              >
+                <label
+                  style={{
+                    display: 'flex',
+                    'align-items': 'center',
+                    gap: '8px',
+                    'font-size': '13px',
+                    color: theme.fg,
+                    cursor: 'pointer',
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={dockerMode()}
+                    onChange={(e) => setDockerMode(e.currentTarget.checked)}
+                    style={{ 'accent-color': theme.accent, cursor: 'inherit' }}
+                  />
+                  Run in Docker container
+                </label>
+                <Show when={dockerMode()}>
+                  <div
+                    style={{
+                      'font-size': '13px',
+                      color: theme.success ?? theme.accent,
+                      background: `color-mix(in srgb, ${theme.success ?? theme.accent} 8%, transparent)`,
+                      padding: '8px 12px',
+                      'border-radius': '8px',
+                      border: `1px solid color-mix(in srgb, ${theme.success ?? theme.accent} 20%, transparent)`,
+                    }}
+                  >
+                    The agent will run inside a Docker container. Only the project directory is
+                    mounted — files outside the project are protected from accidental deletion.
                   </div>
+                  <Show when={projectDockerfile()}>
+                    <div
+                      style={{
+                        'font-size': '12px',
+                        color: theme.accent,
+                        display: 'flex',
+                        'align-items': 'center',
+                        gap: '4px',
+                      }}
+                    >
+                      <span aria-hidden="true">📁</span>
+                      Using project Dockerfile:{' '}
+                      <code style={{ 'font-family': "'JetBrains Mono', monospace" }}>
+                        {PROJECT_DOCKERFILE_RELATIVE_PATH}
+                      </code>
+                    </div>
+                  </Show>
+                  <Show when={!projectDockerfile()}>
+                    <div style={{ display: 'flex', 'align-items': 'center', gap: '8px' }}>
+                      <label
+                        style={{
+                          'font-size': '12px',
+                          color: theme.fgMuted,
+                          'white-space': 'nowrap',
+                        }}
+                      >
+                        Image:
+                      </label>
+                      <input
+                        type="text"
+                        value={store.dockerImage}
+                        onInput={(e) => setDockerImage(e.currentTarget.value)}
+                        placeholder={DEFAULT_DOCKER_IMAGE}
+                        style={{
+                          flex: '1',
+                          background: theme.bgInput,
+                          border: `1px solid ${theme.border}`,
+                          'border-radius': '6px',
+                          padding: '5px 10px',
+                          color: theme.fg,
+                          'font-size': '13px',
+                          'font-family': "'JetBrains Mono', monospace",
+                          outline: 'none',
+                        }}
+                      />
+                    </div>
+                  </Show>
+                  <Show when={dockerImageReady() === false && !dockerBuilding()}>
+                    <div
+                      style={{
+                        display: 'flex',
+                        'align-items': 'center',
+                        gap: '8px',
+                        'font-size': '12px',
+                        color: theme.fgMuted,
+                      }}
+                    >
+                      <span>Image not found locally.</span>
+                      <Show
+                        when={
+                          projectDockerfile() ||
+                          store.dockerImage === DEFAULT_DOCKER_IMAGE ||
+                          !store.dockerImage
+                        }
+                      >
+                        <button
+                          type="button"
+                          onClick={handleBuildImage}
+                          style={{
+                            background: theme.accent,
+                            color: theme.accentText,
+                            border: 'none',
+                            'border-radius': '4px',
+                            padding: '3px 10px',
+                            'font-size': '12px',
+                            cursor: 'pointer',
+                          }}
+                        >
+                          Build Image
+                        </button>
+                      </Show>
+                    </div>
+                  </Show>
+                  <Show when={dockerBuilding()}>
+                    <div
+                      style={{
+                        'font-size': '12px',
+                        color: theme.fgMuted,
+                        display: 'flex',
+                        'align-items': 'center',
+                        gap: '6px',
+                      }}
+                    >
+                      <span class="inline-spinner" aria-hidden="true" />
+                      Building image... this may take a few minutes.
+                    </div>
+                    <Show when={dockerBuildOutput()}>
+                      <pre
+                        ref={buildOutputRef}
+                        style={{
+                          'font-size': '11px',
+                          color: theme.fgSubtle,
+                          background: theme.bgInput,
+                          'border-radius': '4px',
+                          padding: '6px 8px',
+                          'max-height': '120px',
+                          'overflow-y': 'auto',
+                          'white-space': 'pre-wrap',
+                          'word-break': 'break-all',
+                          margin: '0',
+                        }}
+                      >
+                        {dockerBuildOutput()}
+                      </pre>
+                    </Show>
+                  </Show>
+                  <Show when={dockerBuildError()}>
+                    <div style={{ 'font-size': '12px', color: theme.error }}>
+                      Build failed: {dockerBuildError()}
+                    </div>
+                  </Show>
+                  <Show when={dockerImageReady() === true && !dockerBuilding()}>
+                    <div style={{ 'font-size': '12px', color: theme.success ?? theme.accent }}>
+                      {projectDockerfile() ? 'Project image ready.' : 'Image ready.'}
+                    </div>
+                  </Show>
                 </Show>
-                <Show when={dockerImageReady() === true && !dockerBuilding()}>
-                  <div style={{ 'font-size': '12px', color: theme.success ?? theme.accent }}>
-                    {projectDockerfile() ? 'Project image ready.' : 'Image ready.'}
-                  </div>
-                </Show>
-              </Show>
+              </div>
+            </Show>
+          </div>
+          {/* end checkboxes group */}
+
+          <Show when={ignoredDirs().length > 0 && gitIsolation() === 'worktree'}>
+            <SymlinkDirPicker
+              dirs={ignoredDirs()}
+              selectedDirs={selectedDirs()}
+              onToggle={(dir) => {
+                const next = new Set(selectedDirs());
+                if (next.has(dir)) next.delete(dir);
+                else next.add(dir);
+                setSelectedDirs(next);
+              }}
+            />
+          </Show>
+
+          <Show when={error()}>
+            <div
+              style={{
+                ...bannerStyle(theme.error),
+                'font-size': '13px',
+              }}
+            >
+              {error()}
             </div>
           </Show>
         </div>
-        {/* end checkboxes group */}
-
-        <Show when={ignoredDirs().length > 0 && gitIsolation() === 'worktree'}>
-          <SymlinkDirPicker
-            dirs={ignoredDirs()}
-            selectedDirs={selectedDirs()}
-            onToggle={(dir) => {
-              const next = new Set(selectedDirs());
-              if (next.has(dir)) next.delete(dir);
-              else next.add(dir);
-              setSelectedDirs(next);
-            }}
-          />
-        </Show>
-
-        <Show when={error()}>
-          <div
-            style={{
-              ...bannerStyle(theme.error),
-              'font-size': '13px',
-            }}
-          >
-            {error()}
-          </div>
-        </Show>
 
         <div
           data-nav-field="footer"
@@ -1048,7 +1066,10 @@ export function NewTaskDialog(props: NewTaskDialogProps) {
             display: 'flex',
             gap: '8px',
             'justify-content': 'flex-end',
-            'padding-top': '4px',
+            padding: '16px 28px',
+            'border-top': `1px solid ${theme.border}`,
+            background: theme.islandBg,
+            'flex-shrink': '0',
           }}
         >
           <button
