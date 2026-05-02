@@ -37,6 +37,17 @@ let minLevel: LogLevel = isProd ? 'warn' : 'debug';
 
 let inLogger = false;
 
+// `console.*` writes to process.stdout/stderr asynchronously; if the parent
+// pipe closes mid-shutdown (e.g. `concurrently` SIGTERMs us after vite dies),
+// the resulting EPIPE surfaces as an *async* 'error' event the per-call
+// try/catch in writeConsole can't catch. Swallow EPIPE here so a routine
+// teardown doesn't become an Uncaught Exception. Re-throw anything else.
+const swallowEpipe = (err: NodeJS.ErrnoException): void => {
+  if (err.code !== 'EPIPE') throw err;
+};
+process.stdout.on('error', swallowEpipe);
+process.stderr.on('error', swallowEpipe);
+
 export function setMinLevel(level: LogLevel): void {
   minLevel = level;
 }
