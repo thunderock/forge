@@ -51,9 +51,9 @@ interface DiffBaseCacheEntry {
 }
 
 const mainBranchCache = new Map<string, CacheEntry>();
-const mergeBaseCache = new Map<string, DiffBaseCacheEntry>();
+const diffBaseCache = new Map<string, DiffBaseCacheEntry>();
 const MAIN_BRANCH_TTL = 60_000; // 60s
-const MERGE_BASE_TTL = 30_000; // 30s
+const DIFF_BASE_TTL = 30_000; // 30s
 const MAX_BUFFER = 10 * 1024 * 1024; // 10MB
 const STDERR_CAP = 4096; // cap for stderr buffers in spawned git processes
 
@@ -65,8 +65,8 @@ setInterval(() => {
   for (const [k, v] of mainBranchCache) {
     if (v.expiresAt <= now) mainBranchCache.delete(k);
   }
-  for (const [k, v] of mergeBaseCache) {
-    if (v.expiresAt <= now) mergeBaseCache.delete(k);
+  for (const [k, v] of diffBaseCache) {
+    if (v.expiresAt <= now) diffBaseCache.delete(k);
   }
 }, CACHE_SWEEP_INTERVAL).unref();
 
@@ -87,8 +87,8 @@ async function isBinaryFile(filePath: string): Promise<boolean> {
   }
 }
 
-function invalidateMergeBaseCache(): void {
-  mergeBaseCache.clear();
+function invalidateDiffBaseCache(): void {
+  diffBaseCache.clear();
 }
 
 function cacheKey(p: string): string {
@@ -330,16 +330,21 @@ async function pickMergeBase(
  * of the upstream that was later rebased onto a new base).
  *
  * Uses git's built-in patch-id detection via `--cherry-pick --right-only`.
- * When the unique commits are contiguous at the tip (the common case for
- * agent-driven branches), refines the base to the parent of the oldest
- * unique commit so the diff range only contains real branch work.
+ * The first call's `%H %P` format embeds the oldest unique commit's parent
+ * SHA so we don't need a separate `rev-parse` step.
  *
- * Falls back to the picked base unchanged when:
- *  - There are no unique commits (branch fully merged upstream).
- *  - Unique commits are interleaved with patch-equivalent ones (cannot
- *    represent the result as a single base SHA — accepting the noise is
- *    cheaper than stitching per-commit patches).
- *  - Any git invocation fails (defensive).
+ * Three outcomes:
+ *  - **No unique commits** (branch is fully merged upstream): collapse the
+ *    diff range to `head...head` (empty) so the user sees zero changes
+ *    instead of the noisy patch-equivalent set.
+ *  - **Unique commits contiguous at the tip** (the common case for
+ *    agent-driven branches): refine the base to the oldest unique commit's
+ *    parent so the diff range only contains real branch work.
+ *  - **Interleaved** (a patch-equivalent commit sits between unique ones):
+ *    keep the picked base — accepting the noise is cheaper than stitching
+ *    per-commit patches. Logged for diagnostics.
+ *
+ * Any git invocation failure falls back to the picked base unchanged.
  */
 async function refineDiffBaseWithCherryPick(
   repoRoot: string,
@@ -347,6 +352,7 @@ async function refineDiffBaseWithCherryPick(
   head: string,
 ): Promise<PickedMergeBase> {
   let unique: string[];
+  let oldestParent: string | null = null;
   try {
     const { stdout } = await exec(
       'git',
@@ -356,35 +362,42 @@ async function refineDiffBaseWithCherryPick(
         '--right-only',
         '--no-merges',
         '--reverse',
-        '--pretty=%H',
+        '--pretty=%H %P',
         `${base.ref}...${head}`,
       ],
       { cwd: repoRoot, maxBuffer: MAX_BUFFER },
     );
-    unique = stdout
+    const lines = stdout
       .split('\n')
       .map((s) => s.trim())
       .filter(Boolean);
+    unique = lines.map((line) => line.split(' ', 1)[0]);
+    if (lines.length > 0) {
+      // First line is the oldest unique commit (--reverse). With --no-merges
+      // every commit has exactly one parent, so the first SHA after the
+      // commit hash is that parent.
+      const parts = lines[0].split(' ');
+      oldestParent = parts[1] ?? null;
+    }
   } catch {
     return base;
   }
 
-  if (unique.length === 0) return base;
-
-  let parentSha: string;
-  try {
-    const { stdout } = await exec('git', ['rev-parse', `${unique[0]}^`], { cwd: repoRoot });
-    parentSha = stdout.trim();
-    if (!parentSha) return base;
-  } catch {
-    return base;
+  if (unique.length === 0) {
+    // Fully merged upstream — every branch commit is patch-equivalent to
+    // one already on the base. Collapse the diff range to empty so the
+    // user sees no changes (instead of the noisy duplicated patch set
+    // that `base.ref...HEAD` would produce).
+    return { sha: head, ref: head };
   }
+
+  if (!oldestParent) return base;
 
   let rangeCount: number;
   try {
     const { stdout } = await exec(
       'git',
-      ['rev-list', '--count', '--no-merges', `${parentSha}..${head}`],
+      ['rev-list', '--count', '--no-merges', `${oldestParent}..${head}`],
       { cwd: repoRoot },
     );
     rangeCount = parseInt(stdout.trim(), 10);
@@ -393,12 +406,14 @@ async function refineDiffBaseWithCherryPick(
     return base;
   }
 
-  // Contiguous: every commit in (parent..HEAD] is unique → refine base.
-  // Interleaved: a non-unique commit sits between unique ones → keep the
-  // original base (the diff will still include the noise; UI can flag this).
   if (rangeCount === unique.length) {
-    return { sha: parentSha, ref: parentSha };
+    return { sha: oldestParent, ref: oldestParent };
   }
+
+  logDebug(
+    'git',
+    `cherry-pick refine: interleaved (unique=${unique.length}, range=${rangeCount}) — keeping ${base.ref}`,
+  );
   return base;
 }
 
@@ -426,17 +441,17 @@ async function detectDiffBase(
   const branch = baseBranch ?? (await detectMainBranch(repoRoot));
   const headRef = head ?? 'HEAD';
   const key = `${cacheKey(repoRoot)}:${branch}:${headRef}`;
-  const cached = mergeBaseCache.get(key);
+  const cached = diffBaseCache.get(key);
   if (cached) {
     if (cached.expiresAt > Date.now()) return cached.value;
-    mergeBaseCache.delete(key);
+    diffBaseCache.delete(key);
   }
 
   const picked = await pickMergeBase(repoRoot, branch, headRef);
   if (!picked) return { sha: headRef, ref: headRef };
 
   const refined = await refineDiffBaseWithCherryPick(repoRoot, picked, headRef);
-  mergeBaseCache.set(key, { value: refined, expiresAt: Date.now() + MERGE_BASE_TTL });
+  diffBaseCache.set(key, { value: refined, expiresAt: Date.now() + DIFF_BASE_TTL });
   return refined;
 }
 
@@ -1510,7 +1525,7 @@ export async function mergeTask(
       }
     }
 
-    invalidateMergeBaseCache();
+    invalidateDiffBaseCache();
 
     if (cleanup) {
       await removeWorktree(projectRoot, branchName, true);
@@ -1688,7 +1703,7 @@ export async function rebaseTask(worktreePath: string, baseBranch?: string): Pro
       );
       throw new Error(`Rebase failed: ${e}`);
     }
-    invalidateMergeBaseCache();
+    invalidateDiffBaseCache();
   });
 }
 
