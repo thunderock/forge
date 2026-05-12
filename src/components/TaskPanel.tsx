@@ -15,7 +15,7 @@ import {
 import { useFocusRegistration } from '../lib/focus-registration';
 import { ResizablePanel, type PanelChild } from './ResizablePanel';
 import type { EditableTextHandle } from './EditableText';
-import { PromptInput, type PromptInputHandle } from './PromptInput';
+import { PromptInput } from './PromptInput';
 import { CloseTaskDialog } from './CloseTaskDialog';
 import { MergeDialog } from './MergeDialog';
 import { PushDialog } from './PushDialog';
@@ -68,7 +68,6 @@ export function TaskPanel(props: TaskPanelProps) {
   let panelRef!: HTMLDivElement;
   let promptRef: HTMLTextAreaElement | undefined;
   let titleEditHandle: EditableTextHandle | undefined;
-  let promptHandle: PromptInputHandle | undefined;
 
   // Two-column focus-mode layout kicks in once the task panel is wide enough.
   // Hysteresis: enter at >=1200, leave at <1150. A single threshold flickers
@@ -216,7 +215,6 @@ export function TaskPanel(props: TaskPanelProps) {
     <TaskAITerminal
       task={props.task}
       isActive={props.isActive}
-      promptHandle={promptHandle}
       onStepJumpReady={(fn, fromIdx) => {
         setStepNav(fn ? { jump: fn, firstIndex: fromIdx } : undefined);
       }}
@@ -274,7 +272,6 @@ export function TaskPanel(props: TaskPanelProps) {
         }}
         onPrefillConsumed={() => clearPrefillPrompt(props.task.id)}
         ref={(el) => (promptRef = el)}
-        handle={(h) => (promptHandle = h)}
       />
     </div>
   );

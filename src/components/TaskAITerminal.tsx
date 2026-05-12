@@ -22,12 +22,10 @@ import { getTaskDockerOverlayLabel } from '../lib/docker';
 import { IPC } from '../../electron/ipc/channels';
 import { createHighlightedMarkdown } from '../lib/marked-shiki';
 import type { Task } from '../store/types';
-import type { PromptInputHandle } from './PromptInput';
 
 interface TaskAITerminalProps {
   task: Task;
   isActive: boolean;
-  promptHandle: PromptInputHandle | undefined;
   /** Receives a function that scrolls the AI terminal to the moment a given step
    *  index was recorded, along with the first step index that is jumpable — steps
    *  below that index were written before the current terminal mount and have no
@@ -128,8 +126,9 @@ export function TaskAITerminal(props: TaskAITerminalProps) {
         <InfoBar
           title={props.task.lastPrompt || infoBarStatus().title}
           onDblClick={() => {
-            if (props.task.lastPrompt && props.promptHandle && !props.promptHandle.getText())
-              props.promptHandle.setText(props.task.lastPrompt);
+            if (props.task.lastPrompt) {
+              void navigator.clipboard.writeText(props.task.lastPrompt);
+            }
           }}
         >
           <span style={{ opacity: props.task.lastPrompt ? 1 : 0.4 }}>
