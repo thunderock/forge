@@ -28,7 +28,7 @@ export function SidebarFooter() {
 
   onCleanup(() => stopMCPStatusPolling());
 
-  const mcpOk = () => store.mcpStatus.mcpRunning;
+  const mcpOk = () => store.mcpStatus.running;
 
   return (
     <>

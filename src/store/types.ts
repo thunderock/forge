@@ -226,11 +226,9 @@ export interface PersistedState {
 }
 
 export interface MCPStatus {
-  mcpRunning: boolean;
-  remoteRunning: boolean;
-  coordinatorRoutesAttached: boolean;
-  coordinatorRegistered: boolean;
-  serverUrl: string | null;
+  running: boolean;
+  port: number | null;
+  coordinatorTaskId: string | null;
   mcpConfigPath: string | null;
 }
 

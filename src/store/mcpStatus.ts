@@ -1,6 +1,7 @@
 import { store, setStore } from './core';
 import { invoke } from '../lib/ipc';
 import { IPC } from '../../electron/ipc/channels';
+import type { MCPStatus } from './types';
 
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 const POLL_INTERVAL_MS = 3_000;
@@ -12,18 +13,16 @@ export function hasAnyCoordinatorTask(): boolean {
   return false;
 }
 
-const MCP_STATUS_OFFLINE = {
-  mcpRunning: false,
-  remoteRunning: false,
-  coordinatorRoutesAttached: false,
-  coordinatorRegistered: false,
-  serverUrl: null,
+const MCP_STATUS_OFFLINE: MCPStatus = {
+  running: false,
+  port: null,
+  coordinatorTaskId: null,
   mcpConfigPath: null,
-} as const;
+};
 
 export async function refreshMCPStatus(): Promise<void> {
   try {
-    const result = await invoke<import('./types').MCPStatus>(IPC.GetMCPStatus);
+    const result = await invoke<MCPStatus>(IPC.GetMCPStatus);
     setStore('mcpStatus', result);
   } catch {
     setStore('mcpStatus', MCP_STATUS_OFFLINE);

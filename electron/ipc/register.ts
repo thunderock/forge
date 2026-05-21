@@ -1623,14 +1623,12 @@ export function registerAllHandlers(win: BrowserWindow): void {
     // The MCP server process is spawned by the agent CLI via launch args,
     // not by us. We report whether the remote HTTP server that the MCP
     // server connects to is running — if it's up, MCP tools should work.
-    const remoteRunning = remoteServer !== null;
     return {
-      mcpRunning: remoteRunning,
-      remoteRunning,
-      coordinatorRoutesAttached: coordinator !== null,
-      coordinatorRegistered: coordinator?.hasActiveCoordinator() ?? false,
-      serverUrl: remoteServer ? getMCPRemoteServerUrl(remoteServer.port) : null,
-      mcpConfigPath: lastMcpConfigPath,
+      running: remoteServer !== null,
+      port: remoteServer?.port ?? null,
+      // TODO: Surface this from the coordinator map if the UI needs it.
+      coordinatorTaskId: null,
+      mcpConfigPath: lastMcpConfigPath ?? null,
     };
   });
 

@@ -80,14 +80,7 @@ export const [store, setStore] = createStore<AppStore>({
   coordinatorModeEnabled: false,
   coordinatorNotificationDelayMs: 60_000,
   coordinatorControlHintDismissed: false,
-  mcpStatus: {
-    mcpRunning: false,
-    remoteRunning: false,
-    coordinatorRoutesAttached: false,
-    coordinatorRegistered: false,
-    serverUrl: null,
-    mcpConfigPath: null,
-  },
+  mcpStatus: { running: false, port: null, coordinatorTaskId: null, mcpConfigPath: null },
 });
 
 type CleanupPanelStore = Pick<

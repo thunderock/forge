@@ -137,6 +137,7 @@ import {
   retryTaskMcpStartup,
 } from './tasks';
 import { getCoordinatorChildren } from './sidebar-order';
+import { markAgentSpawned, rescheduleTaskStatusPolling } from './taskStatus';
 
 // ─── Coordinator listener setup ───────────────────────────────────────────────
 
@@ -147,6 +148,8 @@ const taskStateSyncHandler = ipcHandlers.get('mcp_task_state_sync');
 if (!taskStateSyncHandler) throw new Error('mcp_task_state_sync handler not registered');
 
 beforeEach(() => {
+  vi.clearAllMocks();
+  mockSetStore.mockImplementation((...args: unknown[]) => applySetStore(...args));
   mockTasks = {};
   mockAgents = {};
   mockTaskOrder = [];
@@ -221,6 +224,15 @@ describe('coordinator controlledBy state machine (item 9: UI disabled-state regr
 });
 
 describe('MCP_TaskCreated IPC handler', () => {
+  it('ignores duplicate task-created events without resetting spawn state', () => {
+    taskCreatedHandler(baseEvent);
+    taskCreatedHandler(baseEvent);
+
+    expect(mockTaskOrder).toEqual(['sub-task-1']);
+    expect(markAgentSpawned).toHaveBeenCalledTimes(1);
+    expect(rescheduleTaskStatusPolling).toHaveBeenCalledTimes(1);
+  });
+
   it('sets controlledBy to coordinator on the new sub-task', () => {
     taskCreatedHandler(baseEvent);
     expect(mockTasks['sub-task-1'].controlledBy).toBe('coordinator');

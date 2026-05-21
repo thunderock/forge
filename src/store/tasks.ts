@@ -1029,7 +1029,8 @@ export function initMCPListeners(): () => void {
         mcpConfigPath: evt.mcpConfigPath,
         preambleFileExistedBefore: evt.preambleFileExistedBefore,
         skipPermissions: evt.skipPermissions ?? false,
-        // MCP server is already running when the task is created mid-session.
+        // Backend-spawned children are already attached to a live MCP server;
+        // restore-created MCP tasks start pending until hydration marks them ready.
         mcpStartupStatus: 'ready' as const,
       };
 
@@ -1055,18 +1056,23 @@ export function initMCPListeners(): () => void {
         signal: null,
         lastOutput: [],
         generation: 0,
+        attachExisting: true,
       };
 
+      let created = false;
       setStore(
         produce((s) => {
           if (s.tasks[evt.taskId]) return; // idempotent — ignore duplicate events
           s.tasks[evt.taskId] = task;
           s.agents[evt.agentId] = agent;
           s.taskOrder.push(evt.taskId);
+          created = true;
         }),
       );
-      markAgentSpawned(evt.agentId);
-      rescheduleTaskStatusPolling();
+      if (created) {
+        markAgentSpawned(evt.agentId);
+        rescheduleTaskStatusPolling();
+      }
     }),
   );
 
