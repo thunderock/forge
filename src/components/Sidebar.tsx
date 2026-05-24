@@ -39,7 +39,7 @@ import { ImportWorktreesDialog } from './ImportWorktreesDialog';
 import { SidebarFooter } from './SidebarFooter';
 import { IconButton } from './IconButton';
 import { UpdateButton } from './UpdateButton';
-import { StatusDot } from './StatusDot';
+import { StatusDot, getDotTooltip } from './StatusDot';
 import { theme } from '../lib/theme';
 import { sf } from '../lib/fontScale';
 import { mod } from '../lib/platform';
@@ -967,6 +967,10 @@ function CoordinatorFolder(props: TaskEntryProps) {
           <div
             class={`task-item${t().closingStatus === 'removing' ? ' task-item-removing' : ' task-item-appearing'}`}
             data-task-index={idx()}
+            title={getDotTooltip(
+              getTaskDotStatus(props.taskId),
+              getTaskAttentionState(props.taskId),
+            )}
             onClick={() => {
               setActiveTask(props.taskId);
               focusSidebar();
@@ -1004,7 +1008,11 @@ function CoordinatorFolder(props: TaskEntryProps) {
           >
             <div style={{ display: 'flex', 'align-items': 'center', gap: '6px' }}>
               <CoordinatorIcon />
-              <StatusDot status={getTaskDotStatus(props.taskId)} size="sm" />
+              <StatusDot
+                status={getTaskDotStatus(props.taskId)}
+                size="sm"
+                attention={getTaskAttentionState(props.taskId)}
+              />
               <span style={{ overflow: 'hidden', 'text-overflow': 'ellipsis', flex: '1' }}>
                 {t().name}
               </span>
@@ -1111,7 +1119,11 @@ function CollapsedTaskEntry(props: { taskId: string; indented?: boolean; coordin
               <Show when={isCoordinator()}>
                 <CoordinatorIcon />
               </Show>
-              <StatusDot status={getTaskDotStatus(props.taskId)} size="sm" />
+              <StatusDot
+                status={getTaskDotStatus(props.taskId)}
+                size="sm"
+                attention={getTaskAttentionState(props.taskId)}
+              />
               <Show when={t().gitIsolation === 'direct'}>
                 <span
                   style={{
@@ -1186,6 +1198,10 @@ function TaskRow(props: TaskRowProps) {
           <div
             class={`task-item${t().closingStatus === 'removing' ? ' task-item-removing' : ' task-item-appearing'}`}
             data-task-index={props.indented ? undefined : idx()}
+            title={getDotTooltip(
+              getTaskDotStatus(props.taskId),
+              getTaskAttentionState(props.taskId),
+            )}
             onClick={() => {
               setActiveTask(props.taskId);
               focusSidebar();
@@ -1227,7 +1243,11 @@ function TaskRow(props: TaskRowProps) {
             }}
           >
             <div style={{ display: 'flex', 'align-items': 'center', gap: '6px' }}>
-              <StatusDot status={getTaskDotStatus(props.taskId)} size="sm" />
+              <StatusDot
+                status={getTaskDotStatus(props.taskId)}
+                size="sm"
+                attention={getTaskAttentionState(props.taskId)}
+              />
               <Show when={t().gitIsolation === 'direct'}>
                 <span
                   style={{

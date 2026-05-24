@@ -23,4 +23,10 @@ describe('StatusDot', () => {
 
     expect(html).toContain('title="Ready for review"');
   });
+
+  it('uses attention state for the rendered tooltip', () => {
+    const html = renderToString(() => StatusDot({ status: 'ready', attention: 'needs_input' }));
+
+    expect(html).toContain('title="Waiting for input"');
+  });
 });
