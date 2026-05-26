@@ -12,13 +12,19 @@ import { matchesGlobalShortcut } from '../lib/shortcuts';
 import { isMac } from '../lib/platform';
 import { resolvedBindings } from '../store/keybindings';
 import { matchesKeyEvent } from '../lib/keybindings';
-import { store, setTaskLastInputAt, retryTaskMcpStartup } from '../store/store';
+import {
+  store,
+  setTaskLastInputAt,
+  retryTaskMcpStartup,
+  markTaskUserActivity,
+  setTaskTerminalInputPending,
+} from '../store/store';
 import { isLandedTaskState } from '../store/landing';
 import { warn as logWarn } from '../lib/log';
 import { registerTerminal, unregisterTerminal, markDirty } from '../lib/terminalFitManager';
 import { dataTransferToShellArgs, escapePath } from '../lib/terminalDrop';
 import { cleanCopiedTerminalText } from '../lib/copy-text';
-import { computeDisableStdin, shouldForwardTerminalInput } from '../lib/terminalDisableStdin';
+import { hasTerminalUserActivity, nextTerminalInputPending } from '../lib/terminalInputPending';
 import type { PtyOutput } from '../ipc/types';
 
 let windowUnloading = false;
@@ -137,7 +143,7 @@ export function TerminalView(props: TerminalViewProps) {
     }
 
     function canForwardInput(): boolean {
-      return shouldForwardTerminalInput(store.tasks[taskId]?.controlledBy, taskPtyDetached());
+      return !taskPtyDetached();
     }
 
     term = new Terminal({
@@ -147,7 +153,7 @@ export function TerminalView(props: TerminalViewProps) {
       theme: activeTerminalTheme(),
       allowProposedApi: true,
       scrollback: TERMINAL_SCROLLBACK_LINES,
-      disableStdin: computeDisableStdin(store.tasks[taskId]?.controlledBy) || taskPtyDetached(),
+      disableStdin: taskPtyDetached(),
     });
 
     fitAddon = new FitAddon();
@@ -169,16 +175,13 @@ export function TerminalView(props: TerminalViewProps) {
 
     term.open(containerRef);
 
-    // Block direct PTY keyboard input when the task is coordinator-controlled or
-    // after self-landing has removed the backend PTY.
-    // disableStdin prevents xterm from forwarding keystrokes to the process;
-    // copy/paste/scrollback still work. The effect re-runs when control or
-    // landing state changes, without remounting the terminal.
+    // Block direct PTY keyboard input only after self-landing has removed the
+    // backend PTY. Coordinator automation now waits for user activity instead of
+    // disabling the user's terminal.
     createEffect(() => {
       const task = store.tasks[taskId];
       if (isLandedTaskState(task?.landingState)) ptyDetachedByLanding = true;
-      if (term)
-        term.options.disableStdin = computeDisableStdin(task?.controlledBy) || taskPtyDetached();
+      if (term) term.options.disableStdin = taskPtyDetached();
     });
 
     // File path link provider — makes file paths clickable in terminal output
@@ -582,9 +585,21 @@ export function TerminalView(props: TerminalViewProps) {
       }, 8);
     }
 
+    function noteUserTerminalInput(data: string) {
+      if (props.isShell || !store.tasks[props.taskId]) return;
+      const hadActivity = hasTerminalUserActivity(data);
+      if (hadActivity) markTaskUserActivity(props.taskId);
+      const pending = nextTerminalInputPending(
+        store.tasks[props.taskId]?.terminalInputPending === true,
+        data,
+      );
+      setTaskTerminalInputPending(props.taskId, pending);
+    }
+
     // eslint-disable-next-line solid/reactivity -- event handler reads current prop values intentionally
     term.onData((data) => {
       if (!canForwardInput()) return;
+      noteUserTerminalInput(data);
       if (props.onPromptDetected) {
         for (const ch of data) {
           if (ch === '\r') {

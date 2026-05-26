@@ -4,10 +4,87 @@ import { getTaskAttentionState, type TaskAttentionState } from './taskStatus';
 import { setActiveTask } from './navigation';
 import { fireAndForget } from '../lib/ipc';
 import { IPC } from '../../electron/ipc/channels';
+import type { Agent, Task } from './types';
 
 const DEBOUNCE_MS = 3_000;
 
 export type NotificationType = 'ready' | 'needs_input' | 'error';
+const NOTIFICATION_TYPES: NotificationType[] = ['ready', 'needs_input', 'error'];
+let activeDesktopNotificationWatcherCleanup: (() => void) | undefined;
+
+export function shouldShowDesktopNotification(
+  type: NotificationType,
+  coordinatedBy: string | undefined,
+): boolean {
+  if (!coordinatedBy) return true;
+  return type === 'needs_input';
+}
+
+type DesktopNotificationTask = Pick<Task, 'coordinatedBy' | 'agentIds' | 'shellAgentIds'>;
+type DesktopNotificationAgent = Pick<Agent, 'status'>;
+
+function taskHasRunningAgent(
+  task: DesktopNotificationTask,
+  agents: Readonly<Record<string, DesktopNotificationAgent | undefined>>,
+): boolean {
+  return [...(task.agentIds ?? []), ...(task.shellAgentIds ?? [])].some(
+    (agentId) => agents[agentId]?.status === 'running',
+  );
+}
+
+export function hasRunningCoordinatedChild(
+  taskId: string,
+  tasks: Readonly<Record<string, DesktopNotificationTask | undefined>>,
+  agents: Readonly<Record<string, DesktopNotificationAgent | undefined>>,
+): boolean {
+  return Object.values(tasks).some(
+    (task) => task?.coordinatedBy === taskId && taskHasRunningAgent(task, agents),
+  );
+}
+
+export function shouldShowDesktopNotificationForTask(
+  type: NotificationType,
+  taskId: string,
+  tasks: Readonly<Record<string, DesktopNotificationTask | undefined>>,
+  agents: Readonly<Record<string, DesktopNotificationAgent | undefined>>,
+): boolean {
+  const task = tasks[taskId];
+  if (!task) return false;
+  if (!shouldShowDesktopNotification(type, task.coordinatedBy)) return false;
+  return type !== 'ready' || !hasRunningCoordinatedChild(taskId, tasks, agents);
+}
+
+function notificationKey(taskId: string, type: NotificationType): string {
+  return `${taskId}:${type}`;
+}
+
+export function shouldQueueDesktopNotification(
+  type: NotificationType,
+  taskId: string,
+  tasks: Readonly<Record<string, DesktopNotificationTask | undefined>>,
+  agents: Readonly<Record<string, DesktopNotificationAgent | undefined>>,
+  shown: ReadonlySet<string>,
+): boolean {
+  return (
+    shouldShowDesktopNotificationForTask(type, taskId, tasks, agents) &&
+    !shown.has(notificationKey(taskId, type))
+  );
+}
+
+export function rememberShownDesktopNotifications(
+  shown: Set<string>,
+  items: Array<[string, NotificationType]>,
+): void {
+  for (const [taskId, type] of items) {
+    shown.add(notificationKey(taskId, type));
+  }
+}
+
+export function clearShownDesktopNotificationsForTask(shown: Set<string>, taskId: string): void {
+  for (const type of NOTIFICATION_TYPES) {
+    shown.delete(notificationKey(taskId, type));
+  }
+}
 
 export function reconcilePendingNotification(
   pending: Map<string, NotificationType>,
@@ -31,11 +108,14 @@ export function clearPendingNotification(
 }
 
 export function startDesktopNotificationWatcher(windowFocused: Accessor<boolean>): () => void {
+  activeDesktopNotificationWatcherCleanup?.();
+
   const previousAttention = new Map<string, TaskAttentionState>();
   // Map keyed by taskId — naturally deduplicates and last transition wins.
   // If a task goes needs_input→error→ready within the debounce window, only
   // the last meaningful notification is kept.
   let pending = new Map<string, NotificationType>();
+  const shownWhileUnfocused = new Set<string>();
   let debounceTimer: ReturnType<typeof setTimeout> | undefined;
 
   function flushNotifications(): void {
@@ -45,12 +125,15 @@ export function startDesktopNotificationWatcher(windowFocused: Accessor<boolean>
       return;
     }
 
-    const items = [...pending.entries()];
+    const items = [...pending.entries()].filter(([taskId, type]) =>
+      shouldShowDesktopNotificationForTask(type, taskId, store.tasks, store.agents),
+    );
     pending = new Map();
 
     const ready = items.filter(([, type]) => type === 'ready');
     const needsInput = items.filter(([, type]) => type === 'needs_input');
     const errored = items.filter(([, type]) => type === 'error');
+    rememberShownDesktopNotifications(shownWhileUnfocused, items);
 
     if (ready.length > 0) {
       const taskIds = ready.map(([id]) => id);
@@ -86,6 +169,11 @@ export function startDesktopNotificationWatcher(windowFocused: Accessor<boolean>
 
   function scheduleBatch(type: NotificationType, taskId: string): void {
     if (!store.desktopNotificationsEnabled) return;
+    if (
+      !shouldQueueDesktopNotification(type, taskId, store.tasks, store.agents, shownWhileUnfocused)
+    ) {
+      return;
+    }
     pending.set(taskId, type);
     if (debounceTimer === undefined) {
       debounceTimer = setTimeout(flushNotifications, DEBOUNCE_MS);
@@ -113,6 +201,7 @@ export function startDesktopNotificationWatcher(windowFocused: Accessor<boolean>
       if (!seen.has(taskId)) {
         previousAttention.delete(taskId);
         clearPendingNotification(pending, taskId);
+        clearShownDesktopNotificationsForTask(shownWhileUnfocused, taskId);
       }
     }
   });
@@ -121,6 +210,7 @@ export function startDesktopNotificationWatcher(windowFocused: Accessor<boolean>
   createEffect(() => {
     if (windowFocused()) {
       pending = new Map();
+      shownWhileUnfocused.clear();
       if (debounceTimer !== undefined) {
         clearTimeout(debounceTimer);
         debounceTimer = undefined;
@@ -140,11 +230,18 @@ export function startDesktopNotificationWatcher(windowFocused: Accessor<boolean>
     },
   );
 
+  let cleanedUp = false;
   const cleanup = (): void => {
+    if (cleanedUp) return;
+    cleanedUp = true;
     if (debounceTimer !== undefined) clearTimeout(debounceTimer);
     offNotificationClicked();
+    if (activeDesktopNotificationWatcherCleanup === cleanup) {
+      activeDesktopNotificationWatcherCleanup = undefined;
+    }
   };
 
+  activeDesktopNotificationWatcherCleanup = cleanup;
   onCleanup(cleanup);
   return cleanup;
 }

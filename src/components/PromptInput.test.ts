@@ -70,8 +70,8 @@ describe('processAutoFireTick — userEdited suppression', () => {
   });
 });
 
-describe('processAutoFireTick — controlledBy: human', () => {
-  it('returns paused without touching the miss counter when controlledBy is human', () => {
+describe('processAutoFireTick — user activity blockers', () => {
+  it('does not pause solely because controlledBy is human', () => {
     const result = processAutoFireTick({
       staged,
       now: pastNow,
@@ -80,12 +80,10 @@ describe('processAutoFireTick — controlledBy: human', () => {
       tail: noPromptTail,
       currentMissCount: 0,
     });
-    expect(result.outcome).toBe('paused');
-    // 'paused' carries no newMissCount — the counter was not incremented
-    expect('newMissCount' in result).toBe(false);
+    expect(result).toEqual({ outcome: 'no-prompt', newMissCount: 1 });
   });
 
-  it('does not fire even when the prompt marker is visible and controlledBy is human', () => {
+  it('fires with a prompt marker even when controlledBy is human', () => {
     const result = processAutoFireTick({
       staged,
       now: pastNow,
@@ -94,7 +92,46 @@ describe('processAutoFireTick — controlledBy: human', () => {
       tail: promptTail,
       currentMissCount: 0,
     });
-    expect(result.outcome).toBe('paused');
+    expect(result.outcome).toBe('fire');
+  });
+
+  it('waits while the user has a prompt draft', () => {
+    const result = processAutoFireTick({
+      staged,
+      now: pastNow,
+      controlledBy: 'coordinator',
+      promptDraftActive: true,
+      questionActive: false,
+      tail: promptTail,
+      currentMissCount: 0,
+    });
+    expect(result.outcome).toBe('waiting-for-user-draft');
+  });
+
+  it('waits while terminal input may be pending', () => {
+    const result = processAutoFireTick({
+      staged,
+      now: pastNow,
+      controlledBy: 'coordinator',
+      terminalInputPending: true,
+      questionActive: false,
+      tail: promptTail,
+      currentMissCount: 0,
+    });
+    expect(result.outcome).toBe('waiting-for-terminal-input');
+  });
+
+  it('waits while a recent user activity lease is active', () => {
+    const result = processAutoFireTick({
+      staged,
+      now: pastNow,
+      controlledBy: 'coordinator',
+      userActivityHoldUntil: pastNow + 1_000,
+      questionActive: false,
+      tail: promptTail,
+      currentMissCount: 0,
+    });
+    expect(result.outcome).toBe('waiting-for-user-activity');
   });
 });
 

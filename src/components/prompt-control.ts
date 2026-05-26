@@ -4,6 +4,7 @@ export function shouldHandoffCoordinatorQuestion(params: {
   agentIdle: boolean;
   startupBlocking: boolean;
   autoTrustSettling: boolean;
+  autoTrustHandled: boolean;
   recentPromptEcho: boolean;
 }): boolean {
   return (
@@ -12,6 +13,7 @@ export function shouldHandoffCoordinatorQuestion(params: {
     params.agentIdle &&
     !params.startupBlocking &&
     !params.autoTrustSettling &&
+    !params.autoTrustHandled &&
     !params.recentPromptEcho
   );
 }
@@ -23,4 +25,12 @@ export function shouldAckInitialPromptDelivery(params: {
 }): boolean {
   const initialPrompt = params.initialPrompt?.trim();
   return Boolean(params.coordinatedBy && initialPrompt && params.sentText.trim() === initialPrompt);
+}
+
+export function shouldRendererAutoSendInitialPrompt(params: {
+  coordinatedBy: string | undefined;
+  initialPrompt: string | undefined;
+}): boolean {
+  const initialPrompt = params.initialPrompt?.trim();
+  return Boolean(initialPrompt && !params.coordinatedBy);
 }

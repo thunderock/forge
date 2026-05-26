@@ -58,7 +58,7 @@ const mockCreateBackendTask = vi.fn().mockResolvedValue({
 
 vi.mock('./prompt-detect.js', () => ({
   stripAnsi: (s: string) => s,
-  chunkContainsAgentPrompt: (s: string) => s.includes('❯'),
+  chunkContainsAgentPrompt: (s: string) => s.slice(-300).includes('❯'),
 }));
 
 vi.mock('../ipc/pty.js', () => ({
@@ -156,6 +156,8 @@ describe('Coordinator — end-to-end tool sequence smoke', () => {
 
     // Simulate idle output
     const outputCb = getOutputCb();
+    outputCb(encode('startup echo ❯ '));
+    outputCb(encode('real work output '.repeat(40)));
     outputCb(encode('Done ❯ '));
 
     // waitForIdle should resolve immediately since task is now idle
@@ -198,27 +200,37 @@ describe('Coordinator — end-to-end tool sequence smoke', () => {
   });
 
   it('Test 3: get_task_status — status progression idle → running → idle', async () => {
-    coordinator.registerCoordinator('coord-1', 'proj-1');
-    await coordinator.createTask({
-      name: 'feat-x',
-      prompt: 'build it',
-      coordinatorTaskId: 'coord-1',
-    });
+    vi.useFakeTimers();
+    try {
+      coordinator.registerCoordinator('coord-1', 'proj-1');
+      await coordinator.createTask({
+        name: 'feat-x',
+        prompt: 'build it',
+        coordinatorTaskId: 'coord-1',
+      });
 
-    coordinator.markPromptDelivered('task-1');
-    const outputCb = getOutputCb();
+      coordinator.markPromptDelivered('task-1');
+      const outputCb = getOutputCb();
 
-    // Simulate idle output
-    outputCb(encode('Done ❯ '));
-    expect(coordinator.getTask('task-1')?.status).toBe('idle');
+      // Simulate idle output
+      outputCb(encode('startup echo ❯ '));
+      outputCb(encode('real work output '.repeat(40)));
+      outputCb(encode('Done ❯ '));
+      expect(coordinator.getTask('task-1')?.status).toBe('idle');
 
-    // sendPrompt sets status to running
-    await coordinator.sendPrompt('task-1', 'next step');
-    expect(coordinator.getTask('task-1')?.status).toBe('running');
+      // sendPrompt sets status to running
+      const sendPromise = coordinator.sendPrompt('task-1', 'next step');
+      await vi.advanceTimersByTimeAsync(50);
+      await sendPromise;
+      expect(coordinator.getTask('task-1')?.status).toBe('running');
 
-    // Simulate idle again
-    outputCb(encode('Ready ❯ '));
-    expect(coordinator.getTask('task-1')?.status).toBe('idle');
+      // Simulate idle again after prompt-echo suppression expires
+      await vi.advanceTimersByTimeAsync(2_100);
+      outputCb(encode('Ready ❯ '));
+      expect(coordinator.getTask('task-1')?.status).toBe('idle');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('Test 4: merge_task smoke — calls gitMergeTask', async () => {
@@ -231,6 +243,8 @@ describe('Coordinator — end-to-end tool sequence smoke', () => {
 
     coordinator.markPromptDelivered('task-1');
     const outputCb = getOutputCb();
+    outputCb(encode('startup echo ❯ '));
+    outputCb(encode('real work output '.repeat(40)));
     outputCb(encode('Done ❯ '));
 
     await coordinator.mergeTask('task-1');

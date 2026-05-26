@@ -128,6 +128,9 @@ export interface Task {
   stepsContent?: StepEntry[];
   lastInputAt?: string;
   stagedNotification?: StagedNotification;
+  userActivityHoldUntil?: number;
+  promptDraftActive?: boolean;
+  terminalInputPending?: boolean;
   // Coordinator fields
   coordinatorMode?: boolean;
   propagateSkipPermissions?: boolean;

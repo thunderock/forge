@@ -47,12 +47,15 @@ vi.mock('solid-js', () => {
   };
 });
 
+import { invoke } from '../lib/ipc';
+import { setStore } from './core';
 import {
   stripAnsi,
   normalizeForComparison,
   normalizeCurrentFrame,
   looksLikeQuestion,
   isTrustQuestionAutoHandled,
+  isAgentTrustQuestionAutoHandled,
   isAutoTrustSettling,
   isAgentAskingQuestion,
   isAgentBracketedPasteEnabled,
@@ -86,6 +89,8 @@ function setMockAgent(agentId: string, overrides: Record<string, unknown> = {}):
 
 beforeEach(() => {
   vi.useFakeTimers();
+  vi.mocked(invoke).mockClear();
+  vi.mocked(setStore).mockClear();
   mockAutoTrustFolders = false;
   mockActiveTaskId = 'task-1';
   mockTasks = {};
@@ -459,6 +464,30 @@ describe('isTrustQuestionAutoHandled', () => {
     mockAutoTrustFolders = true;
     expect(isTrustQuestionAutoHandled('Do you trust this folder? Enter password:')).toBe(false);
   });
+
+  it('returns true for forced coordinator subtask trust dialogs when global auto-trust is off', () => {
+    setMockTask('task-1', {
+      agentIds: ['agent-1'],
+      coordinatedBy: 'coord-1',
+      skipPermissions: true,
+    });
+    setMockAgent('agent-1', { status: 'running' });
+    markAgentOutput('agent-1', new TextEncoder().encode('startup'), 'task-1');
+
+    expect(isAgentTrustQuestionAutoHandled('agent-1', 'Do you trust this folder?')).toBe(true);
+  });
+
+  it('returns false for non-forced agent trust dialogs when global auto-trust is off', () => {
+    setMockTask('task-1', {
+      agentIds: ['agent-1'],
+      coordinatedBy: 'coord-1',
+      skipPermissions: false,
+    });
+    setMockAgent('agent-1', { status: 'running' });
+    markAgentOutput('agent-1', new TextEncoder().encode('startup'), 'task-1');
+
+    expect(isAgentTrustQuestionAutoHandled('agent-1', 'Do you trust this folder?')).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -813,5 +842,106 @@ describe('coordinator auto-trust', () => {
 
     expect(isAutoTrustSettling('agent-1')).toBe(true);
     expect(getTaskAttentionState('task-1')).not.toBe('needs_input');
+  });
+
+  it('clears false human-control holds after forced auto-trust accepts a coordinator subtask dialog', () => {
+    setMockTask('task-1', {
+      agentIds: ['agent-1'],
+      coordinatedBy: 'coord-1',
+      skipPermissions: true,
+      controlledBy: 'human',
+      userActivityHoldUntil: Date.now() + 5_000,
+    });
+    setMockAgent('agent-1', { status: 'running' });
+
+    markAgentOutput(
+      'agent-1',
+      new TextEncoder().encode('Do you trust the files in this folder?'),
+      'task-1',
+    );
+    vi.advanceTimersByTime(50);
+
+    expect(setStore).toHaveBeenCalledWith('tasks', 'task-1', 'userActivityHoldUntil', undefined);
+    expect(setStore).toHaveBeenCalledWith('tasks', 'task-1', 'controlledBy', 'coordinator');
+    expect(invoke).toHaveBeenCalledWith('mcp_control_changed', {
+      taskId: 'task-1',
+      controlledBy: 'coordinator',
+    });
+  });
+
+  it('clears false human-control holds after global auto-trust accepts a coordinator subtask dialog', () => {
+    mockAutoTrustFolders = true;
+    setMockTask('task-1', {
+      agentIds: ['agent-1'],
+      coordinatedBy: 'coord-1',
+      skipPermissions: false,
+      controlledBy: 'human',
+      userActivityHoldUntil: Date.now() + 5_000,
+    });
+    setMockAgent('agent-1', { status: 'running' });
+
+    markAgentOutput(
+      'agent-1',
+      new TextEncoder().encode('Do you trust the files in this folder?'),
+      'task-1',
+    );
+    vi.advanceTimersByTime(50);
+
+    expect(setStore).toHaveBeenCalledWith('tasks', 'task-1', 'userActivityHoldUntil', undefined);
+    expect(setStore).toHaveBeenCalledWith('tasks', 'task-1', 'controlledBy', 'coordinator');
+    expect(invoke).toHaveBeenCalledWith('mcp_control_changed', {
+      taskId: 'task-1',
+      controlledBy: 'coordinator',
+    });
+  });
+
+  it('does not clear a real prompt draft while accepting a trust dialog', () => {
+    setMockTask('task-1', {
+      agentIds: ['agent-1'],
+      coordinatedBy: 'coord-1',
+      skipPermissions: true,
+      controlledBy: 'human',
+      promptDraftActive: true,
+      userActivityHoldUntil: Date.now() + 5_000,
+    });
+    setMockAgent('agent-1', { status: 'running' });
+
+    markAgentOutput(
+      'agent-1',
+      new TextEncoder().encode('Do you trust the files in this folder?'),
+      'task-1',
+    );
+    vi.advanceTimersByTime(50);
+
+    expect(setStore).not.toHaveBeenCalledWith('tasks', 'task-1', 'controlledBy', 'coordinator');
+    expect(invoke).not.toHaveBeenCalledWith('mcp_control_changed', {
+      taskId: 'task-1',
+      controlledBy: 'coordinator',
+    });
+  });
+
+  it('does not clear pending terminal input while accepting a trust dialog', () => {
+    setMockTask('task-1', {
+      agentIds: ['agent-1'],
+      coordinatedBy: 'coord-1',
+      skipPermissions: true,
+      controlledBy: 'human',
+      terminalInputPending: true,
+      userActivityHoldUntil: Date.now() + 5_000,
+    });
+    setMockAgent('agent-1', { status: 'running' });
+
+    markAgentOutput(
+      'agent-1',
+      new TextEncoder().encode('Do you trust the files in this folder?'),
+      'task-1',
+    );
+    vi.advanceTimersByTime(50);
+
+    expect(setStore).not.toHaveBeenCalledWith('tasks', 'task-1', 'controlledBy', 'coordinator');
+    expect(invoke).not.toHaveBeenCalledWith('mcp_control_changed', {
+      taskId: 'task-1',
+      controlledBy: 'coordinator',
+    });
   });
 });

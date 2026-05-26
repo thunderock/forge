@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { shouldAckInitialPromptDelivery, shouldHandoffCoordinatorQuestion } from './prompt-control';
+import {
+  shouldAckInitialPromptDelivery,
+  shouldHandoffCoordinatorQuestion,
+  shouldRendererAutoSendInitialPrompt,
+} from './prompt-control';
 
 const handoffDefaults = {
   controlledBy: 'coordinator' as const,
@@ -7,6 +11,7 @@ const handoffDefaults = {
   agentIdle: true,
   startupBlocking: false,
   autoTrustSettling: false,
+  autoTrustHandled: false,
   recentPromptEcho: false,
 };
 
@@ -41,6 +46,12 @@ describe('shouldHandoffCoordinatorQuestion', () => {
 
   it('does not hand off while auto-trust is still settling', () => {
     expect(shouldHandoffCoordinatorQuestion({ ...handoffDefaults, autoTrustSettling: true })).toBe(
+      false,
+    );
+  });
+
+  it('does not hand off when auto-trust will handle the question', () => {
+    expect(shouldHandoffCoordinatorQuestion({ ...handoffDefaults, autoTrustHandled: true })).toBe(
       false,
     );
   });
@@ -90,6 +101,35 @@ describe('shouldAckInitialPromptDelivery', () => {
         coordinatedBy: undefined,
         initialPrompt: 'do the work',
         sentText: 'do the work',
+      }),
+    ).toBe(false);
+  });
+});
+
+describe('shouldRendererAutoSendInitialPrompt', () => {
+  it('keeps legacy/manual initial prompts renderer-owned', () => {
+    expect(
+      shouldRendererAutoSendInitialPrompt({
+        coordinatedBy: undefined,
+        initialPrompt: 'do the work',
+      }),
+    ).toBe(true);
+  });
+
+  it('does not renderer-send coordinated sub-task assignments', () => {
+    expect(
+      shouldRendererAutoSendInitialPrompt({
+        coordinatedBy: 'coord-1',
+        initialPrompt: 'do the work',
+      }),
+    ).toBe(false);
+  });
+
+  it('does not send blank initial prompts', () => {
+    expect(
+      shouldRendererAutoSendInitialPrompt({
+        coordinatedBy: undefined,
+        initialPrompt: '   ',
       }),
     ).toBe(false);
   });

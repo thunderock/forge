@@ -5,6 +5,12 @@ const PROMPT_MARKER_SCAN_CHARS = 500;
 export type AutoFireTickResult =
   | { outcome: 'too-soon' }
   | { outcome: 'paused' }
+  | {
+      outcome:
+        | 'waiting-for-user-draft'
+        | 'waiting-for-terminal-input'
+        | 'waiting-for-user-activity';
+    }
   | { outcome: 'no-prompt'; newMissCount: number }
   | { outcome: 'fire' };
 
@@ -17,18 +23,28 @@ export function processAutoFireTick(params: {
   staged: StagedNotification;
   now: number;
   controlledBy: 'coordinator' | 'human' | undefined;
+  allowPromptlessGrace?: boolean;
   questionActive: boolean;
+  promptDraftActive?: boolean;
+  terminalInputPending?: boolean;
+  userActivityHoldUntil?: number;
   tail: string;
   currentMissCount: number;
 }): AutoFireTickResult {
-  // Human has taken control — pause without counting misses so the counter
-  // doesn't accumulate while the human is typing.
-  if (params.controlledBy === 'human') {
-    return { outcome: 'paused' };
-  }
-
   if (params.staged.autoFireAt - params.now > 0) {
     return { outcome: 'too-soon' };
+  }
+
+  if (params.promptDraftActive) {
+    return { outcome: 'waiting-for-user-draft' };
+  }
+
+  if (params.terminalInputPending) {
+    return { outcome: 'waiting-for-terminal-input' };
+  }
+
+  if ((params.userActivityHoldUntil ?? 0) > params.now) {
+    return { outcome: 'waiting-for-user-activity' };
   }
 
   // A question/dialog is active — the ❯ visible in the TUI is a selection
@@ -49,7 +65,7 @@ export function processAutoFireTick(params: {
   // between tool calls. The grace period gives questionActive time to detect
   // interactive dialogs before we bypass the prompt-marker check.
   const COORDINATOR_PROMPTLESS_GRACE_MS = 120_000;
-  if (params.controlledBy === 'coordinator') {
+  if (params.allowPromptlessGrace ?? params.controlledBy === 'coordinator') {
     if (params.now - params.staged.autoFireAt >= COORDINATOR_PROMPTLESS_GRACE_MS) {
       return { outcome: 'fire' };
     }

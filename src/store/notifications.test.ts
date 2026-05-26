@@ -18,6 +18,7 @@ type MockTask = {
 
 let mockTasks: Record<string, MockTask> = {};
 const ipcHandlers = new Map<string, (data: unknown) => void>();
+const activeHandlerCounts = new Map<string, number>();
 
 // Must be a function declaration (hoisted) so vi.mock factories can reference it.
 function applySetStore(...args: unknown[]): void {
@@ -99,8 +100,18 @@ vi.stubGlobal('window', {
   electron: {
     ipcRenderer: {
       on: (_channel: string, handler: (data: unknown) => void) => {
+        activeHandlerCounts.set(_channel, (activeHandlerCounts.get(_channel) ?? 0) + 1);
         ipcHandlers.set(_channel, handler);
-        return () => ipcHandlers.delete(_channel);
+        let cleanedUp = false;
+        return () => {
+          if (cleanedUp) return;
+          cleanedUp = true;
+          activeHandlerCounts.set(
+            _channel,
+            Math.max(0, (activeHandlerCounts.get(_channel) ?? 0) - 1),
+          );
+          if (ipcHandlers.get(_channel) === handler) ipcHandlers.delete(_channel);
+        };
       },
     },
   },
@@ -127,6 +138,16 @@ beforeEach(() => {
 });
 
 describe('staged notification store logic', () => {
+  it('replaces existing MCP listeners instead of stacking duplicate handlers', () => {
+    expect(activeHandlerCounts.get('mcp_coordinator_notification_staged')).toBe(1);
+    expect(activeHandlerCounts.get('mcp_coordinator_notification_cleared')).toBe(1);
+
+    initMCPListeners();
+
+    expect(activeHandlerCounts.get('mcp_coordinator_notification_staged')).toBe(1);
+    expect(activeHandlerCounts.get('mcp_coordinator_notification_cleared')).toBe(1);
+  });
+
   it('replaces notification A when notification B arrives before A fires', () => {
     setTask('task-1');
 

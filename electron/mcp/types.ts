@@ -12,7 +12,8 @@ export interface CoordinatedTask {
   coordinatorTaskId: string;
   status: 'creating' | 'running' | 'idle' | 'exited' | 'error';
   exitCode: number | null;
-  pendingPrompt?: string;
+  pendingPrompts?: string[];
+  initialPrompt?: string;
   mcpConfigPath?: string; // path to per-task tmp config, deleted on cleanup
   doneToken?: string; // per-task token; only the owning sub-task may call /done
   preambleFileExistedBefore?: boolean; // true if the preamble file existed before injection (even if empty)
@@ -27,6 +28,7 @@ export interface CoordinatedTask {
   assignedPromptDelivered?: boolean;
   // Ignore the prompt that was already visible when a coordinator-delivered prompt was sent.
   suppressNextIdleNotification?: boolean;
+  suppressNextIdleNotificationUntil?: number;
   reviewNotificationQueued?: boolean;
   /** Coordinator Docker container name. Set when the coordinator runs in Docker mode.
    *  Sub-tasks each get their own `docker run` container; this is not used for spawning
@@ -48,7 +50,7 @@ export interface PendingNotification {
   taskId: string;
   taskName: string;
   branchName: string;
-  state: 'idle' | 'exited';
+  state: 'idle' | 'exited' | 'landed';
   exitCode: number | null;
   completedAt: Date;
 }
@@ -193,6 +195,7 @@ export interface ApiTaskDetail extends ApiTaskSummary {
   agentId: string;
   exitCode: number | null;
   pendingPrompt?: string;
+  pendingPromptCount?: number;
 }
 
 export interface ApiDiffResult {

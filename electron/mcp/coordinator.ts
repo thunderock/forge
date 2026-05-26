@@ -48,7 +48,7 @@ import {
 } from '../ipc/git.js';
 import { stripAnsi, chunkContainsAgentPrompt } from './prompt-detect.js';
 import { SUB_TASK_PREAMBLE } from './sub-task-preamble.js';
-import { warn as logWarn } from '../log.js';
+import { info as logInfo, warn as logWarn } from '../log.js';
 import type {
   CoordinatedTask,
   PendingNotification,
@@ -67,6 +67,10 @@ import { IPC } from '../ipc/channels.js';
 const DEFAULT_WAIT_TIMEOUT_MS = 300_000; // 5 minutes
 const PROMPT_WRITE_DELAY_MS = 50;
 const GIT_LOCK_RETRY_DELAY_MS = 2_000;
+const INITIAL_PROMPT_READY_DELAY_MS = 1_500;
+const MAX_PENDING_PROMPTS = 32;
+const MAX_PROMPT_BYTES = 64 * 1024;
+const PROMPT_ECHO_IDLE_SUPPRESSION_MS = 2_000;
 const REST_COORDINATOR_SENTINEL = 'api';
 const PREAMBLE_ARTIFACT_PATHS = new Set([
   'AGENTS.md',
@@ -119,8 +123,9 @@ export class Coordinator {
   private subscribers = new Map<string, (encoded: string) => void>();
   private decoders = new Map<string, TextDecoder>();
   private controlMap = new Map<string, 'coordinator' | 'human'>();
-  private blockedByHumanControl = new Set<string>();
-  private interruptedByHumanControl = new Set<string>();
+  private writingPromptTaskIds = new Set<string>();
+  private initialPromptTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private initialPromptReadyTasks = new Set<string>();
   private closingTaskIds = new Set<string>();
   private activeSignalWaitCounts = new Map<string, number>();
   private recentlyDelivered = new ReplayCache<WaitForSignalDoneResult>();
@@ -210,34 +215,151 @@ export class Coordinator {
       // Resolve any pending idle waiters immediately — human has taken over
       const resolvers = this.idleResolvers.get(taskId);
       if (resolvers?.length) {
-        this.interruptedByHumanControl.add(taskId);
         for (const resolve of resolvers) resolve({ reason: 'human_control' });
         this.idleResolvers.delete(taskId);
       }
     }
     if (who === 'coordinator') {
+      const task = this.tasks.get(taskId);
+      const hasQueuedWork = Boolean(
+        task?.initialPrompt || (task?.pendingPrompts && task.pendingPrompts.length > 0),
+      );
       // Fire any idle resolvers queued while human had control
       const resolvers = this.idleResolvers.get(taskId);
-      if (resolvers?.length) {
+      if (!hasQueuedWork && resolvers?.length) {
         for (const resolve of resolvers) resolve({ reason: 'idle' });
         this.idleResolvers.delete(taskId);
       }
-      // Notify coordinator if it tried to send a prompt or had an idle wait interrupted.
-      if (this.blockedByHumanControl.has(taskId) || this.interruptedByHumanControl.has(taskId)) {
-        this.blockedByHumanControl.delete(taskId);
-        this.interruptedByHumanControl.delete(taskId);
-        const task = this.tasks.get(taskId);
-        const coordinator = task ? this.coordinators.get(task.coordinatorTaskId) : null;
-        if (task && coordinator) {
-          this.notifyRenderer(IPC.MCP_CoordinatorNotificationStaged, {
-            coordinatorTaskId: coordinator.taskId,
-            batchId: randomUUID(),
-            notificationIds: [],
-            text: `[Control update]\nTask "${task.name}" has been returned to coordinator control. You may now resume sending prompts to it.`,
-            autoFireAt: Date.now() + 2_000,
-          });
-        }
+      if (task?.initialPrompt) {
+        this.clearInitialPromptTimer(task.id);
+        this.scheduleInitialPromptDelivery(task, 0);
+      } else if (task?.pendingPrompts?.length) {
+        void this.flushNextQueuedPrompt(task);
       }
+    }
+  }
+
+  private normalizedTail(agentId: string): string {
+    const tail = this.tailBuffers.get(agentId) ?? '';
+    return (
+      stripAnsi(tail)
+        // eslint-disable-next-line no-control-regex
+        .replace(/[\x00-\x1f\x7f]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+    );
+  }
+
+  private tailHasAgentPrompt(task: CoordinatedTask): boolean {
+    return chunkContainsAgentPrompt(this.normalizedTail(task.agentId));
+  }
+
+  private suppressPromptEchoIdleNotification(task: CoordinatedTask): void {
+    task.suppressNextIdleNotification = true;
+    task.suppressNextIdleNotificationUntil = Date.now() + PROMPT_ECHO_IDLE_SUPPRESSION_MS;
+  }
+
+  private clearExpiredPromptEchoSuppression(task: CoordinatedTask): void {
+    if (!task.suppressNextIdleNotification) return;
+    const suppressUntil = task.suppressNextIdleNotificationUntil;
+    if (suppressUntil !== undefined && Date.now() < suppressUntil) return;
+    task.suppressNextIdleNotification = false;
+    task.suppressNextIdleNotificationUntil = undefined;
+  }
+
+  private suppressPromptEchoIdleIfNeeded(task: CoordinatedTask): boolean {
+    if (!task.assignedPromptDelivered || !task.suppressNextIdleNotification) return false;
+    const suppressUntil = task.suppressNextIdleNotificationUntil;
+    if (suppressUntil !== undefined && Date.now() < suppressUntil) {
+      this.tailBuffers.set(task.agentId, '');
+      return true;
+    }
+    if (suppressUntil === undefined) {
+      task.suppressNextIdleNotification = false;
+      task.suppressNextIdleNotificationUntil = undefined;
+      this.tailBuffers.set(task.agentId, '');
+      return true;
+    }
+    task.suppressNextIdleNotification = false;
+    task.suppressNextIdleNotificationUntil = undefined;
+    return false;
+  }
+
+  private clearInitialPromptTimer(taskId: string): void {
+    const timer = this.initialPromptTimers.get(taskId);
+    if (!timer) return;
+    clearTimeout(timer);
+    this.initialPromptTimers.delete(taskId);
+  }
+
+  private clearInitialPromptDeliveryState(taskId: string): void {
+    this.clearInitialPromptTimer(taskId);
+    this.initialPromptReadyTasks.delete(taskId);
+  }
+
+  private scheduleInitialPromptDelivery(
+    task: CoordinatedTask,
+    delayMs = INITIAL_PROMPT_READY_DELAY_MS,
+    promptReady = false,
+  ): void {
+    if (promptReady) this.initialPromptReadyTasks.add(task.id);
+    if (!task.initialPrompt || task.assignedPromptDelivered) return;
+    if (this.initialPromptTimers.has(task.id)) return;
+
+    const timer = setTimeout(() => {
+      this.initialPromptTimers.delete(task.id);
+      void this.tryDeliverInitialPrompt(task.id);
+    }, delayMs);
+    if (typeof timer === 'object' && 'unref' in timer) timer.unref();
+    this.initialPromptTimers.set(task.id, timer);
+    logInfo('coordinator.initial_prompt', 'scheduled', {
+      taskId: task.id,
+      agentId: task.agentId,
+      delayMs,
+    });
+  }
+
+  private async tryDeliverInitialPrompt(taskId: string): Promise<void> {
+    const task = this.tasks.get(taskId);
+    if (!task?.initialPrompt || task.assignedPromptDelivered) return;
+    if (task.status === 'exited' || task.status === 'error') return;
+
+    const promptReady = this.initialPromptReadyTasks.has(taskId) || this.tailHasAgentPrompt(task);
+    if (!promptReady) {
+      logInfo('coordinator.initial_prompt', 'waiting_for_prompt', {
+        taskId: task.id,
+        agentId: task.agentId,
+      });
+      return;
+    }
+
+    if (this.controlMap.get(task.id) === 'human') {
+      this.scheduleInitialPromptDelivery(task, INITIAL_PROMPT_READY_DELAY_MS, promptReady);
+      return;
+    }
+
+    if (this.writingPromptTaskIds.has(task.id)) return;
+    const prompt = task.initialPrompt;
+    task.initialPrompt = undefined;
+    this.writingPromptTaskIds.add(task.id);
+    try {
+      await this.writePromptToTask(task, prompt);
+      this.markPromptDelivered(task.id);
+      logInfo('coordinator.initial_prompt', 'delivered', {
+        taskId: task.id,
+        agentId: task.agentId,
+      });
+      this.notifyRenderer(IPC.MCP_TaskStateSync, {
+        taskId: task.id,
+        initialPrompt: null,
+      });
+    } catch {
+      if (this.tasks.has(task.id)) {
+        task.initialPrompt = prompt;
+        this.scheduleInitialPromptDelivery(task, INITIAL_PROMPT_READY_DELAY_MS, promptReady);
+      }
+    } finally {
+      this.writingPromptTaskIds.delete(task.id);
     }
   }
 
@@ -324,9 +446,7 @@ export class Coordinator {
     // reported so the coordinator doesn't think it's still running.
     if (!task.assignedPromptDelivered && state !== 'exited') return;
     if (state === 'idle' && task.suppressNextIdleNotification) {
-      task.suppressNextIdleNotification = false;
-      this.tailBuffers.set(task.agentId, '');
-      return;
+      if (this.suppressPromptEchoIdleIfNeeded(task)) return;
     }
 
     const coordinator = this.coordinators.get(task.coordinatorTaskId);
@@ -432,16 +552,23 @@ export class Coordinator {
   private formatNotificationText(pending: PendingNotification[]): string {
     const header = `[Sub-task update — ${pending.length} task(s) completed]`;
     const lines = pending.map((n) => {
-      const status = n.state === 'exited' ? `terminated (exit ${n.exitCode})` : 'ready for review';
+      const status =
+        n.state === 'landed'
+          ? 'self-landed successfully'
+          : n.state === 'exited'
+            ? `terminated (exit ${n.exitCode})`
+            : 'ready for review';
       const line = `- "${n.taskName}" ${status} — branch: ${n.branchName}`;
       const warn =
-        n.exitCode !== null && n.exitCode !== 0
+        n.state !== 'landed' && n.exitCode !== null && n.exitCode !== 0
           ? '\n  ⚠️  Non-zero exit — may need attention. Consider spawning a follow-up agent.'
           : '';
       return line + warn;
     });
-    const footer =
-      "Please review each completed task: check its diff, confirm the work looks correct, then commit and merge what's ready. If there are items remaining on the backlog, spawn the next batch.";
+    const allLanded = pending.every((n) => n.state === 'landed');
+    const footer = allLanded
+      ? 'Sub-tasks have merged their branches and cleaned up. If there are items remaining on the backlog, spawn the next batch.'
+      : "Please review each completed task: check its diff, confirm the work looks correct, then commit and merge what's ready. If there are items remaining on the backlog, spawn the next batch.";
     return [header, '', ...lines, '', footer].join('\n');
   }
 
@@ -524,6 +651,7 @@ export class Coordinator {
       coordinatorTaskId: coordinatorId,
       status: 'creating',
       exitCode: null,
+      initialPrompt: opts.prompt ? SUB_TASK_PREAMBLE + opts.prompt : undefined,
       dockerContainerName: this.coordinators.get(coordinatorId)?.dockerContainerName ?? null,
     };
 
@@ -547,16 +675,24 @@ export class Coordinator {
       );
 
       // Check for agent prompt
-      const stripped = stripAnsi(combined)
-        // eslint-disable-next-line no-control-regex
-        .replace(/[\x00-\x1f\x7f]/g, ' ')
-        .replace(/\s+/g, ' ')
-        .trim();
-      const hasAgentPrompt = chunkContainsAgentPrompt(stripped);
+      const hasAgentPrompt = this.tailHasAgentPrompt(task);
       if (!hasAgentPrompt && task.assignedPromptDelivered) {
-        task.suppressNextIdleNotification = false;
+        this.clearExpiredPromptEchoSuppression(task);
       }
       if (hasAgentPrompt) {
+        this.scheduleInitialPromptDelivery(task, INITIAL_PROMPT_READY_DELAY_MS, true);
+        if (
+          !task.initialPrompt &&
+          task.assignedPromptDelivered &&
+          this.controlMap.get(task.id) !== 'human' &&
+          task.pendingPrompts?.length
+        ) {
+          void this.flushNextQueuedPrompt(task);
+          return;
+        }
+        if (task.suppressNextIdleNotification && this.suppressPromptEchoIdleIfNeeded(task)) {
+          return;
+        }
         if (task.status === 'running') {
           task.status = 'idle';
           this.maybeQueueReviewNotification(task, 'idle', null);
@@ -569,6 +705,7 @@ export class Coordinator {
         }
       } else if (task.status === 'idle') {
         task.status = 'running';
+        this.suppressPendingNotificationForTask(task);
       }
     };
     this.subscribers.set(agentId, outputCb);
@@ -736,20 +873,25 @@ export class Coordinator {
       const scrollback = getAgentScrollback(agentId);
       if (scrollback) {
         const decoded = Buffer.from(scrollback, 'base64').toString('utf8');
+        this.tailBuffers.set(
+          agentId,
+          decoded.length > 4096 ? decoded.slice(decoded.length - 4096) : decoded,
+        );
         const stripped = stripAnsi(decoded)
           // eslint-disable-next-line no-control-regex
           .replace(/[\x00-\x1f\x7f]/g, ' ')
           .replace(/\s+/g, ' ')
           .trim();
         if (chunkContainsAgentPrompt(stripped)) {
+          this.scheduleInitialPromptDelivery(task, INITIAL_PROMPT_READY_DELAY_MS, true);
           task.status = 'idle';
           this.maybeQueueReviewNotification(task, 'idle', null);
         }
       }
 
-      // Notify renderer with the prompt — the renderer sets it as initialPrompt
-      // on the task, and PromptInput auto-delivers it using the same code path
-      // as manually created tasks (stability checks, quiescence detection, etc.)
+      // Notify renderer after backend startup begins. The backend owns delivery
+      // of coordinated initial assignments so background sub-tasks start even
+      // when their task panels are not mounted.
       // For renderer storage: only store the inner agent args (without docker wrapper).
       // TaskAITerminal re-wraps with the coordinator's current container name at respawn time
       // so stale container names don't get baked into persisted state.
@@ -762,7 +904,6 @@ export class Coordinator {
         worktreePath: task.worktreePath,
         agentId: task.agentId,
         coordinatorTaskId: task.coordinatorTaskId,
-        prompt: opts.prompt ? SUB_TASK_PREAMBLE + opts.prompt : opts.prompt,
         mcpConfigPath: subTaskMcpConfigPath,
         preambleFileExistedBefore: task.preambleFileExistedBefore,
         agentCommand: agentCommand,
@@ -826,7 +967,8 @@ export class Coordinator {
       status: task.status,
       coordinatorTaskId: task.coordinatorTaskId,
       exitCode: task.exitCode,
-      pendingPrompt: task.pendingPrompt,
+      pendingPrompt: task.pendingPrompts?.[0],
+      pendingPromptCount: task.pendingPrompts?.length,
       signalDoneAt: task.signalDoneAt?.toISOString(),
       verification: task.verification,
       landingState: task.landingState,
@@ -840,27 +982,56 @@ export class Coordinator {
     return this.tasks.get(taskId)?.doneToken ?? null;
   }
 
-  async sendPrompt(taskId: string, prompt: string): Promise<void> {
+  async sendPrompt(taskId: string, prompt: string): Promise<{ queued: boolean }> {
     const task = this.tasks.get(taskId);
     if (!task) throw new Error(`Task not found: ${taskId}`);
+    if (task.initialPrompt && !task.assignedPromptDelivered) {
+      task.pendingPrompts = [...(task.pendingPrompts ?? []), prompt];
+      this.clearInitialPromptTimer(task.id);
+      this.scheduleInitialPromptDelivery(task, 0);
+      return { queued: true };
+    }
+    if (task.pendingPrompts?.length) {
+      task.pendingPrompts = [...task.pendingPrompts, prompt];
+      return { queued: true };
+    }
     if (this.controlMap.get(taskId) === 'human') {
-      this.blockedByHumanControl.add(taskId);
-      throw new Error(
-        'Task is under human control. Return control to coordinator before sending prompts.',
-      );
+      task.pendingPrompts = [...(task.pendingPrompts ?? []), prompt];
+      return { queued: true };
     }
 
+    await this.writePromptToTask(task, prompt);
+    return { queued: false };
+  }
+
+  private async flushNextQueuedPrompt(task: CoordinatedTask): Promise<void> {
+    if (this.controlMap.get(task.id) === 'human') return;
+    if (task.initialPrompt && !task.assignedPromptDelivered) return;
+    const prompt = task.pendingPrompts?.shift();
+    if (!prompt) {
+      task.pendingPrompts = undefined;
+      return;
+    }
+    try {
+      await this.writePromptToTask(task, prompt);
+    } catch (err) {
+      task.pendingPrompts = [prompt, ...(task.pendingPrompts ?? [])];
+      throw err;
+    }
+    if (task.pendingPrompts?.length === 0) task.pendingPrompts = undefined;
+  }
+
+  private async writePromptToTask(task: CoordinatedTask, prompt: string): Promise<void> {
     // Send text then Enter separately (like the frontend does)
     writeToAgent(task.agentId, prompt);
     await new Promise((r) => setTimeout(r, PROMPT_WRITE_DELAY_MS));
     writeToAgent(task.agentId, '\r');
     task.status = 'running';
-    task.pendingPrompt = undefined;
     task.signalDoneAt = undefined;
-    task.suppressNextIdleNotification = true;
+    this.suppressPromptEchoIdleNotification(task);
     this.tailBuffers.set(task.agentId, '');
     this.notifyRenderer(IPC.MCP_TaskStateSync, {
-      taskId,
+      taskId: task.id,
       signalDoneReceived: false,
       signalDoneAt: null,
       signalDoneConsumed: false,
@@ -882,12 +1053,21 @@ export class Coordinator {
     const task = this.tasks.get(taskId);
     if (!task) return Promise.reject(new Error(`Task not found: ${taskId}`));
     if (this.controlMap.get(taskId) === 'human') {
-      this.interruptedByHumanControl.add(taskId);
+      if (task.initialPrompt || task.pendingPrompts?.length) {
+        return this.waitForIdleResolver(taskId, timeoutMs);
+      }
       return Promise.resolve({ reason: 'human_control' }); // resolve immediately — caller gets control-change event instead
     }
     if (task.status === 'exited') return Promise.resolve({ reason: 'exited' });
     if (task.status === 'idle') return Promise.resolve({ reason: 'idle' });
 
+    return this.waitForIdleResolver(taskId, timeoutMs);
+  }
+
+  private waitForIdleResolver(
+    taskId: string,
+    timeoutMs: number,
+  ): Promise<{ reason: 'idle' | 'human_control' | 'exited' | 'removed' }> {
     return new Promise((resolve, reject) => {
       const timerRef = { value: undefined as ReturnType<typeof setTimeout> | undefined };
 
@@ -1163,6 +1343,7 @@ export class Coordinator {
     this.closingTaskIds.add(task.id);
     try {
       this.suppressPendingNotificationForTask(task);
+      this.queueLandedNotification(task);
 
       const cb = this.subscribers.get(task.agentId);
       if (cb) {
@@ -1201,8 +1382,8 @@ export class Coordinator {
       task.status = 'exited';
       task.exitCode = 0;
       this.tasks.delete(task.id);
+      this.clearInitialPromptDeliveryState(task.id);
       this.controlMap.delete(task.id);
-      this.blockedByHumanControl.delete(task.id);
       this.notifyRenderer(IPC.MCP_TaskClosed, { taskId: task.id });
     } finally {
       this.closingTaskIds.delete(task.id);
@@ -1444,8 +1625,7 @@ export class Coordinator {
     // No additional docker cleanup needed here.
 
     this.tasks.delete(taskId);
-    this.blockedByHumanControl.delete(taskId);
-    this.interruptedByHumanControl.delete(taskId);
+    this.clearInitialPromptDeliveryState(taskId);
     this.controlMap.delete(taskId);
   }
 
@@ -1528,9 +1708,8 @@ export class Coordinator {
       }
     }
     this.tasks.delete(taskId);
+    this.clearInitialPromptDeliveryState(taskId);
     this.controlMap.delete(taskId);
-    this.blockedByHumanControl.delete(taskId);
-    this.interruptedByHumanControl.delete(taskId);
     this.closingTaskIds.delete(taskId);
 
     // Notify renderer
@@ -1666,9 +1845,12 @@ export class Coordinator {
           .trim();
         const hasAgentPrompt = chunkContainsAgentPrompt(stripped);
         if (!hasAgentPrompt && task.assignedPromptDelivered) {
-          task.suppressNextIdleNotification = false;
+          this.clearExpiredPromptEchoSuppression(task);
         }
         if (hasAgentPrompt) {
+          if (task.suppressNextIdleNotification && this.suppressPromptEchoIdleIfNeeded(task)) {
+            return;
+          }
           if (task.status === 'running') {
             task.status = 'idle';
             this.maybeQueueReviewNotification(task, 'idle', null);
@@ -1680,6 +1862,7 @@ export class Coordinator {
           }
         } else if (task.status === 'idle') {
           task.status = 'running';
+          this.suppressPendingNotificationForTask(task);
         }
       };
       this.subscribers.set(agentId, outputCb);
@@ -1696,6 +1879,7 @@ export class Coordinator {
       this.tailBuffers.delete(agentId);
       this.decoders.delete(agentId);
       this.subscribers.delete(agentId);
+      this.clearInitialPromptDeliveryState(task.id);
       this.tasks.delete(task.id);
       throw err;
     }
@@ -1885,12 +2069,11 @@ export class Coordinator {
         task.reviewNotificationQueued = true;
       } else {
         task.suppressNextIdleNotification = false;
+        task.suppressNextIdleNotificationUntil = undefined;
       }
 
       // Transfer control to human so the user can decide what to do with orphaned tasks
       this.controlMap.set(taskId, 'human');
-      this.blockedByHumanControl.delete(taskId);
-      this.interruptedByHumanControl.delete(taskId);
 
       if (task.mcpConfigPath) {
         try {
@@ -1918,8 +2101,13 @@ export class Coordinator {
   markPromptDelivered(taskId: string): void {
     const task = this.tasks.get(taskId);
     if (!task) return;
+    this.clearInitialPromptDeliveryState(taskId);
+    task.initialPrompt = undefined;
     task.assignedPromptDelivered = true;
-    task.suppressNextIdleNotification = true;
+    if (!task.suppressNextIdleNotification) {
+      task.suppressNextIdleNotification = true;
+      task.suppressNextIdleNotificationUntil = undefined;
+    }
     this.tailBuffers.set(task.agentId, '');
     if (task.status !== 'exited' && task.status !== 'error') task.status = 'running';
   }
@@ -2002,6 +2190,7 @@ export class Coordinator {
     if (!task) return false;
     task.assignedPromptDelivered = true;
     task.suppressNextIdleNotification = false;
+    task.suppressNextIdleNotificationUntil = undefined;
     task.signalDoneAt = new Date();
     task.signalDoneConsumed = false;
 
@@ -2052,6 +2241,25 @@ export class Coordinator {
       this.maybeQueueReviewNotification(task, state, task.exitCode ?? null, 5_000);
     }
     return true;
+  }
+
+  private queueLandedNotification(task: CoordinatedTask): void {
+    const coordinator = this.coordinators.get(task.coordinatorTaskId);
+    if (!coordinator) return;
+    if (coordinator.pendingNotifications.some((n) => n.taskId === task.id)) return;
+
+    const notification: PendingNotification = {
+      id: randomUUID(),
+      taskId: task.id,
+      taskName: task.name,
+      branchName: task.branchName,
+      state: 'landed',
+      exitCode: 0,
+      completedAt: new Date(),
+    };
+    coordinator.pendingNotifications.push(notification);
+    task.reviewNotificationQueued = true;
+    this.stageBatch(coordinator);
   }
 
   private suppressPendingNotificationForTask(task: CoordinatedTask): void {

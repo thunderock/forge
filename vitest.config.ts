@@ -5,7 +5,7 @@ export default defineConfig({
   plugins: [solidPlugin({ ssr: true })],
   test: {
     environment: 'node',
-    include: ['src/**/*.test.ts', 'electron/**/*.test.ts'],
+    include: ['src/**/*.test.ts', 'electron/**/*.test.ts', 'scripts/**/*.test.mjs'],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'html', 'json-summary'],

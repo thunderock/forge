@@ -32,6 +32,7 @@ export const PROMPT_PATTERNS: RegExp[] = [
 export const AGENT_READY_TAIL_PATTERNS: RegExp[] = [
   /❯/, // Claude Code
   /›/, // Codex CLI
+  /(?:^|\s)>\s*(?:Type your message|$)/i, // Gemini CLI
 ];
 
 const AGENT_STARTUP_OR_DIALOG_PATTERNS: RegExp[] = [
@@ -40,6 +41,13 @@ const AGENT_STARTUP_OR_DIALOG_PATTERNS: RegExp[] = [
   /\bmodel:\s*loading\b/i,
   /\bBooting\s+MCP\s+server\b/i,
   /\bStarting\s+MCP\s+servers?\b/i,
+];
+
+const AGENT_BUSY_TAIL_PATTERNS: RegExp[] = [
+  /\bq*Working\s*\(/i,
+  /\bbackground\s+terminal\s+running\b/i,
+  /\besc\s+to\s+interrupt\b/i,
+  /\/stop\s+to\s+close\b/i,
 ];
 
 /** Check stripped output for known agent prompt characters.
@@ -51,5 +59,6 @@ export function chunkContainsAgentPrompt(stripped: string): boolean {
   if (stripped.length === 0) return false;
   const tail = stripped.slice(-300);
   if (AGENT_STARTUP_OR_DIALOG_PATTERNS.some((re) => re.test(tail))) return false;
+  if (AGENT_BUSY_TAIL_PATTERNS.some((re) => re.test(tail))) return false;
   return AGENT_READY_TAIL_PATTERNS.some((re) => re.test(tail));
 }

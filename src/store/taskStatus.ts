@@ -162,6 +162,7 @@ function looksLikeBareShellPrompt(line: string): boolean {
 const AGENT_READY_TAIL_PATTERNS: RegExp[] = [
   /❯/, // Claude Code
   /›/, // Codex CLI
+  /(?:^|\s)>\s*(?:Type your message|$)/i, // Gemini CLI
 ];
 
 /** Check stripped output for known agent prompt characters.
@@ -412,14 +413,7 @@ export function looksLikeQuestion(tail: string): boolean {
   });
 }
 
-/** True when the tail buffer's question patterns are entirely from trust/allow
- *  dialogs that auto-trust will handle. Returns false when:
- *  - autoTrustFolders is disabled
- *  - the tail doesn't contain trust dialog patterns
- *  - exclusion keywords (delete, password, etc.) are present
- *  - non-trust question patterns are also found in the tail */
-export function isTrustQuestionAutoHandled(tail: string): boolean {
-  if (!store.autoTrustFolders) return false;
+function isAutoHandledTrustQuestion(tail: string): boolean {
   if (!looksLikeTrustDialog(tail)) return false;
   const visible = stripAnsi(tail); // full visible — see looksLikeQuestion for rationale
   if (TRUST_EXCLUSION_KEYWORDS.test(visible)) return false;
@@ -432,6 +426,22 @@ export function isTrustQuestionAutoHandled(tail: string): boolean {
     // If a line matches a non-trust question pattern, this is NOT only a trust question.
     return QUESTION_PATTERNS.some((re) => re.test(trimmed));
   });
+}
+
+/** True when the tail buffer's question patterns are entirely from trust/allow
+ *  dialogs that global auto-trust will handle. Returns false when:
+ *  - autoTrustFolders is disabled
+ *  - the tail doesn't contain trust dialog patterns
+ *  - exclusion keywords (delete, password, etc.) are present
+ *  - non-trust question patterns are also found in the tail */
+export function isTrustQuestionAutoHandled(tail: string): boolean {
+  return store.autoTrustFolders && isAutoHandledTrustQuestion(tail);
+}
+
+/** Agent-aware variant for coordinator sub-tasks where trust handling can be
+ *  forced by the task launch policy even when global auto-trust is disabled. */
+export function isAgentTrustQuestionAutoHandled(agentId: string, tail: string): boolean {
+  return (store.autoTrustFolders || isAutoTrustForced(agentId)) && isAutoHandledTrustQuestion(tail);
 }
 
 /** True when recent output contains a trust or permission dialog. */
@@ -628,15 +638,17 @@ function tryAutoTrust(agentId: string, rawTail: string): boolean {
     // If questionJustActivated raced ahead and set human_control before
     // auto-trust suppressed the question state, release it back to coordinator.
     const taskId = state.taskId;
-    if (taskId && isAutoTrustForced(agentId) && store.tasks[taskId]?.controlledBy === 'human') {
-      invoke(IPC.MCP_ControlChanged, { taskId, controlledBy: 'coordinator' })
-        .then(() => setStore('tasks', taskId, 'controlledBy', 'coordinator'))
-        .catch((err) => {
-          logWarn('tasks.autoTrust', 'MCP_ControlChanged failed during auto-trust release', {
-            taskId,
-            err,
-          });
-        });
+    const task = taskId ? store.tasks[taskId] : undefined;
+    if (
+      taskId &&
+      task?.coordinatedBy &&
+      task.controlledBy === 'human' &&
+      !task.promptDraftActive &&
+      !task.terminalInputPending
+    ) {
+      setStore('tasks', taskId, 'userActivityHoldUntil', undefined);
+      setStore('tasks', taskId, 'controlledBy', 'coordinator');
+      invoke(IPC.MCP_ControlChanged, { taskId, controlledBy: 'coordinator' }).catch(() => {});
     }
     // Cooldown: ignore trust patterns for 1s so the same dialog
     // isn't re-matched while the PTY output transitions.

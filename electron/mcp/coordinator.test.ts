@@ -54,6 +54,7 @@ vi.mock('fs/promises', () => ({
 const mockNotifyRenderer = vi.fn();
 const mockOnPtyEvent = vi.fn();
 const mockSpawnAgent = vi.fn();
+const mockWriteToAgent = vi.fn();
 const mockSubscribeToAgent = vi.fn();
 const mockGetAgentScrollback = vi.fn<() => string | null>(() => null);
 const mockCreateBackendTask = vi.fn().mockResolvedValue({
@@ -72,12 +73,12 @@ vi.mock('./atomic.js', () => ({
 
 vi.mock('./prompt-detect.js', () => ({
   stripAnsi: (s: string) => s,
-  chunkContainsAgentPrompt: (s: string) => s.includes('❯'),
+  chunkContainsAgentPrompt: (s: string) => s.slice(-300).includes('❯'),
 }));
 
 vi.mock('../ipc/pty.js', () => ({
   spawnAgent: mockSpawnAgent,
-  writeToAgent: vi.fn(),
+  writeToAgent: mockWriteToAgent,
   killAgent: vi.fn(),
   subscribeToAgent: mockSubscribeToAgent,
   unsubscribeFromAgent: vi.fn(),
@@ -186,6 +187,243 @@ describe('Coordinator registerCoordinator — idempotency', () => {
     expect(mockNotifyRenderer).toHaveBeenCalledWith('mcp_task_created', expect.anything());
   });
 
+  it('delivers coordinated initial prompts from the backend for background sub-tasks', async () => {
+    vi.useFakeTimers();
+    try {
+      coordinator.registerCoordinator('coord-1', 'proj-1');
+      mockCreateBackendTask
+        .mockResolvedValueOnce({
+          id: 'task-1',
+          branch_name: 'task/one',
+          worktree_path: '/tmp/one',
+        })
+        .mockResolvedValueOnce({
+          id: 'task-2',
+          branch_name: 'task/two',
+          worktree_path: '/tmp/two',
+        })
+        .mockResolvedValueOnce({
+          id: 'task-3',
+          branch_name: 'task/three',
+          worktree_path: '/tmp/three',
+        });
+
+      const taskOne = await coordinator.createTask({
+        name: 'one',
+        prompt: 'do one',
+        coordinatorTaskId: 'coord-1',
+      });
+      const taskTwo = await coordinator.createTask({
+        name: 'two',
+        prompt: 'do two',
+        coordinatorTaskId: 'coord-1',
+      });
+      const taskThree = await coordinator.createTask({
+        name: 'three',
+        prompt: 'do three',
+        coordinatorTaskId: 'coord-1',
+      });
+      const outputOne = mockSubscribeToAgent.mock.calls[0]?.[1] as (encoded: string) => void;
+      const outputTwo = mockSubscribeToAgent.mock.calls[1]?.[1] as (encoded: string) => void;
+      const outputThree = mockSubscribeToAgent.mock.calls[2]?.[1] as (encoded: string) => void;
+
+      outputOne(encode('ready ❯ '));
+      outputTwo(encode('ready ❯ '));
+      outputThree(encode('ready ❯ '));
+      await vi.advanceTimersByTimeAsync(1_500);
+      await vi.advanceTimersByTimeAsync(50);
+
+      expect(mockWriteToAgent).toHaveBeenCalledWith(
+        taskOne.agentId,
+        expect.stringContaining('do one'),
+      );
+      expect(mockWriteToAgent).toHaveBeenCalledWith(taskOne.agentId, '\r');
+      expect(mockWriteToAgent).toHaveBeenCalledWith(
+        taskTwo.agentId,
+        expect.stringContaining('do two'),
+      );
+      expect(mockWriteToAgent).toHaveBeenCalledWith(taskTwo.agentId, '\r');
+      expect(mockWriteToAgent).toHaveBeenCalledWith(
+        taskThree.agentId,
+        expect.stringContaining('do three'),
+      );
+      expect(mockWriteToAgent).toHaveBeenCalledWith(taskThree.agentId, '\r');
+
+      const createdEvents = mockNotifyRenderer.mock.calls.filter(
+        ([channel]) => channel === 'mcp_task_created',
+      );
+      expect(createdEvents[0]?.[1]).not.toHaveProperty('prompt');
+      expect(createdEvents[1]?.[1]).not.toHaveProperty('prompt');
+      expect(createdEvents[2]?.[1]).not.toHaveProperty('prompt');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('delivers a coordinated initial prompt even if startup control is human', async () => {
+    vi.useFakeTimers();
+    try {
+      coordinator.registerCoordinator('coord-1', 'proj-1');
+
+      const task = await coordinator.createTask({
+        name: 'one',
+        prompt: 'do one',
+        coordinatorTaskId: 'coord-1',
+      });
+      const output = mockSubscribeToAgent.mock.calls[0]?.[1] as (encoded: string) => void;
+
+      coordinator.setTaskControl(task.id, 'human');
+      output(encode('ready ❯ '));
+      await vi.advanceTimersByTimeAsync(1_500);
+      await vi.advanceTimersByTimeAsync(50);
+
+      expect(mockWriteToAgent).toHaveBeenCalledWith(
+        task.agentId,
+        expect.stringContaining('do one'),
+      );
+      expect(mockWriteToAgent).toHaveBeenCalledWith(task.agentId, '\r');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('delivers after a transient startup prompt marker is pushed out of the tail', async () => {
+    vi.useFakeTimers();
+    try {
+      coordinator.registerCoordinator('coord-1', 'proj-1');
+
+      const task = await coordinator.createTask({
+        name: 'one',
+        prompt: 'do one',
+        coordinatorTaskId: 'coord-1',
+      });
+      const output = mockSubscribeToAgent.mock.calls[0]?.[1] as (encoded: string) => void;
+
+      output(encode('ready ❯ '));
+      output(encode('claude redraw '.repeat(500)));
+      await vi.advanceTimersByTimeAsync(1_500);
+      await vi.advanceTimersByTimeAsync(50);
+
+      expect(mockWriteToAgent).toHaveBeenCalledWith(
+        task.agentId,
+        expect.stringContaining('do one'),
+      );
+      expect(mockWriteToAgent).toHaveBeenCalledWith(task.agentId, '\r');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not stage review when backend prompt delivery echoes the startup prompt', async () => {
+    vi.useFakeTimers();
+    try {
+      coordinator.registerCoordinator('coord-1', 'proj-1');
+
+      const task = await coordinator.createTask({
+        name: 'one',
+        prompt: 'do one',
+        coordinatorTaskId: 'coord-1',
+      });
+      const output = mockSubscribeToAgent.mock.calls[0]?.[1] as (encoded: string) => void;
+
+      output(encode('ready ❯ '));
+      await vi.advanceTimersByTimeAsync(1_500);
+      await vi.advanceTimersByTimeAsync(50);
+      expect(mockWriteToAgent).toHaveBeenCalledWith(
+        task.agentId,
+        expect.stringContaining('do one'),
+      );
+
+      mockNotifyRenderer.mockClear();
+      output(encode('[SUB-TASK MODE] do one'));
+      output(encode('\nready ❯ '));
+
+      expect(mockNotifyRenderer).not.toHaveBeenCalledWith(
+        'mcp_coordinator_notification_staged',
+        expect.anything(),
+      );
+
+      await vi.advanceTimersByTimeAsync(2_100);
+      output(encode('Working...\n'));
+      output(encode('Done ❯ '));
+
+      expect(mockNotifyRenderer).toHaveBeenCalledWith(
+        'mcp_coordinator_notification_staged',
+        expect.objectContaining({ coordinatorTaskId: 'coord-1' }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('delivers exactly once after repeated startup control flips', async () => {
+    vi.useFakeTimers();
+    try {
+      coordinator.registerCoordinator('coord-1', 'proj-1');
+
+      const task = await coordinator.createTask({
+        name: 'one',
+        prompt: 'do one',
+        coordinatorTaskId: 'coord-1',
+      });
+      const output = mockSubscribeToAgent.mock.calls[0]?.[1] as (encoded: string) => void;
+
+      coordinator.setTaskControl(task.id, 'human');
+      coordinator.setTaskControl(task.id, 'coordinator');
+      coordinator.setTaskControl(task.id, 'human');
+      coordinator.setTaskControl(task.id, 'coordinator');
+      output(encode('ready ❯ '));
+      await vi.advanceTimersByTimeAsync(1_500);
+      await vi.advanceTimersByTimeAsync(50);
+      output(encode('still ready ❯ '));
+      await vi.advanceTimersByTimeAsync(1_500);
+      await vi.advanceTimersByTimeAsync(50);
+
+      const textWrites = mockWriteToAgent.mock.calls.filter(
+        ([agentId, text]) => agentId === task.agentId && text !== '\r',
+      );
+      expect(textWrites).toHaveLength(1);
+      expect(textWrites[0]?.[1]).toEqual(expect.stringContaining('do one'));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('preserves initial prompt before queued follow-up prompts', async () => {
+    vi.useFakeTimers();
+    try {
+      coordinator.registerCoordinator('coord-1', 'proj-1');
+
+      const task = await coordinator.createTask({
+        name: 'one',
+        prompt: 'do one',
+        coordinatorTaskId: 'coord-1',
+      });
+      await coordinator.sendPrompt(task.id, 'follow one');
+      await coordinator.sendPrompt(task.id, 'follow two');
+      const output = mockSubscribeToAgent.mock.calls[0]?.[1] as (encoded: string) => void;
+
+      output(encode('ready ❯ '));
+      await vi.advanceTimersByTimeAsync(1_500);
+      await vi.advanceTimersByTimeAsync(50);
+      output(encode('done one ❯ '));
+      await vi.advanceTimersByTimeAsync(50);
+      output(encode('done follow one ❯ '));
+      await vi.advanceTimersByTimeAsync(50);
+
+      const textWrites = mockWriteToAgent.mock.calls
+        .filter(([agentId, text]) => agentId === task.agentId && text !== '\r')
+        .map(([, text]) => text);
+      expect(textWrites[0]).toEqual(expect.stringContaining('do one'));
+      expect(textWrites[1]).toBe('follow one');
+      expect(textWrites[2]).toBe('follow two');
+      expect(coordinator.getTaskStatus(task.id)?.pendingPrompt).toBeUndefined();
+      expect(coordinator.getTaskStatus(task.id)?.pendingPromptCount).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('createTask notifies coordinator when coordinator registered only via registerCoordinator', async () => {
     // Simulates restore: StartMCPServer calls registerCoordinator internally.
     // No separate MCP_CoordinatorRegistered call occurs.
@@ -272,46 +510,132 @@ describe('Coordinator coordinator notifications', () => {
   });
 
   it('suppresses the stale idle prompt immediately after prompt delivery', async () => {
-    coordinator.registerCoordinator('coord-1', 'proj-1');
-    await coordinator.createTask({
-      name: 'test',
-      prompt: 'do work',
-      coordinatorTaskId: 'coord-1',
-    });
-    const outputCb = getOutputCb();
-
-    coordinator.markPromptDelivered('task-1');
-
-    outputCb(encode('❯ '));
-    expect(mockNotifyRenderer).not.toHaveBeenCalledWith(
-      'mcp_coordinator_notification_staged',
-      expect.anything(),
-    );
-
-    outputCb(encode('Working...'));
-    outputCb(encode('Done ❯ '));
-    expect(mockNotifyRenderer).toHaveBeenCalledWith(
-      'mcp_coordinator_notification_staged',
-      expect.objectContaining({
+    vi.useFakeTimers();
+    try {
+      coordinator.registerCoordinator('coord-1', 'proj-1');
+      await coordinator.createTask({
+        name: 'test',
+        prompt: 'do work',
         coordinatorTaskId: 'coord-1',
-        notificationIds: expect.any(Array),
-      }),
-    );
+      });
+      const outputCb = getOutputCb();
+
+      coordinator.markPromptDelivered('task-1');
+
+      outputCb(encode('❯ '));
+      expect(mockNotifyRenderer).not.toHaveBeenCalledWith(
+        'mcp_coordinator_notification_staged',
+        expect.anything(),
+      );
+
+      await vi.advanceTimersByTimeAsync(2_100);
+      outputCb(encode('Working...'));
+      outputCb(encode('Done ❯ '));
+      expect(mockNotifyRenderer).toHaveBeenCalledWith(
+        'mcp_coordinator_notification_staged',
+        expect.objectContaining({
+          coordinatorTaskId: 'coord-1',
+          notificationIds: expect.any(Array),
+        }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps suppressing repeated prompt echoes during the prompt delivery window', async () => {
+    vi.useFakeTimers();
+    try {
+      coordinator.registerCoordinator('coord-1', 'proj-1');
+      const task = await coordinator.createTask({
+        name: 'test',
+        prompt: 'do work',
+        coordinatorTaskId: 'coord-1',
+      });
+      const outputCb = getOutputCb();
+
+      outputCb(encode('ready ❯ '));
+      await vi.advanceTimersByTimeAsync(1_500);
+      await vi.advanceTimersByTimeAsync(50);
+      expect(mockWriteToAgent).toHaveBeenCalledWith(
+        task.agentId,
+        expect.stringContaining('do work'),
+      );
+      mockNotifyRenderer.mockClear();
+
+      outputCb(encode('❯ '));
+      outputCb(encode('more startup echo ❯ '));
+      await vi.advanceTimersByTimeAsync(1_000);
+      outputCb(encode('still echoing ❯ '));
+
+      expect(mockNotifyRenderer).not.toHaveBeenCalledWith(
+        'mcp_coordinator_notification_staged',
+        expect.anything(),
+      );
+
+      await vi.advanceTimersByTimeAsync(1_100);
+      outputCb(encode('Working...'));
+      outputCb(encode('Done ❯ '));
+
+      expect(mockNotifyRenderer).toHaveBeenCalledWith(
+        'mcp_coordinator_notification_staged',
+        expect.objectContaining({
+          coordinatorTaskId: 'coord-1',
+          notificationIds: expect.any(Array),
+        }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('does not enqueue duplicate notification for repeated idles', async () => {
-    coordinator.registerCoordinator('coord-1', 'proj-1');
-    await coordinator.createTask({ name: 'test', prompt: 'do', coordinatorTaskId: 'coord-1' });
-    coordinator.markPromptDelivered('task-1');
-    const outputCb = getOutputCb();
-    outputCb(encode('Done ❯ '));
-    outputCb(encode('Still here '));
-    outputCb(encode('Idle again ❯ '));
-    const calls = mockNotifyRenderer.mock.calls.filter(
-      (c) => c[0] === 'mcp_coordinator_notification_staged',
-    );
-    const lastPayload = calls[calls.length - 1]?.[1] as { notificationIds: string[] };
-    expect(lastPayload.notificationIds).toHaveLength(1);
+    vi.useFakeTimers();
+    try {
+      coordinator.registerCoordinator('coord-1', 'proj-1');
+      await coordinator.createTask({ name: 'test', prompt: 'do', coordinatorTaskId: 'coord-1' });
+      coordinator.markPromptDelivered('task-1');
+      const outputCb = getOutputCb();
+      await vi.advanceTimersByTimeAsync(2_100);
+      outputCb(encode('startup echo ❯ '));
+      outputCb(encode('Done ❯ '));
+      outputCb(encode('Idle again ❯ '));
+      const calls = mockNotifyRenderer.mock.calls.filter(
+        (c) => c[0] === 'mcp_coordinator_notification_staged',
+      );
+      const lastPayload = calls[calls.length - 1]?.[1] as { notificationIds: string[] };
+      expect(lastPayload.notificationIds).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('clears a staged idle notification if the task resumes output', async () => {
+    vi.useFakeTimers();
+    try {
+      coordinator.registerCoordinator('coord-1', 'proj-1');
+      await coordinator.createTask({ name: 'test', prompt: 'do', coordinatorTaskId: 'coord-1' });
+      coordinator.markPromptDelivered('task-1');
+      const outputCb = getOutputCb();
+
+      await vi.advanceTimersByTimeAsync(2_100);
+      outputCb(encode('startup echo ❯ '));
+      outputCb(encode('Done ❯ '));
+      expect(mockNotifyRenderer).toHaveBeenCalledWith(
+        'mcp_coordinator_notification_staged',
+        expect.objectContaining({ coordinatorTaskId: 'coord-1' }),
+      );
+
+      mockNotifyRenderer.mockClear();
+      outputCb(encode('Still working... '.repeat(40)));
+
+      expect(mockNotifyRenderer).toHaveBeenCalledWith('mcp_coordinator_notification_cleared', {
+        coordinatorTaskId: 'coord-1',
+      });
+      expect(coordinator.getTask('task-1')?.reviewNotificationQueued).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('upgrades idle→exited on PTY exit without adding duplicate', async () => {
@@ -572,6 +896,19 @@ describe('Coordinator land_self', () => {
       'mcp_task_closed',
       expect.objectContaining({ taskId: 'task-1' }),
     );
+  });
+
+  it('stages a landed notification so the coordinator hears about successful self-land', async () => {
+    await coordinator.landSelf('task-1', { verification, summary: 'done' });
+
+    const stagedCall = mockNotifyRenderer.mock.calls.find(
+      (call) => call[0] === 'mcp_coordinator_notification_staged',
+    );
+    expect(stagedCall).toBeDefined();
+    expect(stagedCall?.[1]).toMatchObject({
+      coordinatorTaskId: 'coord-1',
+      text: expect.stringContaining('self-landed successfully'),
+    });
   });
 
   it('rejects missing verification before merging', async () => {
@@ -1056,6 +1393,8 @@ describe('Coordinator waitForIdle', () => {
     await coordinator.createTask({ name: 'test', prompt: 'do', coordinatorTaskId: 'coord-1' });
     coordinator.markPromptDelivered('task-1');
     const outputCb = getOutputCb();
+    outputCb(encode('startup echo ❯ '));
+    outputCb(encode('real work output '.repeat(40)));
     outputCb(encode('Done ❯ '));
     await expect(coordinator.waitForIdle('task-1')).resolves.toEqual({ reason: 'idle' });
   });
@@ -1071,6 +1410,7 @@ describe('Coordinator waitForIdle', () => {
 
   it('resolves immediately when task is under human control', async () => {
     await coordinator.createTask({ name: 'test', prompt: 'do', coordinatorTaskId: 'coord-1' });
+    coordinator.markPromptDelivered('task-1');
     coordinator.setTaskControl('task-1', 'human');
     await expect(coordinator.waitForIdle('task-1')).resolves.toEqual({ reason: 'human_control' });
   });
@@ -1100,6 +1440,7 @@ describe('Coordinator waitForIdle', () => {
 
   it('fires pending idle resolvers when control returns to coordinator', async () => {
     await coordinator.createTask({ name: 'test', prompt: 'do', coordinatorTaskId: 'coord-1' });
+    coordinator.markPromptDelivered('task-1');
     // The real scenario: task is running, coordinator calls waitForIdle, user takes control, coordinator returns
     const waitPromise = coordinator.waitForIdle('task-1');
     coordinator.setTaskControl('task-1', 'coordinator');
@@ -1287,27 +1628,25 @@ describe('Coordinator sendPrompt', () => {
     await expect(coordinator.sendPrompt('nonexistent', 'hello')).rejects.toThrow('Task not found');
   });
 
-  it('rejects when task is under human control', async () => {
+  it('queues prompts while task has an active user lease', async () => {
     await coordinator.createTask({ name: 'test', prompt: 'do', coordinatorTaskId: 'coord-1' });
+    coordinator.markPromptDelivered('task-1');
     coordinator.setTaskControl('task-1', 'human');
-    await expect(coordinator.sendPrompt('task-1', 'hello')).rejects.toThrow('human control');
+    await expect(coordinator.sendPrompt('task-1', 'hello')).resolves.toEqual({ queued: true });
+    expect(coordinator.getTaskStatus('task-1')?.pendingPrompt).toBe('hello');
   });
 
-  it('notifies coordinator when control returns after a blocked send_prompt', async () => {
+  it('flushes a queued prompt when the user activity lease clears', async () => {
     await coordinator.createTask({ name: 'my-task', prompt: 'do', coordinatorTaskId: 'coord-1' });
+    coordinator.markPromptDelivered('task-1');
     coordinator.setTaskControl('task-1', 'human');
-    await expect(coordinator.sendPrompt('task-1', 'hello')).rejects.toThrow('human control');
+    await coordinator.sendPrompt('task-1', 'hello');
     mockNotifyRenderer.mockClear();
 
     coordinator.setTaskControl('task-1', 'coordinator');
+    await new Promise((resolve) => setTimeout(resolve, 70));
 
-    expect(mockNotifyRenderer).toHaveBeenCalledWith(
-      'mcp_coordinator_notification_staged',
-      expect.objectContaining({
-        coordinatorTaskId: 'coord-1',
-        text: expect.stringContaining('"my-task" has been returned to coordinator control'),
-      }),
-    );
+    expect(coordinator.getTaskStatus('task-1')?.pendingPrompt).toBeUndefined();
   });
 
   it('does not notify coordinator when control returns without a prior blocked send_prompt', async () => {
@@ -1325,6 +1664,7 @@ describe('Coordinator sendPrompt', () => {
 
   it('syncs frontend done/review flags back to running when sending a new prompt', async () => {
     await coordinator.createTask({ name: 'test', prompt: 'do', coordinatorTaskId: 'coord-1' });
+    coordinator.markPromptDelivered('task-1');
     mockNotifyRenderer.mockClear();
 
     await coordinator.sendPrompt('task-1', 'new work');
@@ -1472,7 +1812,6 @@ describe('Coordinator deregisterCoordinator', () => {
       tailBuffers: Map<string, unknown>;
       decoders: Map<string, unknown>;
       controlMap: Map<string, unknown>;
-      blockedByHumanControl: Set<string>;
     };
     expect(c.subscribers.has(agentId)).toBe(false);
     expect(c.tailBuffers.has(agentId)).toBe(false);
@@ -2068,10 +2407,10 @@ describe('Coordinator hydrateTask — restart hydration', () => {
       coordinatorTaskId: 'coord-1',
     });
 
-    await expect(coordinator.sendPrompt('hydrated-1', 'hello')).resolves.toBeUndefined();
+    await expect(coordinator.sendPrompt('hydrated-1', 'hello')).resolves.toEqual({ queued: false });
   });
 
-  it('hydrateTask controlledBy:human blocks sendPrompt', async () => {
+  it('hydrateTask controlledBy:human queues sendPrompt', async () => {
     coordinator.hydrateTask({
       id: 'hydrated-1',
       name: 'hydrated-task',
@@ -2084,13 +2423,14 @@ describe('Coordinator hydrateTask — restart hydration', () => {
       controlledBy: 'human',
     });
 
-    await expect(coordinator.sendPrompt('hydrated-1', 'hello')).rejects.toThrow('human control');
+    await expect(coordinator.sendPrompt('hydrated-1', 'hello')).resolves.toEqual({ queued: true });
+    expect(coordinator.getTaskStatus('hydrated-1')?.pendingPrompt).toBe('hello');
   });
 });
 
 // ─── Item 6: Control state restart replay ─────────────────────────────────────
 
-describe('Coordinator setTaskControl — blocked send until release', () => {
+describe('Coordinator setTaskControl — queued send until activity lease clears', () => {
   let coordinator: InstanceType<typeof Coordinator>;
 
   beforeEach(() => {
@@ -2107,43 +2447,75 @@ describe('Coordinator setTaskControl — blocked send until release', () => {
     coordinator.registerCoordinator('coord-1', 'proj-1');
   });
 
-  it('sendPrompt is blocked when task is human-controlled', async () => {
+  it('sendPrompt is queued when task is human-controlled', async () => {
     await coordinator.createTask({ name: 'test', prompt: 'do', coordinatorTaskId: 'coord-1' });
+    coordinator.markPromptDelivered('task-1');
     coordinator.setTaskControl('task-1', 'human');
-    await expect(coordinator.sendPrompt('task-1', 'hello')).rejects.toThrow('human control');
+    await expect(coordinator.sendPrompt('task-1', 'hello')).resolves.toEqual({ queued: true });
+    expect(coordinator.getTaskStatus('task-1')?.pendingPrompt).toBe('hello');
   });
 
   it('sendPrompt is unblocked after setTaskControl coordinator', async () => {
     await coordinator.createTask({ name: 'test', prompt: 'do', coordinatorTaskId: 'coord-1' });
+    coordinator.markPromptDelivered('task-1');
     coordinator.setTaskControl('task-1', 'human');
     coordinator.setTaskControl('task-1', 'coordinator');
-    await expect(coordinator.sendPrompt('task-1', 'hello')).resolves.toBeUndefined();
+    await expect(coordinator.sendPrompt('task-1', 'hello')).resolves.toEqual({ queued: false });
   });
 
   it('waitForIdle resolves immediately with human_control reason when human has control', async () => {
     await coordinator.createTask({ name: 'test', prompt: 'do', coordinatorTaskId: 'coord-1' });
+    coordinator.markPromptDelivered('task-1');
     coordinator.setTaskControl('task-1', 'human');
     await expect(coordinator.waitForIdle('task-1')).resolves.toEqual({ reason: 'human_control' });
   });
 
-  it('when sendPrompt was blocked, releasing control stages a notification', async () => {
+  it('waitForIdle waits through queued prompt flush after control returns', async () => {
+    vi.useFakeTimers();
+    try {
+      await coordinator.createTask({ name: 'test', prompt: 'do', coordinatorTaskId: 'coord-1' });
+      coordinator.markPromptDelivered('task-1');
+      coordinator.setTaskControl('task-1', 'human');
+      await coordinator.sendPrompt('task-1', 'hello');
+      const output = mockSubscribeToAgent.mock.calls[0]?.[1] as (encoded: string) => void;
+      let resolved = false;
+
+      const waitPromise = coordinator.waitForIdle('task-1', 10_000).then((result) => {
+        resolved = true;
+        return result;
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(resolved).toBe(false);
+
+      coordinator.setTaskControl('task-1', 'coordinator');
+      await vi.advanceTimersByTimeAsync(70);
+      expect(mockWriteToAgent).toHaveBeenCalledWith(expect.any(String), 'hello');
+      expect(resolved).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(2_100);
+      output(encode('done ❯ '));
+      await expect(waitPromise).resolves.toEqual({ reason: 'idle' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('when sendPrompt was queued, clearing activity sends it without a control notification', async () => {
     await coordinator.createTask({ name: 'my-task', prompt: 'do', coordinatorTaskId: 'coord-1' });
     coordinator.markPromptDelivered('task-1');
     coordinator.setTaskControl('task-1', 'human');
 
-    // sendPrompt throws — this marks the task as blocked
-    await expect(coordinator.sendPrompt('task-1', 'hello')).rejects.toThrow('human control');
+    await coordinator.sendPrompt('task-1', 'hello');
 
     mockNotifyRenderer.mockClear();
     coordinator.setTaskControl('task-1', 'coordinator');
+    await new Promise((resolve) => setTimeout(resolve, 70));
 
-    expect(mockNotifyRenderer).toHaveBeenCalledWith(
+    expect(mockNotifyRenderer).not.toHaveBeenCalledWith(
       'mcp_coordinator_notification_staged',
-      expect.objectContaining({
-        coordinatorTaskId: 'coord-1',
-        text: expect.stringContaining('returned to coordinator'),
-      }),
+      expect.anything(),
     );
+    expect(coordinator.getTaskStatus('task-1')?.pendingPrompt).toBeUndefined();
   });
 });
 
@@ -2304,7 +2676,7 @@ describe('Coordinator cleanupTask — failure resilience', () => {
     });
   });
 
-  it('deleteTask failure preserves controlMap and blockedByHumanControl state', async () => {
+  it('deleteTask failure preserves coordinator task state', async () => {
     const { deleteTask: mockDeleteTask } =
       await vi.importMock<typeof import('../ipc/tasks.js')>('../ipc/tasks.js');
     vi.mocked(mockDeleteTask).mockRejectedValueOnce(new Error('delete failed'));
@@ -2900,7 +3272,7 @@ describe('Coordinator removeCoordinatedTask', () => {
     expect(vi.mocked(unsubscribeFromAgent)).toHaveBeenCalledWith(agentId, expect.any(Function));
   });
 
-  it('cleans up internal resource maps (subscribers, tailBuffers, decoders, controlMap, human control markers)', async () => {
+  it('cleans up internal resource maps (subscribers, tailBuffers, decoders, controlMap)', async () => {
     await coordinator.createTask({ name: 'test', prompt: 'do', coordinatorTaskId: 'coord-1' });
     const agentId = getAgentId();
     coordinator.setTaskControl('task-1', 'human');
@@ -2914,15 +3286,11 @@ describe('Coordinator removeCoordinatedTask', () => {
       tailBuffers: Map<string, unknown>;
       decoders: Map<string, unknown>;
       controlMap: Map<string, unknown>;
-      blockedByHumanControl: Set<string>;
-      interruptedByHumanControl: Set<string>;
     };
     expect(c.subscribers.has(agentId)).toBe(false);
     expect(c.tailBuffers.has(agentId)).toBe(false);
     expect(c.decoders.has(agentId)).toBe(false);
     expect(c.controlMap.has('task-1')).toBe(false);
-    expect(c.blockedByHumanControl.has('task-1')).toBe(false);
-    expect(c.interruptedByHumanControl.has('task-1')).toBe(false);
   });
 
   it('deregister detaches child task state and preserves review only after prompt delivery', async () => {

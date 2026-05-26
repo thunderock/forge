@@ -89,7 +89,7 @@ export const COORDINATOR_TOOLS: ToolDef[] = [
   {
     name: 'send_prompt',
     description:
-      "Send a follow-up instruction to a task's AI agent. Do not resend the full original assignment merely because a newly created task is idle or get_task_output shows a startup/default placeholder prompt; wait briefly and re-check unless the agent clearly asks for input, starts unrelated work, or prompt delivery clearly failed.",
+      "Send a follow-up instruction to a task's AI agent. The tool may report that the prompt was queued rather than sent when the initial assignment or user activity is still blocking delivery; don't call wait_for_idle until a prompt was actually sent. Do not resend the full original assignment merely because a newly created task is idle or get_task_output shows a startup/default placeholder prompt; wait briefly and re-check unless the agent clearly asks for input, starts unrelated work, or prompt delivery clearly failed.",
     inputSchema: {
       type: 'object',
       properties: {

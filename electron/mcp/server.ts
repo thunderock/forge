@@ -108,11 +108,20 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'send_prompt': {
-        await client.sendPrompt(
+        const result = await client.sendPrompt(
           (params as Record<string, unknown>).taskId as string,
           (params as Record<string, unknown>).prompt as string,
         );
-        return { content: [{ type: 'text', text: 'Prompt sent successfully.' }] };
+        return {
+          content: [
+            {
+              type: 'text',
+              text: result.queued
+                ? 'Prompt queued. It will be sent after the current initial prompt or user hold clears.'
+                : 'Prompt sent successfully.',
+            },
+          ],
+        };
       }
 
       case 'wait_for_idle': {

@@ -64,10 +64,14 @@ export class MCPClient {
     return this.request<ApiTaskDetail>('GET', `/api/tasks/${encodeURIComponent(taskId)}`);
   }
 
-  async sendPrompt(taskId: string, prompt: string): Promise<void> {
-    await this.request<unknown>('POST', `/api/tasks/${encodeURIComponent(taskId)}/prompt`, {
-      prompt,
-    });
+  async sendPrompt(taskId: string, prompt: string): Promise<{ queued?: boolean }> {
+    return this.request<{ queued?: boolean }>(
+      'POST',
+      `/api/tasks/${encodeURIComponent(taskId)}/prompt`,
+      {
+        prompt,
+      },
+    );
   }
 
   async waitForIdle(

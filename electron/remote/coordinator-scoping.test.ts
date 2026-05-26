@@ -87,7 +87,7 @@ function makeMockCoordinator(): Coordinator {
     listTasks: () => [summaryA, summaryB],
     getTaskStatus: (id: string) => tasks.get(id) ?? null,
     getTaskDoneToken: (id: string) => DONE_TOKENS[id] ?? null,
-    sendPrompt: vi.fn().mockResolvedValue(undefined),
+    sendPrompt: vi.fn().mockResolvedValue({ queued: false }),
     waitForIdle: vi.fn().mockResolvedValue({ reason: 'idle' }),
     getTaskDiff: vi.fn().mockResolvedValue({ files: [], diff: '' }),
     getTaskOutput: vi.fn().mockReturnValue('output'),
@@ -336,6 +336,16 @@ describe('coordinator scoping', () => {
     it('allows coordinator A to send prompt to its own task', async () => {
       const res = await post(`/api/tasks/${taskA.id}/prompt`, { prompt: 'hello' }, COORD_A);
       expect(res.status).toBe(200);
+      await expect(res.json()).resolves.toEqual({ ok: true, queued: false });
+    });
+
+    it('returns queued status when the prompt is parked behind a hold', async () => {
+      vi.mocked(mockCoord.sendPrompt).mockResolvedValueOnce({ queued: true });
+
+      const res = await post(`/api/tasks/${taskA.id}/prompt`, { prompt: 'hello' }, COORD_A);
+
+      expect(res.status).toBe(200);
+      await expect(res.json()).resolves.toEqual({ ok: true, queued: true });
     });
 
     it('returns 403 when coordinator A sends prompt to coordinator B task', async () => {

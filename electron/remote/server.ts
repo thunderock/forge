@@ -493,8 +493,8 @@ export function startRemoteServer(opts: {
               if (!ownedByCallerOrUnscoped(detail.coordinatorTaskId))
                 return jsonReply(403, { error: 'forbidden' });
               mcpLog('info', `send_prompt id=${taskId}`);
-              await orch.sendPrompt(taskId, body.prompt);
-              jsonReply(200, { ok: true });
+              const result = await orch.sendPrompt(taskId, body.prompt);
+              jsonReply(200, { ok: true, ...result });
             })
             .catch((err) => {
               mcpLog('error', `send_prompt FAIL: ${String(err)}`);

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { IPC } from '../../electron/ipc/channels';
 
 // Hoisted so these refs are available both in vi.mock() factories and in test bodies.
@@ -135,6 +135,9 @@ import {
   closeTask,
   sendPrompt,
   pasteDelayMs,
+  markTaskUserActivity,
+  setTaskPromptDraftActive,
+  setTaskTerminalInputPending,
   markTaskMcpPending,
   markTaskMcpReady,
   markTaskMcpError,
@@ -292,6 +295,72 @@ describe('MCP_TaskCreated IPC handler', () => {
   it('regression: sub-tasks must not be created without controlledBy defined', () => {
     taskCreatedHandler(baseEvent);
     expect(mockTasks['sub-task-1'].controlledBy).toBeDefined();
+  });
+});
+
+describe('task automation activity lease', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    mockTasks['sub-task-1'] = {
+      agentIds: ['agent-sub-1'],
+      shellAgentIds: [],
+      coordinatedBy: 'coordinator-1',
+      controlledBy: 'coordinator',
+    };
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('temporarily holds automation after user activity, then releases automatically', () => {
+    markTaskUserActivity('sub-task-1');
+
+    expect(mockTasks['sub-task-1'].controlledBy).toBe('human');
+    expect(mockTasks['sub-task-1'].userActivityHoldUntil).toBe(5_000);
+
+    vi.advanceTimersByTime(4_999);
+    expect(mockTasks['sub-task-1'].controlledBy).toBe('human');
+
+    vi.advanceTimersByTime(1);
+    expect(mockTasks['sub-task-1'].controlledBy).toBe('coordinator');
+  });
+
+  it('extends the activity hold when more user activity arrives', () => {
+    markTaskUserActivity('sub-task-1');
+    vi.advanceTimersByTime(3_000);
+
+    markTaskUserActivity('sub-task-1');
+
+    expect(mockTasks['sub-task-1'].userActivityHoldUntil).toBe(8_000);
+    vi.advanceTimersByTime(4_999);
+    expect(mockTasks['sub-task-1'].controlledBy).toBe('human');
+
+    vi.advanceTimersByTime(1);
+    expect(mockTasks['sub-task-1'].controlledBy).toBe('coordinator');
+  });
+
+  it('does not release while a prompt draft remains active', () => {
+    setTaskPromptDraftActive('sub-task-1', true);
+
+    vi.advanceTimersByTime(10_000);
+    expect(mockTasks['sub-task-1'].controlledBy).toBe('human');
+
+    setTaskPromptDraftActive('sub-task-1', false);
+    vi.runOnlyPendingTimers();
+    expect(mockTasks['sub-task-1'].controlledBy).toBe('coordinator');
+  });
+
+  it('does not release while terminal input remains pending', () => {
+    setTaskTerminalInputPending('sub-task-1', true);
+
+    vi.advanceTimersByTime(10_000);
+    expect(mockTasks['sub-task-1'].controlledBy).toBe('human');
+
+    setTaskTerminalInputPending('sub-task-1', false);
+    vi.runOnlyPendingTimers();
+    expect(mockTasks['sub-task-1'].controlledBy).toBe('coordinator');
   });
 });
 

@@ -93,7 +93,7 @@ import {
   assertOptionalBoolean,
 } from './validate.js';
 import { validateBranchName as sharedValidateBranchName, validateUUID } from '../mcp/validation.js';
-import { warn as logWarn, errMessage } from '../log.js';
+import { debug as logDebug, warn as logWarn, errMessage } from '../log.js';
 import { getMCPRemoteServerUrl, detectStaleDockerMCPUrl } from '../mcp/config.js';
 import { redactServerUrl } from '../remote/server.js';
 
@@ -917,16 +917,28 @@ export function registerAllHandlers(win: BrowserWindow): void {
   const activeNotifications = new Set<Notification>();
   ipcMain.handle(IPC.ShowNotification, (_e, args) => {
     try {
-      if (!Notification.isSupported()) return;
       assertString(args.title, 'title');
       assertString(args.body, 'body');
       assertStringArray(args.taskIds, 'taskIds');
+      const ctx = { title: args.title, body: args.body, taskIds: args.taskIds };
+      logDebug('notification', 'show requested', ctx);
+      if (!Notification.isSupported()) {
+        logWarn('notification', 'native notifications are not supported', ctx);
+        return { ok: false, reason: 'unsupported' };
+      }
       const notification = new Notification({
         title: args.title,
         body: args.body,
       });
       activeNotifications.add(notification);
       const release = () => activeNotifications.delete(notification);
+      notification.on('show', () => {
+        logDebug('notification', 'show event', ctx);
+      });
+      notification.on('failed', (_event, error) => {
+        release();
+        logWarn('notification', 'show failed', { ...ctx, err: error });
+      });
       notification.on('click', () => {
         release();
         if (!win.isDestroyed()) {
@@ -937,6 +949,7 @@ export function registerAllHandlers(win: BrowserWindow): void {
       });
       notification.on('close', release);
       notification.show();
+      logDebug('notification', 'show invoked', ctx);
       // On Linux, notifications may not auto-dismiss. Close after 30 seconds
       // to prevent accumulation in the notification tray.
       if (process.platform === 'linux') {
@@ -945,8 +958,10 @@ export function registerAllHandlers(win: BrowserWindow): void {
           release();
         }, 30_000);
       }
+      return { ok: true, reason: 'show_invoked' };
     } catch (err) {
-      console.warn('ShowNotification failed:', err);
+      logWarn('notification', 'show request failed', { err: errMessage(err) });
+      return { ok: false, reason: 'error', err: errMessage(err) };
     }
   });
 

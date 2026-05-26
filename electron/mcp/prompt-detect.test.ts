@@ -121,6 +121,29 @@ describe('chunkContainsAgentPrompt', () => {
     expect(chunkContainsAgentPrompt(`›${footer}`)).toBe(true);
   });
 
+  it('does not treat Codex working status as ready even when the input prompt is visible', () => {
+    const tail = [
+      '› Improve documentation in @filename',
+      'gpt-5.5 default · ~/repo/worktree',
+      'Working (18m 51s • esc to interrupt) • 1 background terminal running • /ps to view • /stop to close',
+    ].join('\n');
+    expect(chunkContainsAgentPrompt(tail)).toBe(false);
+  });
+
+  it('does not treat control-character damaged Codex working status as ready', () => {
+    const tail =
+      '› Improve documentation in @filename q qWorking q qorking q q q q q background terminal running q /stop to close';
+    expect(chunkContainsAgentPrompt(tail)).toBe(false);
+  });
+
+  it('returns true for Gemini CLI input prompt', () => {
+    expect(
+      chunkContainsAgentPrompt(
+        'workspace (/directory) branch sandbox /model quota\n > Type your message or @path/to/file',
+      ),
+    ).toBe(true);
+  });
+
   it('does not treat Codex startup screens as ready', () => {
     expect(
       chunkContainsAgentPrompt('Starting MCP servers (0/2): codex_apps, parallel-code\n›'),

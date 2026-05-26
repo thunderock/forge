@@ -80,8 +80,10 @@ then retry merge_task.
 any git operation. A dirty working tree will cause merge_task to fail.
 9. Before assigning a task, verify it is not already implemented. Read the relevant files rather \
 than assuming work is pending.
-10. Use send_prompt + wait_for_idle to give follow-up instructions to a running task. Do not resend \
-the full original assignment merely because startup output still shows a placeholder prompt.
+10. Use send_prompt + wait_for_idle to give follow-up instructions to a running task, but only call \
+wait_for_idle after send_prompt reports the prompt was sent. If send_prompt reports queued, poll \
+status/output and wait for the queued prompt to flush first. Do not resend the full original \
+assignment merely because startup output still shows a placeholder prompt.
 
 ---
 `;

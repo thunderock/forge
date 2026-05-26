@@ -1033,8 +1033,12 @@ interface MCPTaskCreatedEvent {
   skipPermissions?: boolean;
 }
 
+let activeMCPListenersCleanup: (() => void) | undefined;
+
 /** Call once during app initialization to listen for coordinator events. */
 export function initMCPListeners(): () => void {
+  activeMCPListenersCleanup?.();
+
   const cleanups: Array<() => void> = [];
 
   cleanups.push(
@@ -1053,8 +1057,8 @@ export function initMCPListeners(): () => void {
         gitIsolation: 'worktree',
         coordinatedBy: evt.coordinatorTaskId,
         controlledBy: 'coordinator',
-        // Use the same initialPrompt path as manually created tasks —
-        // PromptInput auto-delivers it with stability checks + quiescence.
+        // Coordinated initial assignments are delivered by the backend because
+        // background sub-task panels may never mount a PromptInput.
         initialPrompt: evt.prompt,
         mcpConfigPath: evt.mcpConfigPath,
         mcpLaunchArgs: evt.mcpLaunchArgs,
@@ -1244,6 +1248,7 @@ export function initMCPListeners(): () => void {
         landingReason?: string | null;
         landingSummary?: string | null;
         landedMetadata?: Task['landedMetadata'] | null;
+        initialPrompt?: string | null;
         coordinatedBy?: string | null;
         controlledBy?: 'coordinator' | 'human' | null;
         mcpConfigPath?: string | null;
@@ -1275,6 +1280,8 @@ export function initMCPListeners(): () => void {
           setStore('tasks', evt.taskId, 'landingSummary', evt.landingSummary ?? undefined);
         if (evt.landedMetadata !== undefined)
           setStore('tasks', evt.taskId, 'landedMetadata', evt.landedMetadata ?? undefined);
+        if (evt.initialPrompt !== undefined)
+          setStore('tasks', evt.taskId, 'initialPrompt', evt.initialPrompt ?? undefined);
         if (evt.coordinatedBy !== undefined)
           setStore('tasks', evt.taskId, 'coordinatedBy', evt.coordinatedBy ?? undefined);
         if (evt.controlledBy !== undefined)
@@ -1296,9 +1303,18 @@ export function initMCPListeners(): () => void {
     }),
   );
 
-  return () => {
+  let cleanedUp = false;
+  const cleanup = () => {
+    if (cleanedUp) return;
+    cleanedUp = true;
     for (const cleanup of cleanups) cleanup();
+    if (activeMCPListenersCleanup === cleanup) {
+      activeMCPListenersCleanup = undefined;
+    }
   };
+
+  activeMCPListenersCleanup = cleanup;
+  return cleanup;
 }
 
 export function markTaskMcpPending(taskId: string): void {
@@ -1430,6 +1446,7 @@ export function setTaskControl(taskId: string, who: 'coordinator' | 'human'): vo
   const task = store.tasks[taskId];
   if (!task) return;
   const prev = task?.controlledBy;
+  if (prev === who) return;
   setStore('tasks', taskId, 'controlledBy', who);
   // Coordinator tasks manage their own control state in the frontend only.
   // Sub-tasks need to notify the backend Coordinator so it can gate send_prompt.
@@ -1467,6 +1484,67 @@ export function setStepsContent(taskId: string, steps: unknown[] | null): void {
 
 export function setTaskLastInputAt(taskId: string): void {
   setStore('tasks', taskId, 'lastInputAt', new Date().toISOString());
+}
+
+const USER_ACTIVITY_HOLD_MS = 5_000;
+const activityReleaseTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+function shouldHoldTaskAutomation(taskId: string): boolean {
+  const task = store.tasks[taskId];
+  if (!task) return false;
+  const holdUntil = task.userActivityHoldUntil ?? 0;
+  return (
+    task.promptDraftActive === true || task.terminalInputPending === true || holdUntil > Date.now()
+  );
+}
+
+function scheduleTaskAutomationRelease(taskId: string): void {
+  const existing = activityReleaseTimers.get(taskId);
+  if (existing) {
+    clearTimeout(existing);
+    activityReleaseTimers.delete(taskId);
+  }
+
+  const task = store.tasks[taskId];
+  if (!task?.coordinatedBy) return;
+  if (task.promptDraftActive || task.terminalInputPending) return;
+
+  const delay = Math.max((task.userActivityHoldUntil ?? 0) - Date.now(), 0);
+  const timer = setTimeout(() => {
+    activityReleaseTimers.delete(taskId);
+    if (shouldHoldTaskAutomation(taskId)) {
+      scheduleTaskAutomationRelease(taskId);
+      return;
+    }
+    if (store.tasks[taskId]?.controlledBy === 'human') {
+      setTaskControl(taskId, 'coordinator');
+    }
+  }, delay);
+  activityReleaseTimers.set(taskId, timer);
+}
+
+export function markTaskUserActivity(taskId: string): void {
+  const task = store.tasks[taskId];
+  if (!task) return;
+  setStore('tasks', taskId, 'userActivityHoldUntil', Date.now() + USER_ACTIVITY_HOLD_MS);
+  if (task.coordinatedBy && task.controlledBy !== 'human') {
+    setTaskControl(taskId, 'human');
+  }
+  scheduleTaskAutomationRelease(taskId);
+}
+
+export function setTaskPromptDraftActive(taskId: string, active: boolean): void {
+  if (!store.tasks[taskId]) return;
+  setStore('tasks', taskId, 'promptDraftActive', active || undefined);
+  if (active) markTaskUserActivity(taskId);
+  else scheduleTaskAutomationRelease(taskId);
+}
+
+export function setTaskTerminalInputPending(taskId: string, pending: boolean): void {
+  if (!store.tasks[taskId]) return;
+  setStore('tasks', taskId, 'terminalInputPending', pending || undefined);
+  if (pending) markTaskUserActivity(taskId);
+  else scheduleTaskAutomationRelease(taskId);
 }
 
 /** Toggles steps tracking for a task and remembers the choice as the new default. */

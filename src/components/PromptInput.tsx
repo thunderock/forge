@@ -14,7 +14,7 @@ import {
   offAgentReady,
   normalizeCurrentFrame,
   looksLikeQuestion,
-  isTrustQuestionAutoHandled,
+  isAgentTrustQuestionAutoHandled,
   isAutoTrustSettling,
   isAgentAskingQuestion,
   isAgentIdle,
@@ -23,13 +23,24 @@ import {
   setTaskLastInputAt,
   isPanelFocused,
   setTaskControl,
+  markTaskUserActivity,
+  setTaskPromptDraftActive,
+  setTaskTerminalInputPending,
   showNotification,
 } from '../store/store';
-import { clearStagedNotification, setStagedNotificationUserEdited } from '../store/tasks';
+import { clearStagedNotification, setTaskTerminalInputPendingFromQuestion } from '../store/tasks';
 import { isLandedTaskState } from '../store/landing';
 import { processAutoFireTick } from './autofire-tick';
-import { shouldAckInitialPromptDelivery, shouldHandoffCoordinatorQuestion } from './prompt-control';
-import { isStartupBlockingAutoSend } from './prompt-autosend-readiness';
+import {
+  shouldAckInitialPromptDelivery,
+  shouldHandoffCoordinatorQuestion,
+  shouldRendererAutoSendInitialPrompt,
+} from './prompt-control';
+import {
+  isStartupBlockingAutoSend,
+  shouldAbortInitialPromptAfterTimeout,
+} from './prompt-autosend-readiness';
+import { hasUserPromptDraftText } from './prompt-draft';
 import type { StagedNotification } from '../store/types';
 import { debug, warn as logWarn } from '../lib/log';
 import { theme } from '../lib/theme';
@@ -87,8 +98,8 @@ const PROMPT_ECHO_HANDOFF_SUPPRESS_MS = 5_000;
 
 /** True when auto-send should be blocked by a question in the output.
  *  Trust-dialog questions are NOT blocking when auto-trust handles them. */
-const isQuestionBlockingAutoSend = (tail: string): boolean =>
-  looksLikeQuestion(tail) && !isTrustQuestionAutoHandled(tail);
+const isQuestionBlockingAutoSend = (agentId: string, tail: string): boolean =>
+  looksLikeQuestion(tail) && !isAgentTrustQuestionAutoHandled(agentId, tail);
 
 export function PromptInput(props: PromptInputProps) {
   const [text, setText] = createSignal('');
@@ -105,14 +116,14 @@ export function PromptInput(props: PromptInputProps) {
         controlledBy: cb,
         coordinatedBy: coordBy,
         taskId: props.taskId,
-        shouldBeDisabled: cb === 'coordinator',
+        shouldBeDisabled: false,
       });
       // Check actual DOM state after all render effects have run
       setTimeout(() => {
         if (textareaRef) {
           const domDisabled = textareaRef.disabled;
-          // Match the actual disabled expression: coordinator-controlled OR question active
-          const expected = cb === 'coordinator' || questionActive();
+          // Match the actual disabled expression: question dialogs still own terminal input.
+          const expected = questionActive();
           if (domDisabled !== expected) {
             logWarn('ctrl', 'textarea disabled mismatch — DOM vs expected', {
               domDisabled,
@@ -136,13 +147,24 @@ export function PromptInput(props: PromptInputProps) {
     cleanupAutoSend?.();
     cleanupAutoSend = undefined;
 
-    const ip = props.initialPrompt?.trim();
-    if (!ip) return;
+    const ip = props.initialPrompt?.trim() ?? '';
+    if (
+      !shouldRendererAutoSendInitialPrompt({
+        coordinatedBy: props.coordinatedBy,
+        initialPrompt: props.initialPrompt,
+      })
+    ) {
+      return;
+    }
 
+    const currentText = text().trim();
+    if (currentText && currentText !== ip) return;
     setText(ip);
+    setTaskPromptDraftActive(props.taskId, false);
     if (autoSentInitialPrompt() === ip) return;
 
     const agentId = props.agentId;
+    const coordinatedBy = props.coordinatedBy;
     const spawnedAt = Date.now();
     let quiescenceTimer: number | undefined;
     let pendingSendTimer: ReturnType<typeof setTimeout> | undefined;
@@ -199,7 +221,7 @@ export function PromptInput(props: PromptInputProps) {
     // so we re-register when a question guard blocks to keep the fast path alive.
     function onReady() {
       if (cancelled) return;
-      if (isQuestionBlockingAutoSend(getAgentOutputTail(agentId))) {
+      if (isQuestionBlockingAutoSend(agentId, getAgentOutputTail(agentId))) {
         onAgentReady(agentId, onReady);
         return;
       }
@@ -244,7 +266,7 @@ export function PromptInput(props: PromptInputProps) {
             onAgentReady(agentId, onReady);
             return;
           }
-          if (isQuestionBlockingAutoSend(tail)) {
+          if (isQuestionBlockingAutoSend(agentId, tail)) {
             onAgentReady(agentId, onReady);
             return;
           }
@@ -290,7 +312,19 @@ export function PromptInput(props: PromptInputProps) {
       }
       const elapsed = Date.now() - spawnedAt;
 
-      if (elapsed > AUTOSEND_MAX_WAIT_MS) {
+      // Background/focus-hidden terminals may not populate the renderer tail
+      // until the user switches to them. Coordinated sub-task assignments also
+      // must not be silently abandoned; the coordinator is waiting for this
+      // terminal call to start real work. Timeout is only an abort condition for
+      // non-coordinated prompts once output is visible; otherwise keep polling.
+      if (
+        shouldAbortInitialPromptAfterTimeout({
+          elapsedMs: elapsed,
+          maxWaitMs: AUTOSEND_MAX_WAIT_MS,
+          coordinatedBy,
+          tail: getAgentOutputTail(agentId),
+        })
+      ) {
         cleanup();
         return;
       }
@@ -321,7 +355,7 @@ export function PromptInput(props: PromptInputProps) {
       // Skip expensive normalization if raw tail hasn't changed.
       if (tail === lastRawTail) {
         if (stableSince > 0 && Date.now() - stableSince >= QUIESCENCE_THRESHOLD_MS) {
-          if (!isQuestionBlockingAutoSend(tail)) {
+          if (!isQuestionBlockingAutoSend(agentId, tail)) {
             trySend();
           } else {
             stableSince = Date.now();
@@ -352,7 +386,7 @@ export function PromptInput(props: PromptInputProps) {
       if (Date.now() - stableSince < QUIESCENCE_THRESHOLD_MS) return;
 
       // Output stable long enough — check it's not a question.
-      if (isQuestionBlockingAutoSend(tail)) {
+      if (isQuestionBlockingAutoSend(agentId, tail)) {
         stableSince = Date.now();
         return;
       }
@@ -365,15 +399,12 @@ export function PromptInput(props: PromptInputProps) {
     const pf = props.prefillPrompt?.trim();
     if (!pf) return;
     setText(pf);
+    setTaskPromptDraftActive(props.taskId, true);
     untrack(() => props.onPrefillConsumed?.());
   });
 
   // --- Staged coordinator notification auto-fire ---
   let autoFireInterval: number | undefined;
-  // Tracks text we populated from a staged notification so we can distinguish
-  // it from text the user actually typed when a replacement notification arrives.
-  let lastStagedText = '';
-
   function executeAutoFire(staged: NonNullable<typeof props.stagedNotification>) {
     if (autoFireInterval !== undefined) {
       clearInterval(autoFireInterval);
@@ -389,8 +420,8 @@ export function PromptInput(props: PromptInputProps) {
           batchId: staged.batchId,
         });
         clearStagedNotification(taskId);
-        lastStagedText = '';
-        setText('');
+        if (text().trim() === staged.text.trim()) setText('');
+        setTaskPromptDraftActive(taskId, false);
         logWarn('autofire', 'auto-fire succeeded', { taskId });
       } catch (e) {
         logWarn('autofire', 'auto-fire failed', { taskId, err: String(e) });
@@ -417,32 +448,13 @@ export function PromptInput(props: PromptInputProps) {
       return;
     }
 
-    // If the user has typed their own content (not from a previous staged
-    // notification), don't overwrite it — treat this notification as user-edited.
-    // If the textarea contains text we set from a previous notification that
-    // never fired, replace it with the new notification instead.
-    const currentText = untrack(() => text());
-    if (currentText.trim() && currentText !== lastStagedText) {
-      logWarn(
-        'autofire',
-        'textarea has user content on notification arrival — marking userEdited',
-        {
-          taskId: props.taskId,
-        },
-      );
-      setStagedNotificationUserEdited(props.taskId);
-      return;
-    }
-
     logWarn('autofire', 'notification staged — starting interval', {
       taskId: props.taskId,
       batchId: notification.batchId,
       autoFireAt: new Date(notification.autoFireAt).toISOString(),
       waitMs: notification.autoFireAt - Date.now(),
     });
-    lastStagedText = notification.text;
     autoFirePromptMissCount = 0;
-    setText(notification.text);
     let lastIntervalTail = '';
 
     // eslint-disable-next-line solid/reactivity -- intentional untracked reads in interval
@@ -472,7 +484,12 @@ export function PromptInput(props: PromptInputProps) {
         staged,
         now: Date.now(),
         controlledBy: untrack(() => store.tasks[props.taskId]?.controlledBy),
+        allowPromptlessGrace: props.coordinatorMode || props.controlledBy === 'coordinator',
         questionActive: untrack(() => questionActive()),
+        promptDraftActive: hasUserPromptDraft(staged),
+        terminalInputPending:
+          untrack(() => store.tasks[props.taskId]?.terminalInputPending) === true,
+        userActivityHoldUntil: untrack(() => store.tasks[props.taskId]?.userActivityHoldUntil),
         tail: currentTail,
         currentMissCount: autoFirePromptMissCount,
       });
@@ -484,7 +501,12 @@ export function PromptInput(props: PromptInputProps) {
         });
         return;
       }
-      if (tick.outcome === 'paused') {
+      if (
+        tick.outcome === 'paused' ||
+        tick.outcome === 'waiting-for-user-draft' ||
+        tick.outcome === 'waiting-for-terminal-input' ||
+        tick.outcome === 'waiting-for-user-activity'
+      ) {
         return;
       }
       if (tick.outcome === 'no-prompt') {
@@ -535,8 +557,8 @@ export function PromptInput(props: PromptInputProps) {
     }
   });
 
-  // When the user releases control, immediately attempt to fire any pending
-  // staged notification rather than waiting up to 1s for the next interval tick.
+  // When an internal activity lease returns to automation, immediately attempt
+  // to fire any pending staged notification rather than waiting up to 1s.
   createEffect(
     on(
       // eslint-disable-next-line solid/reactivity
@@ -549,7 +571,12 @@ export function PromptInput(props: PromptInputProps) {
             staged,
             now: Date.now(),
             controlledBy: cb,
+            allowPromptlessGrace: props.coordinatorMode || cb === 'coordinator',
             questionActive: untrack(() => questionActive()),
+            promptDraftActive: hasUserPromptDraft(staged),
+            terminalInputPending:
+              untrack(() => store.tasks[props.taskId]?.terminalInputPending) === true,
+            userActivityHoldUntil: untrack(() => store.tasks[props.taskId]?.userActivityHoldUntil),
             tail,
             currentMissCount: autoFirePromptMissCount,
           });
@@ -567,8 +594,14 @@ export function PromptInput(props: PromptInputProps) {
   const autoFireCountdownText = () => {
     const notification = props.stagedNotification;
     if (!notification || notification.userEdited) return null;
-    if (props.controlledBy === 'human') return 'Paused — release control to send';
     const now = props.nowMs ? props.nowMs() : Date.now();
+    if (hasUserPromptDraft(notification)) return 'Queued — waiting for your draft';
+    if (store.tasks[props.taskId]?.terminalInputPending) {
+      return 'Queued — waiting for terminal input';
+    }
+    if ((store.tasks[props.taskId]?.userActivityHoldUntil ?? 0) > now) {
+      return 'Queued — waiting for idle';
+    }
     const remaining = Math.ceil((notification.autoFireAt - now) / 1_000);
     return remaining > 0 ? `Auto-sending in ${remaining}s…` : 'Sending when coordinator is ready…';
   };
@@ -598,9 +631,9 @@ export function PromptInput(props: PromptInputProps) {
       ([active, controlledBy, taskName], prev) => {
         const prevActive = prev?.[0] ?? false;
         // Trigger only when the question becomes newly active (false→true).
-        // Do NOT re-take control when coordinator regains it while questionActive
-        // is still true — that fires when the user explicitly clicks Release Control
-        // but the tail buffer hasn't cleared yet, which immediately overrides them.
+        // Do not restart the handoff when the internal activity lease changes while questionActive
+        // is still true — activity lease changes can happen before the tail buffer
+        // has cleared, which would immediately override the user's terminal answer.
         const questionJustActivated = active && !prevActive;
         const tail = getAgentOutputTail(props.agentId);
         if (
@@ -611,20 +644,39 @@ export function PromptInput(props: PromptInputProps) {
             agentIdle: isAgentIdle(props.agentId),
             startupBlocking: isStartupBlockingAutoSend(tail),
             autoTrustSettling: isAutoTrustSettling(props.agentId),
+            autoTrustHandled: isAgentTrustQuestionAutoHandled(props.agentId, tail),
             recentPromptEcho: isRecentPromptEcho(tail),
           })
         ) {
-          setTaskControl(props.taskId, 'human');
+          markTaskUserActivity(props.taskId);
+          setTaskTerminalInputPendingFromQuestion(props.taskId);
+          setTaskTerminalInputPending(props.taskId, true);
           setTaskFocusedPanel(props.taskId, 'ai-terminal');
-          showNotification(
-            `${taskName} needs input. Answer in the terminal, then Release Control.`,
-          );
+          showNotification('Claude needs input. Answer in the terminal when ready.');
+        }
+        if (questionJustResolved) {
+          // Only clear if pending was set by the question handoff and not since
+          // overridden by actual terminal typing (which clears the question flag).
+          if (store.tasks[props.taskId]?.terminalInputPendingFromQuestion) {
+            setTaskTerminalInputPending(props.taskId, false);
+          }
         }
       },
     ),
   );
+  createEffect(() => {
+    const task = store.tasks[props.taskId];
+    if (!task?.coordinatedBy || task.controlledBy !== 'human') return;
+    if (task.promptDraftActive || task.terminalInputPending || questionActive()) return;
+    if ((task.userActivityHoldUntil ?? 0) > Date.now()) return;
+    setTaskControl(props.taskId, 'coordinator');
+  });
 
   let textareaRef: HTMLTextAreaElement | undefined;
+
+  function hasUserPromptDraft(staged = props.stagedNotification): boolean {
+    return hasUserPromptDraftText(text(), staged?.text);
+  }
 
   onMount(() => {
     props.handle?.({ getText: text, setText });
@@ -671,7 +723,6 @@ export function PromptInput(props: PromptInputProps) {
   async function handleSend(mode: 'manual' | 'auto' = 'manual') {
     if (sending()) return;
     if (isLandedTaskState(store.tasks[props.taskId]?.landingState)) return;
-    if (mode === 'manual' && props.controlledBy === 'coordinator') return;
     // Block sends while the agent is showing a question/dialog.
     // For auto-sends, use a fresh tail-buffer check instead of the reactive
     // signal — the signal may be stale (updated by throttled analysis) while
@@ -681,7 +732,7 @@ export function PromptInput(props: PromptInputProps) {
       if (isStartupBlockingAutoSend(tail)) {
         return;
       }
-      if (isQuestionBlockingAutoSend(tail)) {
+      if (isQuestionBlockingAutoSend(props.agentId, tail)) {
         return;
       }
       if (isAutoTrustSettling(props.agentId)) {
@@ -704,8 +755,10 @@ export function PromptInput(props: PromptInputProps) {
       if (mode === 'auto') return;
       fireAndForget(IPC.WriteToAgent, { agentId: props.agentId, data: '\r' });
       setTaskLastInputAt(props.taskId);
+      markTaskUserActivity(props.taskId);
       return;
     }
+    if (mode === 'manual') markTaskUserActivity(props.taskId);
 
     sendAbortController?.abort();
     sendAbortController = new AbortController();
@@ -730,6 +783,7 @@ export function PromptInput(props: PromptInputProps) {
 
       if (signal.aborted) return;
 
+      setTaskPromptDraftActive(props.taskId, false);
       if (initialPromptSnapshot && val === initialPromptSnapshot) {
         setAutoSentInitialPrompt(initialPromptSnapshot);
       }
@@ -746,7 +800,7 @@ export function PromptInput(props: PromptInputProps) {
         })
           .then(() => clearStagedNotification(ackTaskId))
           .catch(() => {});
-      } else if (staged?.userEdited && staged.notificationIds.length > 0) {
+      } else if (staged && staged.notificationIds.length > 0) {
         // User sent their own message while a coordinator notification was pending.
         // Reschedule the re-stage timer so the pending notifications reappear after
         // COORDINATOR_RESTAMP_DELAY_MS, independently of new sub-task completions.
@@ -755,7 +809,6 @@ export function PromptInput(props: PromptInputProps) {
         }).catch(() => {});
       }
       props.onSend?.(val);
-      lastStagedText = '';
       setText('');
     } catch (e) {
       console.error('Failed to send prompt:', e);
@@ -797,32 +850,23 @@ export function PromptInput(props: PromptInputProps) {
           }}
           rows={3}
           value={text()}
-          disabled={questionActive() || props.controlledBy === 'coordinator'}
+          disabled={questionActive()}
           onInput={(e) => {
-            if (props.controlledBy === 'coordinator') return;
             const val = e.currentTarget.value;
             setText(val);
-            const staged = props.stagedNotification;
-            if (staged && !staged.userEdited) {
-              setStagedNotificationUserEdited(props.taskId);
-            }
+            markTaskUserActivity(props.taskId);
+            setTaskPromptDraftActive(props.taskId, hasUserPromptDraft());
           }}
           onKeyDown={(e) => {
-            if (props.controlledBy === 'coordinator') {
-              e.preventDefault();
-              return;
-            }
             if (e.key === 'Enter' && !e.shiftKey) {
               e.preventDefault();
               handleSend();
             }
           }}
           placeholder={
-            props.controlledBy === 'coordinator'
-              ? 'Auto mode — click "Take Control" to type'
-              : questionActive()
-                ? 'Agent is waiting for input in terminal…'
-                : 'Send a prompt... (Enter to send, Shift+Enter for newline)'
+            questionActive()
+              ? 'Agent is waiting for input in terminal…'
+              : 'Send a prompt... (Enter to send, Shift+Enter for newline)'
           }
           style={{
             flex: '1',
@@ -841,13 +885,13 @@ export function PromptInput(props: PromptInputProps) {
             'font-family': "'JetBrains Mono', monospace",
             resize: 'none',
             outline: 'none',
-            opacity: questionActive() || props.controlledBy === 'coordinator' ? '0.5' : '1',
+            opacity: questionActive() ? '0.5' : '1',
           }}
         />
         <button
           class="prompt-send-btn"
           type="button"
-          disabled={!text().trim() || questionActive() || props.controlledBy === 'coordinator'}
+          disabled={!text().trim() || questionActive()}
           onClick={() => handleSend()}
           style={{
             position: 'absolute',
