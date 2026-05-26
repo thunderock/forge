@@ -27,8 +27,8 @@ export function getTerminalFontFamily(font: string): string {
   return `'${font.replace(/'/g, "\\'")}', monospace`;
 }
 
-/** Fonts loaded via Google Fonts — always available regardless of local install. */
-const WEB_FONTS: ReadonlySet<string> = new Set(['JetBrains Mono']);
+/** Fonts shipped with the app (via @fontsource) — always available regardless of local install. */
+const BUNDLED_FONTS: ReadonlySet<string> = new Set(['JetBrains Mono']);
 
 /**
  * Returns monospace fonts available on this system.
@@ -41,8 +41,8 @@ let systemFontsResult: string[] | null = null;
 export function getAvailableTerminalFonts(): string[] {
   // Return cached result synchronously if available
   if (systemFontsResult) return systemFontsResult;
-  // Return fallback (web fonts only) while async fetch is in progress
-  return [...WEB_FONTS];
+  // Return fallback (bundled fonts only) while async fetch is in progress
+  return [...BUNDLED_FONTS];
 }
 
 export async function fetchAvailableTerminalFonts(): Promise<string[]> {
@@ -60,8 +60,8 @@ async function loadSystemFonts(): Promise<string[]> {
       // fc-list unavailable or returned nothing — use canvas fallback
       systemFontsResult = detectFontsViaCanvas();
     } else {
-      // Merge web fonts (always available) with system fonts, deduplicated
-      const all = new Set<string>([...WEB_FONTS, ...systemFonts]);
+      // Merge bundled fonts (always available) with system fonts, deduplicated
+      const all = new Set<string>([...BUNDLED_FONTS, ...systemFonts]);
       systemFontsResult = [...all].sort((a, b) => a.localeCompare(b));
     }
   } catch {
@@ -87,7 +87,7 @@ function detectFontsViaCanvas(): string[] {
   });
 
   return TERMINAL_FONTS.filter((font) => {
-    if (WEB_FONTS.has(font)) return true;
+    if (BUNDLED_FONTS.has(font)) return true;
     return fallbacks.some((fb, i) => {
       ctx.font = `${fontSize} '${font}', ${fb}`;
       return ctx.measureText(testString).width !== baseWidths[i];

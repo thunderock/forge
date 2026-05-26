@@ -1,6 +1,5 @@
 /* Global visual system + look presets */
-
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Sora:wght@400;500;600;700&family=Space+Grotesk:wght@500;700&family=JetBrains+Mono:wght@400;500&display=swap');
+/* Fonts are bundled locally via @fontsource — see src/App.tsx for the imports. */
 
 :root {
   --font-ui: 'Sora', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
