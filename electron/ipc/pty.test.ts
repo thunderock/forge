@@ -352,6 +352,7 @@ describe('spawnAgent docker mode', () => {
       ['gemini', '.gemini'],
       ['opencode', '.config/opencode'],
       ['copilot', '.config/github-copilot'],
+      ['agy', '.gemini/antigravity-cli'],
     ])(
       '%s bind-mounts a user-owned host directory when shareDockerAgentAuth is enabled',
       (command, relDir) => {

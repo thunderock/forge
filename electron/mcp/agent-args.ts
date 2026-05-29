@@ -14,6 +14,10 @@ export function isCodexCommand(command: string): boolean {
   return command.split('/').pop()?.includes('codex') === true;
 }
 
+export function isAntigravityCommand(command: string): boolean {
+  return command.split('/').pop() === 'agy';
+}
+
 function tomlString(value: string): string {
   return JSON.stringify(value);
 }
@@ -40,6 +44,10 @@ export function buildMcpLaunchArgs(
 ): string[] {
   if (isCodexCommand(command)) {
     return ['--config', buildCodexMcpConfigOverride(config)];
+  }
+  // Antigravity (agy) has no `--mcp-config` flag; emit nothing so launch is not broken.
+  if (isAntigravityCommand(command)) {
+    return [];
   }
   return configPath ? ['--mcp-config', configPath] : [];
 }

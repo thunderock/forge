@@ -66,6 +66,17 @@ const DEFAULT_AGENTS: AgentDef[] = [
     // settle before sending, without being so long that the user notices the wait.
     prompt_ready_delay_ms: 1_000,
   },
+  {
+    id: 'antigravity',
+    name: 'Antigravity CLI',
+    command: 'agy',
+    args: [],
+    resume_args: ['-c'],
+    skip_permissions_args: ['--dangerously-skip-permissions'],
+    description: "Google's Antigravity CLI agent (successor to Gemini CLI)",
+    // Antigravity paints a TUI that needs a beat to settle before auto-send.
+    prompt_ready_delay_ms: 1_000,
+  },
 ];
 
 async function isCommandAvailable(command: string): Promise<boolean> {

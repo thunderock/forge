@@ -25,3 +25,6 @@ docs/
 /.ripgreprc
 /.zprofile
 /.zshrc
+
+# Local runtime state from memory/sidecar processes (not source)
+/data/

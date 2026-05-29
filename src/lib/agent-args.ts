@@ -5,8 +5,13 @@ function isCodexCommand(command: string): boolean {
   return command.split('/').pop()?.includes('codex') === true;
 }
 
+function isAntigravityCommand(command: string): boolean {
+  return command.split('/').pop() === 'agy';
+}
+
 function legacyMcpConfigArgs(command: string, mcpConfigPath: string | undefined): string[] {
-  if (!mcpConfigPath || isCodexCommand(command)) return [];
+  // Codex and Antigravity have no `--mcp-config` flag; passing it would break launch.
+  if (!mcpConfigPath || isCodexCommand(command) || isAntigravityCommand(command)) return [];
   return ['--mcp-config', mcpConfigPath];
 }
 

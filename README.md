@@ -115,9 +115,18 @@ When you're happy with the result, merge the branch back to main from the sideba
    - **macOS** — `.dmg` (universal)
    - **Linux** — `.AppImage` or `.deb`
 
-2. **Install at least one AI coding CLI:** [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex CLI](https://github.com/openai/codex), [Gemini CLI](https://github.com/google-gemini/gemini-cli), or [Copilot CLI](https://docs.github.com/en/copilot/concepts/agents/about-copilot-cli)
+2. **Install at least one AI coding CLI:** [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex CLI](https://github.com/openai/codex), [Gemini CLI](https://github.com/google-gemini/gemini-cli), [Antigravity CLI](https://antigravity.google/), or [Copilot CLI](https://docs.github.com/en/copilot/concepts/agents/about-copilot-cli)
 
 3. **Open Parallel Code**, point it at a git repo, and start dispatching tasks.
+
+<details>
+<summary><strong>Antigravity CLI: run natively, not in Docker isolation</strong></summary>
+
+Antigravity (`agy`) signs in interactively and caches credentials in your OS keyring (Keychain/libsecret). The keyring cannot be reached from inside a Linux container — it needs a secret-service daemon the agent container doesn't run — and `agy` has no API-key fallback, so **Docker-isolated Antigravity tasks cannot authenticate. Run Antigravity as a native (non-Docker) task.**
+
+The bundled image still ships the `agy` binary, and `~/.gemini/antigravity-cli` (settings/plugins) is shared when "Share agent auth" is enabled, so Docker support is forward-compatible if a file-based or API-key auth path appears later.
+
+</details>
 
 <details>
 <summary><strong>Build from source</strong></summary>

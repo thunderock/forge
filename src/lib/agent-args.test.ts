@@ -22,6 +22,16 @@ const claudeAgent = {
   skip_permissions_args: ['--dangerously-skip-permissions'],
 };
 
+const antigravityAgent = {
+  id: 'antigravity',
+  name: 'Antigravity CLI',
+  description: 'Antigravity agent',
+  command: 'agy',
+  args: [],
+  resume_args: ['-c'],
+  skip_permissions_args: ['--dangerously-skip-permissions'],
+};
+
 describe('buildTaskAgentArgs', () => {
   it('uses explicit MCP launch args when provided', () => {
     expect(
@@ -67,5 +77,31 @@ describe('buildTaskAgentArgs', () => {
         false,
       ),
     ).toEqual(['--mcp-config', '/tmp/mcp.json']);
+  });
+
+  it('does not fall back to --mcp-config for Antigravity', () => {
+    expect(
+      buildTaskAgentArgs(
+        antigravityAgent,
+        {
+          skipPermissions: false,
+          mcpConfigPath: '/tmp/mcp.json',
+        },
+        false,
+      ),
+    ).toEqual([]);
+  });
+
+  it('passes the resume flag for Antigravity without --mcp-config', () => {
+    expect(
+      buildTaskAgentArgs(
+        antigravityAgent,
+        {
+          skipPermissions: false,
+          mcpConfigPath: '/tmp/mcp.json',
+        },
+        true,
+      ),
+    ).toEqual(['-c']);
   });
 });

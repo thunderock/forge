@@ -52,6 +52,14 @@ RUN ln -sf "$(command -v fdfind)" /usr/local/bin/fd 2>/dev/null || true
 # AI agent CLIs — must be present so Docker-mode tasks can execute them
 RUN npm install -g @anthropic-ai/claude-code @openai/codex @google/gemini-cli opencode-ai
 
+# Antigravity CLI (agy) — distributed as a Go binary via the official installer
+# (not on npm). The installer's `--dir` flag drops the binary straight into a
+# system path on PATH, so the non-root `agent` user that runs containers resolves
+# it. A failed fetch makes the build step fail, surfacing the break at image build
+# time rather than at task launch.
+RUN curl -fsSL https://antigravity.google/cli/install.sh | bash -s -- --dir /usr/local/bin \
+    && agy --version
+
 # Default git config so commits work out of the box inside containers
 RUN git config --system init.defaultBranch main \
     && git config --system advice.detachedHead false

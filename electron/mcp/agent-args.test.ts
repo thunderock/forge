@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildCodexMcpConfigOverride, buildMcpLaunchArgs, isCodexCommand } from './agent-args.js';
+import {
+  buildCodexMcpConfigOverride,
+  buildMcpLaunchArgs,
+  isAntigravityCommand,
+  isCodexCommand,
+} from './agent-args.js';
 
 const config = {
   mcpServers: {
@@ -49,5 +54,15 @@ describe('MCP agent launch args', () => {
       '--mcp-config',
       '/tmp/config.json',
     ]);
+  });
+
+  it('detects antigravity commands by executable name', () => {
+    expect(isAntigravityCommand('agy')).toBe(true);
+    expect(isAntigravityCommand('/home/agent/.local/bin/agy')).toBe(true);
+    expect(isAntigravityCommand('claude')).toBe(false);
+  });
+
+  it('emits no --mcp-config for Antigravity', () => {
+    expect(buildMcpLaunchArgs('agy', '/tmp/config.json', config)).toEqual([]);
   });
 });
