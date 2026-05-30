@@ -83,7 +83,7 @@ vi.mock('./taskStatus', () => ({
 }));
 vi.mock('./completion', () => ({
   recordMergedLines: vi.fn(),
-  recordTaskCompleted: vi.fn(),
+  recordTaskMerged: vi.fn(),
 }));
 vi.mock('../lib/log', () => ({ warn: vi.fn() }));
 vi.mock('../lib/clean-task-name', () => ({ cleanTaskName: vi.fn() }));

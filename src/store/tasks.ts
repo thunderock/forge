@@ -15,7 +15,7 @@ import {
   isAgentIdle,
   rescheduleTaskStatusPolling,
 } from './taskStatus';
-import { recordMergedLines, recordTaskCompleted } from './completion';
+import { recordMergedLines, recordTaskMerged } from './completion';
 import { warn as logWarn } from '../lib/log';
 import { cleanTaskName } from '../lib/clean-task-name';
 import type {
@@ -501,8 +501,6 @@ const REMOVE_ANIMATION_MS = 300;
 const RESTORED_AGENT_SPAWN_STAGGER_MS = 1_000;
 
 function removeTaskFromStore(taskId: string, agentIds: string[]): void {
-  recordTaskCompleted();
-
   // Stop the plan file watcher (fs.FSWatcher + poll interval) on the backend.
   // This is the single convergence point for all task removal paths (close,
   // merge+cleanup, current-branch-mode close), so placing it here prevents leaks
@@ -600,6 +598,7 @@ export async function mergeTask(
   recordMergedLines(mergeResult.lines_added, mergeResult.lines_removed);
 
   if (cleanup) {
+    recordTaskMerged();
     await Promise.allSettled(
       [...agentIds, ...shellAgentIds].map((id) => invoke(IPC.KillAgent, { agentId: id })),
     );

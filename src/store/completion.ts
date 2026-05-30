@@ -2,7 +2,7 @@ import { produce } from 'solid-js/store';
 import { getLocalDateKey } from '../lib/date';
 import { store, setStore } from './core';
 
-export function recordTaskCompleted(): void {
+export function recordTaskMerged(): void {
   const today = getLocalDateKey();
   setStore(
     produce((s) => {
@@ -16,7 +16,7 @@ export function recordTaskCompleted(): void {
   );
 }
 
-export function getCompletedTasksTodayCount(): number {
+export function getMergedTasksTodayCount(): number {
   return store.completedTaskDate === getLocalDateKey() ? store.completedTaskCount : 0;
 }
 

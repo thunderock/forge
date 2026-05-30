@@ -1,7 +1,7 @@
 import { createMemo, createEffect, onCleanup, Show } from 'solid-js';
 import {
   store,
-  getCompletedTasksTodayCount,
+  getMergedTasksTodayCount,
   getMergedLineTotals,
   toggleHelpDialog,
   toggleArena,
@@ -14,7 +14,7 @@ import { sf } from '../lib/fontScale';
 import { alt, mod } from '../lib/platform';
 
 export function SidebarFooter() {
-  const completedTasksToday = createMemo(() => getCompletedTasksTodayCount());
+  const mergedTasksToday = createMemo(() => getMergedTasksTodayCount());
   const mergedLines = createMemo(() => getMergedLineTotals());
   const hasCoordinator = createMemo(() => hasAnyCoordinatorTask());
 
@@ -97,7 +97,7 @@ export function SidebarFooter() {
               color: theme.fgMuted,
             }}
           >
-            <span>Completed today</span>
+            <span>Merged today</span>
             <span
               style={{
                 color: theme.fg,
@@ -105,7 +105,7 @@ export function SidebarFooter() {
                 'font-variant-numeric': 'tabular-nums',
               }}
             >
-              {completedTasksToday()}
+              {mergedTasksToday()}
             </span>
           </div>
           <div
@@ -121,7 +121,7 @@ export function SidebarFooter() {
               color: theme.fgMuted,
             }}
           >
-            <span>Merged to main/master</span>
+            <span>Merged (total)</span>
             <span
               style={{
                 color: theme.fg,

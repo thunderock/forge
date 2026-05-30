@@ -174,7 +174,7 @@ export {
 export type { TaskAttentionState, TaskDotStatus } from './taskStatus';
 export { showNotification, clearNotification } from './notification';
 export { startPrChecksSubscription, getPrChecks, type PrChecksState } from './pr-checks';
-export { getCompletedTasksTodayCount, getMergedLineTotals } from './completion';
+export { getMergedTasksTodayCount, getMergedLineTotals } from './completion';
 export {
   createTerminal,
   closeTerminal,

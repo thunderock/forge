@@ -105,7 +105,7 @@ vi.mock('./taskStatus', () => ({
 }));
 vi.mock('./completion', () => ({
   recordMergedLines: vi.fn(),
-  recordTaskCompleted: vi.fn(),
+  recordTaskMerged: vi.fn(),
 }));
 vi.mock('../lib/log', () => ({ warn: vi.fn() }));
 vi.mock('../lib/clean-task-name', () => ({ cleanTaskName: vi.fn() }));
@@ -133,6 +133,7 @@ import {
   setTaskControl,
   collapseTask,
   closeTask,
+  mergeTask,
   sendPrompt,
   pasteDelayMs,
   markTaskUserActivity,
@@ -147,6 +148,7 @@ import {
   clearTaskLandingReview,
 } from './tasks';
 import { getCoordinatorChildren } from './sidebar-order';
+import { recordTaskMerged } from './completion';
 import { markAgentSpawned, rescheduleTaskStatusPolling } from './taskStatus';
 import { saveState } from './persistence';
 import { getProjectBranchPrefix, getProjectPath, isProjectMissing } from './projects';
@@ -984,6 +986,72 @@ describe('closeTask — IPC cleanup ordering', () => {
     expect(mockTasks['child-1'].mcpStartupError).toBeUndefined();
     expect(mockTasks['child-1'].signalDoneReceived).toBe(true);
     expect(mockTasks['child-1'].needsReview).toBe(true);
+  });
+});
+
+describe('recordTaskMerged counts merges with cleanup, not closures', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockSetStore.mockImplementation((...args: unknown[]) => applySetStore(...args));
+    mockInvoke.mockResolvedValue(undefined);
+    vi.mocked(getProjectPath).mockReturnValue('/repo');
+  });
+
+  it('closing an unmerged task does NOT increment the counter', async () => {
+    mockTasks['task-1'] = {
+      agentIds: [],
+      shellAgentIds: [],
+      gitIsolation: 'direct',
+      projectId: 'proj-1',
+    };
+
+    await closeTask('task-1');
+
+    expect(recordTaskMerged).not.toHaveBeenCalled();
+  });
+
+  it('merging with cleanup increments the counter once', async () => {
+    mockTasks['task-1'] = {
+      agentIds: [],
+      shellAgentIds: [],
+      gitIsolation: 'worktree',
+      projectId: 'proj-1',
+      branchName: 'task/task-1',
+      worktreePath: '/repo/.worktrees/task-1',
+      baseBranch: 'main',
+    };
+    mockInvoke.mockImplementation((channel: string) => {
+      if (channel === IPC.MergeTask) {
+        return Promise.resolve({ lines_added: 10, lines_removed: 2 });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    await mergeTask('task-1', { cleanup: true });
+
+    expect(recordTaskMerged).toHaveBeenCalledTimes(1);
+  });
+
+  it('merging without cleanup does NOT increment the counter', async () => {
+    mockTasks['task-1'] = {
+      agentIds: [],
+      shellAgentIds: [],
+      gitIsolation: 'worktree',
+      projectId: 'proj-1',
+      branchName: 'task/task-1',
+      worktreePath: '/repo/.worktrees/task-1',
+      baseBranch: 'main',
+    };
+    mockInvoke.mockImplementation((channel: string) => {
+      if (channel === IPC.MergeTask) {
+        return Promise.resolve({ lines_added: 10, lines_removed: 2 });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    await mergeTask('task-1', { cleanup: false });
+
+    expect(recordTaskMerged).not.toHaveBeenCalled();
   });
 });
 
