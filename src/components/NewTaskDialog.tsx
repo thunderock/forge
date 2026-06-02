@@ -1,4 +1,12 @@
-import { createSignal, createEffect, createMemo, createUniqueId, Show, onCleanup } from 'solid-js';
+import {
+  createSignal,
+  createEffect,
+  createMemo,
+  createUniqueId,
+  Show,
+  onCleanup,
+  on,
+} from 'solid-js';
 import { Dialog } from './Dialog';
 import { errMessage } from '../lib/log';
 import { invoke } from '../lib/ipc';
@@ -99,6 +107,7 @@ export function NewTaskDialog(props: NewTaskDialogProps) {
   const branchInputId = createUniqueId();
   let formRef!: HTMLFormElement;
   let buildOutputRef!: HTMLPreElement;
+  let scrollContainerRef!: HTMLDivElement;
 
   const focusableSelector =
     'textarea:not(:disabled), input:not(:disabled), select:not(:disabled), button:not(:disabled), [tabindex]:not([tabindex="-1"])';
@@ -422,6 +431,25 @@ export function NewTaskDialog(props: NewTaskDialogProps) {
     }
   });
 
+  // When the user enables coordinator mode, scroll the form to the bottom so
+  // the newly-revealed options (max tasks, propagate, symlinks) are visible.
+  // defer:true skips the initial run so we only scroll on user-initiated toggles.
+  createEffect(
+    on(
+      coordinatorMode,
+      (enabled) => {
+        if (enabled) {
+          queueMicrotask(() => {
+            if (scrollContainerRef) {
+              scrollContainerRef.scrollTop = scrollContainerRef.scrollHeight;
+            }
+          });
+        }
+      },
+      { defer: true },
+    ),
+  );
+
   async function handleBuildImage() {
     setDockerBuilding(true);
     setDockerBuildOutput('');
@@ -642,6 +670,7 @@ export function NewTaskDialog(props: NewTaskDialogProps) {
         }}
       >
         <div
+          ref={scrollContainerRef}
           style={{
             'overflow-y': 'auto',
             'min-height': '0',
