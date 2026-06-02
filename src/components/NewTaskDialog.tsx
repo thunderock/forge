@@ -44,6 +44,7 @@ import { BranchPrefixField } from './BranchPrefixField';
 import { BranchCombobox } from './BranchCombobox';
 import { ProjectSelect } from './ProjectSelect';
 import { SymlinkDirPicker } from './SymlinkDirPicker';
+import { scrollCoordinatorIntoView } from './scrollCoordinatorIntoView';
 import type { AgentDef } from '../ipc/types';
 import { DEFAULT_DOCKER_IMAGE, PROJECT_DOCKERFILE_RELATIVE_PATH } from '../lib/docker';
 import {
@@ -434,17 +435,12 @@ export function NewTaskDialog(props: NewTaskDialogProps) {
   // When the user enables coordinator mode, scroll the form to the bottom so
   // the newly-revealed options (max tasks, propagate, symlinks) are visible.
   // defer:true skips the initial run so we only scroll on user-initiated toggles.
+  // queueMicrotask waits for Solid to insert the <Show> block before measuring scrollHeight.
   createEffect(
     on(
       coordinatorMode,
       (enabled) => {
-        if (enabled) {
-          queueMicrotask(() => {
-            if (scrollContainerRef) {
-              scrollContainerRef.scrollTop = scrollContainerRef.scrollHeight;
-            }
-          });
-        }
+        queueMicrotask(() => scrollCoordinatorIntoView(enabled, scrollContainerRef));
       },
       { defer: true },
     ),
