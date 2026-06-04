@@ -13,17 +13,24 @@ reading through raw terminal scrollback.
 Steps tracking SHALL be opt-in on a per-task basis, with a persistent app-level
 default that the new-task dialog uses to pre-fill the checkbox.
 
-#### Scenario: New task dialog reflects the last-used default
+#### Scenario: New task dialog reflects the persistent default
 
 - **WHEN** the user opens the new-task dialog
 - **THEN** the "Steps tracking" checkbox is pre-checked if and only if the
   persisted `defaultStepsEnabled` app-level flag is true
 
-#### Scenario: Default updates when user toggles the checkbox
+#### Scenario: Settings toggle updates the default
 
-- **WHEN** the user creates a task with the checkbox in the opposite state
+- **WHEN** the user enables or disables "Steps tracking" in Settings → General → New Task Defaults
 - **THEN** the persisted `defaultStepsEnabled` app-level flag is updated to match
 - **AND** the next new-task dialog uses that value as the default
+
+#### Scenario: Task creation does not update the default
+
+- **WHEN** the user creates a task with the "Steps tracking" checkbox in a
+  different state than `defaultStepsEnabled`
+- **THEN** the persisted `defaultStepsEnabled` app-level flag is NOT changed
+- **AND** the per-task `stepsEnabled` flag reflects the checkbox state at creation time
 
 #### Scenario: `stepsEnabled` is per-task and persisted
 
