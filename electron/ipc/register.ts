@@ -219,6 +219,32 @@ function validateRelativePath(p: unknown, label: string): void {
   if (p.includes('..')) throw new Error(`${label} must not contain ".."`);
 }
 
+export function validateExternalHttpUrl(rawUrl: unknown): string {
+  assertString(rawUrl, 'url');
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    throw new Error('url must be a valid URL');
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error('url must use http or https');
+  }
+  return parsed.href;
+}
+
+export async function openExternalHttpUrl(
+  rawUrl: unknown,
+  openExternal: (url: string) => Promise<void> = shell.openExternal,
+): Promise<void> {
+  const url = validateExternalHttpUrl(rawUrl);
+  try {
+    await openExternal(url);
+  } catch {
+    throw new Error('Failed to open external URL');
+  }
+}
+
 const validateBranchName = sharedValidateBranchName;
 
 /** Reject commit hashes that are not valid hex strings. */
@@ -1117,6 +1143,10 @@ export function registerAllHandlers(win: BrowserWindow): void {
     validatePath(args.worktreePath, 'worktreePath');
     validateRelativePath(args.filePath, 'filePath');
     return shell.openPath(path.join(args.worktreePath, args.filePath));
+  });
+
+  ipcMain.handle(IPC.ShellOpenExternal, async (_e, args) => {
+    await openExternalHttpUrl(args.url);
   });
 
   ipcMain.handle(IPC.ShellOpenInEditor, (_e, args) => {

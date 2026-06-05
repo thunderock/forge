@@ -34,6 +34,7 @@ const NEVER_SAFE: ReadonlySet<string> = new Set<string>([
   IPC.ShellOpenInEditor,
   IPC.ShellOpenFile,
   IPC.ShellReveal,
+  IPC.ShellOpenExternal,
   IPC.DialogOpen,
   IPC.OpenPath,
   IPC.ReadFileText,

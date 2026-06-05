@@ -84,6 +84,7 @@ export enum IPC {
   ShellReveal = '__shell_reveal',
   ShellOpenFile = '__shell_open_file',
   ShellOpenInEditor = '__shell_open_in_editor',
+  ShellOpenExternal = '__shell_open_external',
 
   // Arena
   SaveArenaData = 'save_arena_data',

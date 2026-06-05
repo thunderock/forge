@@ -31,6 +31,7 @@ import {
 import { dataTransferToShellArgs, escapePath } from '../lib/terminalDrop';
 import { cleanCopiedTerminalText } from '../lib/copy-text';
 import { hasTerminalUserActivity, nextTerminalInputPending } from '../lib/terminalInputPending';
+import { createTerminalHttpLinkHandler } from '../lib/terminalLinks';
 import type { PtyOutput } from '../ipc/types';
 
 let windowUnloading = false;
@@ -90,6 +91,13 @@ interface TerminalViewProps {
 // expensive full-chunk decoding during large terminal bursts.
 const STATUS_ANALYSIS_MAX_BYTES = 8 * 1024;
 
+const openTerminalHttpLinkWithModifier = createTerminalHttpLinkHandler({
+  isMac,
+  requireModifier: true,
+  openExternal: (url) => invoke(IPC.ShellOpenExternal, { url }),
+  onOpenError: () => logWarn('terminal.link', 'Failed to open external URL'),
+});
+
 /** Terminal-layer bindings — filtered from resolved bindings.
  *  Called in the key handler (hot path); resolveBindings walks the full
  *  defaults list on each call, which is fine at human typing speed. */
@@ -137,24 +145,15 @@ export function TerminalView(props: TerminalViewProps) {
       allowProposedApi: true,
       scrollback: TERMINAL_SCROLLBACK_LINES,
       disableStdin: taskPtyDetached(),
+      linkHandler: {
+        activate: openTerminalHttpLinkWithModifier,
+        allowNonHttpProtocols: false,
+      },
     });
 
     fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
-    term.loadAddon(
-      new WebLinksAddon((event, uri) => {
-        // Require Cmd+click (Mac) or Ctrl+click (Linux) to open links
-        if (!(isMac ? event.metaKey : event.ctrlKey)) return;
-        try {
-          const parsed = new URL(uri);
-          if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
-            window.open(uri, '_blank');
-          }
-        } catch {
-          // Invalid URL, ignore
-        }
-      }),
-    );
+    term.loadAddon(new WebLinksAddon(openTerminalHttpLinkWithModifier));
 
     term.open(containerRef);
 

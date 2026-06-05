@@ -2,6 +2,7 @@ import { onMount, onCleanup, createSignal, Show } from 'solid-js';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { TERMINAL_SCROLLBACK_LINES, base64ToUint8Array } from '../lib/terminalConstants';
+import { createTerminalHttpLinkHandler } from '../lib/terminalLinks';
 import { subscribeAgent, unsubscribeAgent, onOutput, onScrollback, agents, status } from './ws';
 
 interface AgentDetailProps {
@@ -9,6 +10,13 @@ interface AgentDetailProps {
   taskName: string;
   onBack: () => void;
 }
+
+const openRemoteHttpLink = createTerminalHttpLinkHandler({
+  isMac: false,
+  openExternal: (url) => {
+    window.open(url, '_blank', 'noopener,noreferrer');
+  },
+});
 
 export function AgentDetail(props: AgentDetailProps) {
   let termContainer: HTMLDivElement | undefined;
@@ -41,6 +49,10 @@ export function AgentDetail(props: AgentDetailProps) {
       cursorBlink: false,
       disableStdin: true,
       convertEol: false,
+      linkHandler: {
+        activate: openRemoteHttpLink,
+        allowNonHttpProtocols: false,
+      },
     });
 
     fitAddon = new FitAddon();
