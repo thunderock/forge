@@ -19,11 +19,14 @@ jobs:
 
       - run: npm ci
 
-      - name: Typecheck
-        run: npm run typecheck
+      - name: Check (compile + typecheck + lint + format)
+        run: npm run check
 
-      - name: Lint
-        run: npm run lint
+      - name: Lint (architecture)
+        run: npm run lint:arch
 
-      - name: Format check
-        run: npm run format:check
+      - name: Lint (dead code)
+        run: npm run lint:dead
+
+      - name: Test
+        run: npm test
