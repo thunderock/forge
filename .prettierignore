@@ -6,7 +6,7 @@ node_modules/
 .worktrees/
 .claude/
 .remember/
-.parallel-code/
+.forge/
 .enzyme/
 .omc/
 .planning/

@@ -44,11 +44,11 @@ function runGit(cwd: string, args: string[]): void {
 }
 
 function createRepo(): string {
-  const repo = mkdtempSync(join(tmpdir(), 'parallel-code-real-agent-repo-'));
+  const repo = mkdtempSync(join(tmpdir(), 'forge-real-agent-repo-'));
   runGit(repo, ['init']);
   runGit(repo, ['checkout', '-b', 'main']);
-  runGit(repo, ['config', 'user.email', 'parallel-code-test@example.com']);
-  runGit(repo, ['config', 'user.name', 'Parallel Code Test']);
+  runGit(repo, ['config', 'user.email', 'forge-test@example.com']);
+  runGit(repo, ['config', 'user.name', 'Forge Test']);
   writeFileSync(join(repo, 'README.md'), '# real agent smoke\n');
   runGit(repo, ['add', 'README.md']);
   runGit(repo, ['commit', '-m', 'initial']);
@@ -161,13 +161,13 @@ describeRealAgents('Coordinator real agent startup smoke', () => {
       const coordinator = new Coordinator();
       const rendererEvents: RendererEvent[] = [];
       let taskId: string | undefined;
-      const token = `PARALLEL_CODE_REAL_AGENT_SMOKE_${name.toUpperCase()}`;
+      const token = `FORGE_REAL_AGENT_SMOKE_${name.toUpperCase()}`;
 
       // Isolate spawned CLIs from host dotfiles/credentials unless explicitly testing
       // authenticated local agent profiles.
       const tempHome = RUN_REAL_AGENT_HOST_HOME
         ? undefined
-        : mkdtempSync(join(tmpdir(), 'parallel-code-test-home-'));
+        : mkdtempSync(join(tmpdir(), 'forge-test-home-'));
       const origHome = process.env.HOME;
       if (tempHome) {
         process.env.HOME = tempHome;
@@ -185,7 +185,7 @@ describeRealAgents('Coordinator real agent startup smoke', () => {
         const task = await coordinator.createTask({
           name: `${name} real startup smoke`,
           prompt: [
-            'This is a Parallel Code startup delivery smoke test.',
+            'This is a Forge startup delivery smoke test.',
             'Do not edit files, run commands, commit, or call tools.',
             `Reply with exactly this token and no extra text: ${token}`,
           ].join(' '),

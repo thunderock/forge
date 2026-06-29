@@ -1,4 +1,4 @@
-const TOKEN_KEY = 'parallel-code-token';
+const TOKEN_KEY = 'forge-token';
 
 /** Extract token from URL query param and persist to localStorage. */
 export function initAuth(): string | null {

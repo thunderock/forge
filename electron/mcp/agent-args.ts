@@ -1,12 +1,12 @@
-interface ParallelCodeMcpServerConfig {
+interface ForgeMcpServerConfig {
   command: string;
   args: string[];
   env: Record<string, string>;
 }
 
-export interface ParallelCodeMcpConfig {
+export interface ForgeMcpConfig {
   mcpServers: {
-    'parallel-code': ParallelCodeMcpServerConfig;
+    forge: ForgeMcpServerConfig;
   };
 }
 
@@ -36,15 +36,15 @@ function tomlStringMap(values: Record<string, string>): string {
     .join(', ')} }`;
 }
 
-export function buildCodexMcpConfigOverride(config: ParallelCodeMcpConfig): string {
-  const server = config.mcpServers['parallel-code'];
-  return `mcp_servers.parallel-code={ command = ${tomlString(server.command)}, args = ${tomlStringArray(server.args)}, env = ${tomlStringMap(server.env)} }`;
+export function buildCodexMcpConfigOverride(config: ForgeMcpConfig): string {
+  const server = config.mcpServers['forge'];
+  return `mcp_servers.forge={ command = ${tomlString(server.command)}, args = ${tomlStringArray(server.args)}, env = ${tomlStringMap(server.env)} }`;
 }
 
 export function buildMcpLaunchArgs(
   command: string,
   configPath: string | undefined,
-  config: ParallelCodeMcpConfig,
+  config: ForgeMcpConfig,
 ): string[] {
   if (isCodexCommand(command)) {
     return ['--config', buildCodexMcpConfigOverride(config)];

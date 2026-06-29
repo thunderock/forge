@@ -124,8 +124,8 @@ export async function buildNormalizedPreambleFileDiff(
   if (normalizedContent === baseContent) return '';
 
   const id = randomUUID();
-  const tmpBase = join(os.tmpdir(), `parallel-code-base-${id}`);
-  const tmpNorm = join(os.tmpdir(), `parallel-code-norm-${id}`);
+  const tmpBase = join(os.tmpdir(), `forge-base-${id}`);
+  const tmpNorm = join(os.tmpdir(), `forge-norm-${id}`);
   try {
     writeFileSync(tmpBase, baseContent);
     writeFileSync(tmpNorm, normalizedContent);

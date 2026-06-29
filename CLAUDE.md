@@ -1,4 +1,4 @@
-# Parallel Code
+# Forge
 
 Electron desktop app — SolidJS frontend, Node.js backend. Published for **macOS and Linux only** (no Windows).
 

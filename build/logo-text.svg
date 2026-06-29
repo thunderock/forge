@@ -10,7 +10,7 @@
     <path d="M49 32 H32 V48 H49"/>
   </g>
 
-  <!-- "Parallel Code" in JetBrains Mono SemiBold (paths from font glyphs) -->
+  <!-- "Forge" in JetBrains Mono SemiBold (paths from font glyphs) -->
   <g fill="#2ec8ff" transform="translate(88, 55)">
     <!-- P -->
     <path transform="translate(0.0,0) scale(0.034,-0.034)" d="M84 0V730H323Q394 730 446.5 703.0Q499 676 527.5 626.5Q556 577 556 510Q556 443 527.0 393.5Q498 344 446.0 317.0Q394 290 323 290H192V0ZM192 386H323Q379 386 412.5 420.0Q446 454 446 510Q446 566 412.5 600.0Q379 634 323 634H192Z"/>

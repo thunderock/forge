@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="build/logo-text-squared.svg" alt="Parallel Code" height="76">
+  <img src="build/logo-text-squared.svg" alt="Forge" height="76">
 </p>
 
 <p align="center">
@@ -22,7 +22,7 @@
   <img src="https://img.shields.io/badge/SolidJS-2C4F7C?logo=solid&logoColor=white" alt="SolidJS">
   <img src="https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white" alt="TypeScript">
   <img src="https://img.shields.io/badge/Platform-macOS%20%7C%20Linux-lightgrey" alt="macOS | Linux">
-  <img src="https://img.shields.io/github/license/johannesjo/parallel-code" alt="License">
+  <img src="https://img.shields.io/github/license/johannesjo/forge" alt="License">
 </p>
 
 <p align="center">
@@ -32,7 +32,7 @@
 </p>
 
 <p align="center">
-  <img src="screens/longer-video.gif" alt="Parallel Code demo" width="800">
+  <img src="screens/longer-video.gif" alt="Forge demo" width="800">
 </p>
 
 ## Screenshots
@@ -43,7 +43,7 @@
 | **Diff review with inline comments**                  | **AI Arena — race agents head-to-head**       |
 | ![Diff review](screens/diff-dialog-code-comments.png) | ![AI Arena](screens/ai-arena-mode.png)        |
 
-## Why Parallel Code?
+## Why Forge?
 
 - **Use the AI coding tools you already trust** — [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex CLI](https://github.com/openai/codex), [Gemini CLI](https://github.com/google-gemini/gemini-cli), and [Copilot CLI](https://docs.github.com/en/copilot/concepts/agents/about-copilot-cli) — all from one interface.
 - **Free and open source** — no extra subscription required. MIT licensed.
@@ -67,7 +67,7 @@
 
 ## How it works
 
-When you create a task, Parallel Code:
+When you create a task, Forge:
 
 1. Creates a new git branch from your main branch
 2. Sets up a [git worktree](https://git-scm.com/docs/git-worktree) so the agent works in a separate directory
@@ -87,8 +87,8 @@ When you're happy with the result, merge the branch back to main from the sideba
 - **PR CI status watcher** — desktop notification when GitHub checks settle
 - Shell terminals per task, scoped to the worktree
 - **Direct mode** for working on the main branch without isolation, plus support for **folders without a git repo**
-- **Existing worktree import** — bring already-created worktrees into Parallel Code
-- **Sandboxing with project-specific Dockerfiles** — drop a `.parallel-code/Dockerfile` into the project and tasks run inside it
+- **Existing worktree import** — bring already-created worktrees into Forge
+- **Sandboxing with project-specific Dockerfiles** — drop a `.forge/Dockerfile` into the project and tasks run inside it
 - **Coverage radar** — per-file test-coverage badges in the Changed Files panel
 - **Configurable keyboard shortcuts** with per-agent presets
 - 10 themes — Islands Dark, Minimal, Graphite, Midnight, Classic, Indigo, Ember, Glacier, Zenburnesque, Workbench
@@ -111,13 +111,13 @@ When you're happy with the result, merge the branch back to main from the sideba
 
 ## Getting Started
 
-1. **Download** the latest release for your platform from the [releases page](https://github.com/johannesjo/parallel-code/releases/latest):
+1. **Download** the latest release for your platform from the [releases page](https://github.com/johannesjo/forge/releases/latest):
    - **macOS** — `.dmg` (universal)
    - **Linux** — `.AppImage` or `.deb`
 
 2. **Install at least one AI coding CLI:** [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex CLI](https://github.com/openai/codex), [Gemini CLI](https://github.com/google-gemini/gemini-cli), [Antigravity CLI](https://antigravity.google/), or [Copilot CLI](https://docs.github.com/en/copilot/concepts/agents/about-copilot-cli)
 
-3. **Open Parallel Code**, point it at a git repo, and start dispatching tasks.
+3. **Open Forge**, point it at a git repo, and start dispatching tasks.
 
 <details>
 <summary><strong>Antigravity CLI: run natively, not in Docker isolation</strong></summary>
@@ -132,8 +132,8 @@ The bundled image still ships the `agy` binary, and `~/.gemini/antigravity-cli` 
 <summary><strong>Build from source</strong></summary>
 
 ```sh
-git clone https://github.com/johannesjo/parallel-code.git
-cd parallel-code
+git clone https://github.com/johannesjo/forge.git
+cd forge
 npm install
 npm run dev
 ```
@@ -176,7 +176,7 @@ Requires [Node.js](https://nodejs.org/) v18+.
 
 ---
 
-If Parallel Code saves you time, consider giving it a [star on GitHub](https://github.com/johannesjo/parallel-code). It helps others find the project.
+If Forge saves you time, consider giving it a [star on GitHub](https://github.com/johannesjo/forge). It helps others find the project.
 
 ## License
 

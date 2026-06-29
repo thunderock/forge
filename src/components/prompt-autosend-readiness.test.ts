@@ -13,22 +13,22 @@ describe('isStartupBlockingAutoSend', () => {
   it('blocks while Codex is starting MCP servers', () => {
     expect(
       isStartupBlockingAutoSend(
-        'Starting MCP servers (0/2): codex_apps, parallel-code\n› Explain this codebase',
+        'Starting MCP servers (0/2): codex_apps, forge\n› Explain this codebase',
       ),
     ).toBe(true);
   });
 
   it('blocks while Codex is booting a single MCP server', () => {
-    expect(isStartupBlockingAutoSend('Booting MCP server: parallel-code\n›')).toBe(true);
+    expect(isStartupBlockingAutoSend('Booting MCP server: forge\n›')).toBe(true);
   });
 
   it('ignores stale startup text before the latest screen clear', () => {
-    const tail = 'Starting MCP servers (0/2): parallel-code\x1b[2J\x1b[H›';
+    const tail = 'Starting MCP servers (0/2): forge\x1b[2J\x1b[H›';
     expect(isStartupBlockingAutoSend(tail)).toBe(false);
   });
 
   it('blocks while Codex is booting multiple MCP servers (plural form)', () => {
-    expect(isStartupBlockingAutoSend('Booting MCP servers: parallel-code\n›')).toBe(true);
+    expect(isStartupBlockingAutoSend('Booting MCP servers: forge\n›')).toBe(true);
   });
 
   it('blocks during mid-redraw: screen-clear issued but new frame not yet drawn', () => {

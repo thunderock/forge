@@ -37,6 +37,6 @@ describe('inferDockerSource', () => {
 
   it('returns "custom" for non-default, non-project images', () => {
     expect(inferDockerSource('my-org/my-agent:v2')).toBe('custom');
-    expect(inferDockerSource('parallel-code-agent:nightly')).toBe('custom');
+    expect(inferDockerSource('forge-agent:nightly')).toBe('custom');
   });
 });

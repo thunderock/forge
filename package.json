@@ -1,5 +1,5 @@
 {
-  "name": "parallel-code",
+  "name": "forge",
   "version": "1.11.0",
   "description": "",
   "author": {
@@ -97,8 +97,8 @@
     "*.{js,cjs,json,md,html,css}": "prettier --write"
   },
   "build": {
-    "appId": "com.parallel-code.app",
-    "productName": "Parallel Code",
+    "appId": "com.forge.app",
+    "productName": "Forge",
     "directories": {
       "buildResources": "build",
       "output": "release"
@@ -107,7 +107,7 @@
       {
         "provider": "github",
         "owner": "johannesjo",
-        "repo": "parallel-code"
+        "repo": "forge"
       }
     ],
     "files": [
@@ -138,7 +138,7 @@
       "category": "Development",
       "desktop": {
         "entry": {
-          "StartupWMClass": "parallel-code",
+          "StartupWMClass": "forge",
           "StartupNotify": "true"
         }
       }
@@ -151,7 +151,7 @@
       "category": "public.app-category.developer-tools",
       "hardenedRuntime": true,
       "extendInfo": {
-        "NSMicrophoneUsageDescription": "Parallel Code needs microphone access for voice input in terminal sessions."
+        "NSMicrophoneUsageDescription": "Forge needs microphone access for voice input in terminal sessions."
       },
       "gatekeeperAssess": false,
       "notarize": true,

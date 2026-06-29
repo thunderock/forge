@@ -1,6 +1,6 @@
-export const SUB_TASK_PREAMBLE = `[SUB-TASK MODE] You are a coordinated sub-task inside Parallel Code. A coordinator agent dispatched you to complete specific work.
+export const SUB_TASK_PREAMBLE = `[SUB-TASK MODE] You are a coordinated sub-task inside Forge. A coordinator agent dispatched you to complete specific work.
 
-You have two sub-task MCP tools available via the parallel-code server:
+You have two sub-task MCP tools available via the forge server:
 
 - land_self — Happy-path finish line. Call this after committing your work and passing verification. The backend will merge your branch into the coordinator branch and clean up your task.
 - signal_done — Legacy/manual-review finish line. Use this only if the coordinator explicitly asks to review and land your branch manually.

@@ -58,7 +58,7 @@ describe('ensureSymlinkExcludes', () => {
 
     expect(mockAppendFileSync).toHaveBeenCalledOnce();
     const [, appended] = mockAppendFileSync.mock.calls[0] as [string, string];
-    expect(appended).toContain('# parallel-code: worktree symlinks');
+    expect(appended).toContain('# forge: worktree symlinks');
     expect(appended).toContain('/node_modules');
   });
 
@@ -108,12 +108,12 @@ describe('ensureSymlinkExcludes', () => {
 
   it('appends without repeating the header when it is already present', () => {
     mockExecFileSync.mockReturnValueOnce('.git\n');
-    mockReadFileSync.mockReturnValueOnce('# parallel-code: worktree symlinks\n/existing\n');
+    mockReadFileSync.mockReturnValueOnce('# forge: worktree symlinks\n/existing\n');
 
     ensureSymlinkExcludes('/worktree', ['.env']);
 
     const [, appended] = mockAppendFileSync.mock.calls[0] as [string, string];
-    expect(appended).not.toContain('# parallel-code: worktree symlinks');
+    expect(appended).not.toContain('# forge: worktree symlinks');
     expect(appended).toContain('/.env');
   });
 

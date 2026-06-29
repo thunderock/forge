@@ -405,9 +405,7 @@ function App() {
       // The container may be dead after restart, but this wires up docker exec for sub-tasks
       // when the user manually restarts the coordinator agent.
       const dockerContainerName =
-        task.dockerMode && task.agentIds[0]
-          ? `parallel-code-${task.agentIds[0].slice(0, 12)}`
-          : undefined;
+        task.dockerMode && task.agentIds[0] ? `forge-${task.agentIds[0].slice(0, 12)}` : undefined;
       markTaskMcpPending(taskId);
       mcpRestorePromises.push(
         invoke<{ mcpLaunchArgs?: string[] }>(IPC.StartMCPServer, {

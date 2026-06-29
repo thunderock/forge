@@ -127,7 +127,7 @@ function buildSpawnArgs(
     cols: 120,
     rows: 40,
     dockerMode: true,
-    dockerImage: 'parallel-code-agent:test',
+    dockerImage: 'forge-agent:test',
     shareDockerAgentAuth: false,
     onOutput: { __CHANNEL_ID__: 'channel-1' },
     ...overrides,
@@ -296,7 +296,7 @@ describe('spawnAgent docker mode', () => {
     expect(getFlagValues(ctx.args, '-e')).toContain(`HOME=<redacted>`);
     expect(logged).not.toContain('secret-api-key');
     expect(logged).not.toContain(`HOME=${DOCKER_CONTAINER_HOME}`);
-    expect(logged).toContain('parallel-code-agent:test');
+    expect(logged).toContain('forge-agent:test');
   });
 
   it('redacts inline docker env values in spawn debug logs', () => {
@@ -367,7 +367,7 @@ describe('spawnAgent docker mode', () => {
 
         const containerHome = `${DOCKER_CONTAINER_HOME}/agent-${agentId}`;
         const volumeFlags = getFlagValues(getLastSpawnCall().args, '-v');
-        const expectedHostDir = `${home}/.parallel-code/agent-auth/${command}/${relDir}`;
+        const expectedHostDir = `${home}/.forge/agent-auth/${command}/${relDir}`;
         expect(volumeFlags).toContain(`${expectedHostDir}:${containerHome}/${relDir}`);
       },
     );
@@ -381,7 +381,7 @@ describe('spawnAgent docker mode', () => {
         buildSpawnArgs({ command: 'claude', shareDockerAgentAuth: true }),
       );
 
-      const hostDir = `${home}/.parallel-code/agent-auth/claude/.claude`;
+      const hostDir = `${home}/.forge/agent-auth/claude/.claude`;
       expect(fs.existsSync(hostDir)).toBe(true);
     });
 
@@ -397,7 +397,7 @@ describe('spawnAgent docker mode', () => {
 
       const containerHome = `${DOCKER_CONTAINER_HOME}/agent-${agentId}`;
       const volumeFlags = getFlagValues(getLastSpawnCall().args, '-v');
-      const expectedHostFile = `${home}/.parallel-code/agent-auth/claude/.claude.json`;
+      const expectedHostFile = `${home}/.forge/agent-auth/claude/.claude.json`;
       expect(volumeFlags).toContain(`${expectedHostFile}:${containerHome}/.claude.json`);
       expect(JSON.parse(fs.readFileSync(expectedHostFile, 'utf8'))).toMatchObject({
         projects: {
@@ -422,7 +422,7 @@ describe('spawnAgent docker mode', () => {
         }),
       );
 
-      const hostFile = `${home}/.parallel-code/agent-auth/claude/.claude.json`;
+      const hostFile = `${home}/.forge/agent-auth/claude/.claude.json`;
       const config = JSON.parse(fs.readFileSync(hostFile, 'utf8')) as {
         projects?: Record<
           string,
@@ -438,7 +438,7 @@ describe('spawnAgent docker mode', () => {
     it('preserves existing Claude project config when pre-seeding folder trust', () => {
       const home = makeTempHome([]);
       vi.stubEnv('HOME', home);
-      const hostFile = `${home}/.parallel-code/agent-auth/claude/.claude.json`;
+      const hostFile = `${home}/.forge/agent-auth/claude/.claude.json`;
       fs.mkdirSync(path.dirname(hostFile), { recursive: true });
       fs.writeFileSync(
         hostFile,
@@ -491,7 +491,7 @@ describe('spawnAgent docker mode', () => {
       );
 
       const volumeFlags = getFlagValues(getLastSpawnCall().args, '-v');
-      expect(volumeFlags.some((v) => v.includes('.parallel-code/agent-auth'))).toBe(false);
+      expect(volumeFlags.some((v) => v.includes('.forge/agent-auth'))).toBe(false);
     });
 
     it('does not mount agent auth directory for an unknown agent command', () => {
@@ -504,13 +504,13 @@ describe('spawnAgent docker mode', () => {
       );
 
       const volumeFlags = getFlagValues(getLastSpawnCall().args, '-v');
-      expect(volumeFlags.some((v) => v.includes('.parallel-code/agent-auth'))).toBe(false);
+      expect(volumeFlags.some((v) => v.includes('.forge/agent-auth'))).toBe(false);
     });
 
     it('does not crash spawn when .claude.json contains malformed JSON', () => {
       const home = makeTempHome([]);
       vi.stubEnv('HOME', home);
-      const hostFile = `${home}/.parallel-code/agent-auth/claude/.claude.json`;
+      const hostFile = `${home}/.forge/agent-auth/claude/.claude.json`;
       fs.mkdirSync(path.dirname(hostFile), { recursive: true });
       fs.writeFileSync(hostFile, '{invalid json');
 
@@ -526,7 +526,7 @@ describe('spawnAgent docker mode', () => {
     it('preserves existing project config for other paths after trust seeding', () => {
       const home = makeTempHome([]);
       vi.stubEnv('HOME', home);
-      const hostFile = `${home}/.parallel-code/agent-auth/claude/.claude.json`;
+      const hostFile = `${home}/.forge/agent-auth/claude/.claude.json`;
       fs.mkdirSync(path.dirname(hostFile), { recursive: true });
       fs.writeFileSync(
         hostFile,
@@ -581,7 +581,7 @@ describe('spawnAgent docker mode', () => {
         }),
       );
 
-      const hostFile = `${home}/.parallel-code/agent-auth/claude/.claude.json`;
+      const hostFile = `${home}/.forge/agent-auth/claude/.claude.json`;
       const config = JSON.parse(fs.readFileSync(hostFile, 'utf8')) as {
         projects?: Record<
           string,
@@ -611,7 +611,7 @@ describe('spawnAgent docker mode', () => {
         }),
       );
 
-      const hostFile = `${home}/.parallel-code/agent-auth/claude/.claude.json`;
+      const hostFile = `${home}/.forge/agent-auth/claude/.claude.json`;
       expect(fs.existsSync(hostFile)).toBe(false);
     });
 
@@ -630,7 +630,7 @@ describe('spawnAgent docker mode', () => {
       );
 
       // Verify trust is written to host file after first spawn
-      const claudeJsonPath = `${home}/.parallel-code/agent-auth/claude/.claude.json`;
+      const claudeJsonPath = `${home}/.forge/agent-auth/claude/.claude.json`;
       const afterFirst = JSON.parse(fs.readFileSync(claudeJsonPath, 'utf-8')) as {
         projects: Record<string, { hasTrustDialogAccepted: boolean }>;
       };
@@ -815,18 +815,18 @@ describe('validateCommand', () => {
 });
 
 describe('resolveProjectDockerfile', () => {
-  it('returns absolute path when .parallel-code/Dockerfile exists in project root', () => {
+  it('returns absolute path when .forge/Dockerfile exists in project root', () => {
     const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'pty-resolve-'));
     tempPaths.push(projectRoot);
-    const dockerDir = path.join(projectRoot, '.parallel-code');
+    const dockerDir = path.join(projectRoot, '.forge');
     fs.mkdirSync(dockerDir, { recursive: true });
     fs.writeFileSync(path.join(dockerDir, 'Dockerfile'), 'FROM node:20\n');
 
     const result = resolveProjectDockerfile(projectRoot);
-    expect(result).toBe(path.join(projectRoot, '.parallel-code', 'Dockerfile'));
+    expect(result).toBe(path.join(projectRoot, '.forge', 'Dockerfile'));
   });
 
-  it('returns null when .parallel-code/Dockerfile does not exist', () => {
+  it('returns null when .forge/Dockerfile does not exist', () => {
     const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'pty-resolve-'));
     tempPaths.push(projectRoot);
 
@@ -839,10 +839,10 @@ describe('resolveProjectDockerfile', () => {
     expect(result).toBeNull();
   });
 
-  it('returns null when .parallel-code/Dockerfile is a directory', () => {
+  it('returns null when .forge/Dockerfile is a directory', () => {
     const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'pty-resolve-'));
     tempPaths.push(projectRoot);
-    fs.mkdirSync(path.join(projectRoot, '.parallel-code', 'Dockerfile'), { recursive: true });
+    fs.mkdirSync(path.join(projectRoot, '.forge', 'Dockerfile'), { recursive: true });
 
     const result = resolveProjectDockerfile(projectRoot);
     expect(result).toBeNull();
@@ -850,19 +850,19 @@ describe('resolveProjectDockerfile', () => {
 });
 
 describe('projectImageTag', () => {
-  it('returns a tag in the format parallel-code-project:<12-char-hash>', () => {
+  it('returns a tag in the format forge-project:<12-char-hash>', () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pty-tag-'));
     tempPaths.push(tmpDir);
     const dockerfilePath = path.join(tmpDir, 'Dockerfile');
     fs.writeFileSync(dockerfilePath, 'FROM node:20\nRUN echo hello\n');
 
     const tag = projectImageTag(dockerfilePath);
-    expect(tag).toMatch(/^parallel-code-project:[a-f0-9]{12}$/);
+    expect(tag).toMatch(/^forge-project:[a-f0-9]{12}$/);
   });
 
-  it('returns parallel-code-project:unknown for non-existent Dockerfile path', () => {
+  it('returns forge-project:unknown for non-existent Dockerfile path', () => {
     const tag = projectImageTag('/nonexistent/Dockerfile');
-    expect(tag).toBe('parallel-code-project:unknown');
+    expect(tag).toBe('forge-project:unknown');
   });
 });
 
@@ -896,7 +896,7 @@ describe('dockerImageExists', () => {
     );
 
     await expect(
-      dockerImageExists('parallel-code-project:test', {
+      dockerImageExists('forge-project:test', {
         dockerfilePath: '/nonexistent/Dockerfile',
       }),
     ).resolves.toBe(false);
@@ -907,14 +907,14 @@ describe('buildDockerImage', () => {
   it('uses the provided build context for a project dockerfile', () => {
     const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'pty-build-context-'));
     tempPaths.push(projectRoot);
-    const dockerDir = path.join(projectRoot, '.parallel-code');
+    const dockerDir = path.join(projectRoot, '.forge');
     fs.mkdirSync(dockerDir, { recursive: true });
     const dockerfilePath = path.join(dockerDir, 'Dockerfile');
     fs.writeFileSync(dockerfilePath, 'FROM node:20\n');
 
     buildDockerImage(createMockWindow(), 'channel:build-test', {
       dockerfilePath,
-      imageTag: 'parallel-code-project:test',
+      imageTag: 'forge-project:test',
       buildContext: projectRoot,
     } as unknown as Parameters<typeof buildDockerImage>[2]);
 
@@ -928,7 +928,7 @@ describe('buildDockerImage', () => {
 describe('killAgent — Docker container lifecycle', () => {
   it('calls docker stop with the predictable container name when agent is killed', () => {
     const agentId = nextAgentId();
-    const containerName = `parallel-code-${agentId.slice(0, 12)}`;
+    const containerName = `forge-${agentId.slice(0, 12)}`;
 
     spawnAgent(createMockWindow(), buildSpawnArgs({ agentId }));
     killAgent(agentId);
@@ -940,14 +940,14 @@ describe('killAgent — Docker container lifecycle', () => {
     expect(stopCall?.[1]).toContain(containerName);
   });
 
-  it('container name is always parallel-code-<first-12-chars-of-agentId>', () => {
+  it('container name is always forge-<first-12-chars-of-agentId>', () => {
     const agentId = 'agent-abcdef-ghij-klmn';
-    const expected = `parallel-code-${agentId.slice(0, 12)}`;
-    expect(expected).toBe('parallel-code-agent-abcdef');
+    const expected = `forge-${agentId.slice(0, 12)}`;
+    expect(expected).toBe('forge-agent-abcdef');
     // The container name must be deterministic and predictable for cleanup
     // (no random suffix) so we can always `docker stop` it by name.
-    expect(expected.startsWith('parallel-code-')).toBe(true);
-    expect(expected.length).toBe(14 + 12); // 'parallel-code-' + 12 chars
+    expect(expected.startsWith('forge-')).toBe(true);
+    expect(expected.length).toBe(6 + 12); // 'forge-' + 12 chars
   });
 
   it('does not call docker stop for a non-Docker agent', () => {
@@ -1024,7 +1024,7 @@ describe('seedClaudeProjectTrust — concurrent spawns', () => {
       }),
     );
 
-    const hostFile = `${home}/.parallel-code/agent-auth/claude/.claude.json`;
+    const hostFile = `${home}/.forge/agent-auth/claude/.claude.json`;
     const config = JSON.parse(fs.readFileSync(hostFile, 'utf8')) as {
       projects: Record<string, { hasTrustDialogAccepted: boolean }>;
     };
@@ -1161,7 +1161,7 @@ describe('spawnAgent docker mode — path edge cases', () => {
       }),
     );
 
-    const claudeJson = `${home}/.parallel-code/agent-auth/claude/.claude.json`;
+    const claudeJson = `${home}/.forge/agent-auth/claude/.claude.json`;
     // .claude.json must not be created for non-Claude agents
     expect(fs.existsSync(claudeJson)).toBe(false);
   });
@@ -1183,7 +1183,7 @@ describe('seedClaudeProjectTrust — file permissions', () => {
       }),
     );
 
-    const hostFile = `${home}/.parallel-code/agent-auth/claude/.claude.json`;
+    const hostFile = `${home}/.forge/agent-auth/claude/.claude.json`;
     expect(fs.existsSync(hostFile)).toBe(true);
     const stat = fs.statSync(hostFile);
     // mode & 0o777 strips file-type bits; 0o600 = owner r/w, no group/other access
@@ -1199,7 +1199,7 @@ describe('buildDockerCredentialMounts — read-only auth dir', () => {
     vi.stubEnv('HOME', home);
 
     // Create the parent as a file to block mkdirSync
-    const authBase = path.join(home, '.parallel-code');
+    const authBase = path.join(home, '.forge');
     fs.mkdirSync(authBase, { recursive: true });
     // Create 'agent-auth' as a file so mkdirSync for 'claude' inside it will fail
     fs.writeFileSync(path.join(authBase, 'agent-auth'), 'not-a-dir');

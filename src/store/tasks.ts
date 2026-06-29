@@ -206,7 +206,7 @@ export async function createTask(opts: CreateTaskOptions): Promise<string> {
   let mcpLaunchArgs: string[] | undefined;
   if (opts.coordinatorMode) {
     // When running in Docker, sub-agents will be spawned via `docker exec` into this container.
-    const dockerContainerName = dockerMode ? `parallel-code-${agentId.slice(0, 12)}` : undefined;
+    const dockerContainerName = dockerMode ? `forge-${agentId.slice(0, 12)}` : undefined;
     try {
       const mcpResult = await invoke<{
         configPath: string | undefined;
@@ -1400,9 +1400,7 @@ export function retryTaskMcpStartup(taskId: string): Promise<void> {
   if (task.coordinatorMode) {
     const agentDef = task.agentIds[0] ? store.agents[task.agentIds[0]]?.def : undefined;
     const dockerContainerName =
-      task.dockerMode && task.agentIds[0]
-        ? `parallel-code-${task.agentIds[0].slice(0, 12)}`
-        : undefined;
+      task.dockerMode && task.agentIds[0] ? `forge-${task.agentIds[0].slice(0, 12)}` : undefined;
     return invoke<{ mcpLaunchArgs?: string[] }>(IPC.StartMCPServer, {
       coordinatorTaskId: task.id,
       projectId: task.projectId,

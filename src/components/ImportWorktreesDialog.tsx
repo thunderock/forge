@@ -143,9 +143,8 @@ export function ImportWorktreesDialog(props: ImportWorktreesDialogProps) {
           <p
             style={{ margin: '0', 'font-size': '12px', color: theme.fgMuted, 'line-height': '1.5' }}
           >
-            Import existing git worktrees for this project as Parallel Code tasks. Imported tasks
-            keep their existing branch and worktree, and closing them will only detach them from the
-            app.
+            Import existing git worktrees for this project as Forge tasks. Imported tasks keep their
+            existing branch and worktree, and closing them will only detach them from the app.
           </p>
         </div>
 

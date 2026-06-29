@@ -88,12 +88,12 @@ export interface CoordinatorState {
   propagateSkipPermissions: boolean;
   /** Path to the .mcp.json file written for this coordinator. */
   mcpJsonPath: string;
-  /** True if Parallel Code created .mcp.json from scratch; false if it was pre-existing. */
+  /** True if Forge created .mcp.json from scratch; false if it was pre-existing. */
   createdMcpJson: boolean;
-  /** Previous value of mcpServers["parallel-code"] before this coordinator wrote its entry, if any. */
-  previousMcpParallelCode?: unknown;
-  /** The value this coordinator wrote into mcpServers["parallel-code"]; used to detect concurrent edits on deregister. */
-  writtenMcpParallelCode?: unknown;
+  /** Previous value of mcpServers["forge"] before this coordinator wrote its entry, if any. */
+  previousMcpForge?: unknown;
+  /** The value this coordinator wrote into mcpServers["forge"]; used to detect concurrent edits on deregister. */
+  writtenMcpForge?: unknown;
 }
 
 export interface SubtaskVerificationCheck {

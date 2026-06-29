@@ -35,11 +35,11 @@ function runGit(cwd: string, args: string[]): void {
 }
 
 function createRepo(): string {
-  const repo = mkdtempSync(join(tmpdir(), 'parallel-code-real-pty-repo-'));
+  const repo = mkdtempSync(join(tmpdir(), 'forge-real-pty-repo-'));
   runGit(repo, ['init']);
   runGit(repo, ['checkout', '-b', 'main']);
-  runGit(repo, ['config', 'user.email', 'parallel-code-test@example.com']);
-  runGit(repo, ['config', 'user.name', 'Parallel Code Test']);
+  runGit(repo, ['config', 'user.email', 'forge-test@example.com']);
+  runGit(repo, ['config', 'user.name', 'Forge Test']);
   writeFileSync(join(repo, 'README.md'), '# test repo\n');
   runGit(repo, ['add', 'README.md']);
   runGit(repo, ['commit', '-m', 'initial']);

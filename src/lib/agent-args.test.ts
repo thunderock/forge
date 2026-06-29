@@ -50,14 +50,14 @@ describe('buildTaskAgentArgs', () => {
         {
           skipPermissions: true,
           mcpConfigPath: '/tmp/mcp.json',
-          mcpLaunchArgs: ['--config', 'mcp_servers.parallel-code={ command = "node" }'],
+          mcpLaunchArgs: ['--config', 'mcp_servers.forge={ command = "node" }'],
         },
         false,
       ),
     ).toEqual([
       '--dangerously-bypass-approvals-and-sandbox',
       '--config',
-      'mcp_servers.parallel-code={ command = "node" }',
+      'mcp_servers.forge={ command = "node" }',
     ]);
   });
 
@@ -68,7 +68,7 @@ describe('buildTaskAgentArgs', () => {
         {
           skipPermissions: true,
           mcpConfigPath: '/tmp/mcp.json',
-          mcpLaunchArgs: ['--config', 'mcp_servers.parallel-code={ command = "node" }'],
+          mcpLaunchArgs: ['--config', 'mcp_servers.forge={ command = "node" }'],
         },
         true,
       ),
@@ -77,7 +77,7 @@ describe('buildTaskAgentArgs', () => {
       '--last',
       '--dangerously-bypass-approvals-and-sandbox',
       '--config',
-      'mcp_servers.parallel-code={ command = "node" }',
+      'mcp_servers.forge={ command = "node" }',
     ]);
   });
 

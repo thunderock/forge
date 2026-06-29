@@ -314,7 +314,7 @@ const RULES = `RULES:
 - terminalBackground must be an opaque hex value`;
 
 export function generateThemePrompt(existingCss?: string): string {
-  const preamble = `You are a UI theme designer for Parallel Code, a dark-mode terminal multiplexer and AI coding assistant.`;
+  const preamble = `You are a UI theme designer for Forge, a dark-mode terminal multiplexer and AI coding assistant.`;
 
   if (existingCss) {
     return `${preamble}

@@ -10,7 +10,7 @@ export const SUBTASK_TOOLS: ToolDef[] = [
   {
     name: 'land_self',
     description:
-      'Land your own completed sub-task through the Parallel Code backend. Call this only after committing your work and running verification successfully. A successful call is terminal; do not call signal_done afterward.',
+      'Land your own completed sub-task through the Forge backend. Call this only after committing your work and running verification successfully. A successful call is terminal; do not call signal_done afterward.',
     inputSchema: {
       type: 'object',
       properties: {

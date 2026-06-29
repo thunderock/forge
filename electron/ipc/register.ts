@@ -113,7 +113,7 @@ export function getDockerMcpServerDestPath(
   worktreePath: string | undefined,
   projectRoot: string,
 ): string {
-  return path.join(worktreePath ?? projectRoot, '.parallel-code', 'mcp-server.cjs');
+  return path.join(worktreePath ?? projectRoot, '.forge', 'mcp-server.cjs');
 }
 
 export interface CoordinatorMCPConfigOpts {
@@ -128,7 +128,7 @@ export interface CoordinatorMCPConfigOpts {
 /** Builds the coordinator MCP server config used for launch args and `.mcp.json`. */
 export function buildCoordinatorMCPConfig(opts: CoordinatorMCPConfigOpts): {
   mcpServers: {
-    'parallel-code': {
+    forge: {
       type: 'stdio';
       command: 'node';
       args: string[];
@@ -138,7 +138,7 @@ export function buildCoordinatorMCPConfig(opts: CoordinatorMCPConfigOpts): {
 } {
   return {
     mcpServers: {
-      'parallel-code': {
+      forge: {
         type: 'stdio',
         command: 'node',
         args: [
@@ -149,7 +149,7 @@ export function buildCoordinatorMCPConfig(opts: CoordinatorMCPConfigOpts): {
           opts.coordinatorTaskId,
           ...(opts.skipPermissions && opts.propagateSkipPermissions ? ['--skip-permissions'] : []),
         ],
-        env: { PARALLEL_CODE_MCP_TOKEN: opts.token },
+        env: { FORGE_MCP_TOKEN: opts.token },
       },
     },
   };
@@ -327,8 +327,8 @@ function sanitizeDroppedName(name: string): string {
     .trim()
     .slice(0, 200);
   const stamp = `${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
-  if (base) return `parallel-code-drop-${stamp}-${base}`;
-  return `parallel-code-drop-${stamp}.png`;
+  if (base) return `forge-drop-${stamp}-${base}`;
+  return `forge-drop-${stamp}.png`;
 }
 
 /**
@@ -951,7 +951,7 @@ export function registerAllHandlers(win: BrowserWindow): void {
   });
 
   // --- Clipboard ---
-  const clipboardImagePath = path.join(os.tmpdir(), 'parallel-code-clipboard.png');
+  const clipboardImagePath = path.join(os.tmpdir(), 'forge-clipboard.png');
 
   // Resolve the most useful representation of the current clipboard contents
   // for pasting into a terminal. Order of preference:
@@ -1344,7 +1344,7 @@ export function registerAllHandlers(win: BrowserWindow): void {
         // Clean up the host-temp MCP config file written by StartMCPServer (non-Docker only).
         const tempConfigPath = path.join(
           app.getPath('temp'),
-          `parallel-code-mcp-${args.coordinatorTaskId}.json`,
+          `forge-mcp-${args.coordinatorTaskId}.json`,
         );
         try {
           fs.unlinkSync(tempConfigPath);
@@ -1637,7 +1637,7 @@ export function registerAllHandlers(win: BrowserWindow): void {
       // merge logic ever grows fallible, Docker residue is never left behind.
       const mcpConfig = {
         mcpServers: {
-          'parallel-code': {
+          forge: {
             type: 'stdio' as const,
             command: 'node',
             args: [
@@ -1650,7 +1650,7 @@ export function registerAllHandlers(win: BrowserWindow): void {
                 ? ['--skip-permissions']
                 : []),
             ],
-            env: { PARALLEL_CODE_MCP_TOKEN: remoteServer.token },
+            env: { FORGE_MCP_TOKEN: remoteServer.token },
           },
         },
       };
@@ -1659,11 +1659,11 @@ export function registerAllHandlers(win: BrowserWindow): void {
 
       // Merge mcpConfig into the pre-validated existingMcpContent (parsed above,
       // before any coordinator state was mutated).
-      // Capture the previous parallel-code entry so deregistration can restore it instead of
+      // Capture the previous forge entry so deregistration can restore it instead of
       // unconditionally deleting it (which would remove a user-owned entry).
       const existingServers =
         (existingMcpContent.mcpServers as Record<string, unknown> | undefined) ?? {};
-      const previousMcpParallelCode: unknown = existingServers['parallel-code'];
+      const previousMcpForge: unknown = existingServers['forge'];
       let mergedMcpJson: string | undefined;
       if (mcpJsonDir && worktreeMcpPath) {
         existingMcpContent.mcpServers = { ...existingServers, ...mcpConfig.mcpServers };
@@ -1678,13 +1678,13 @@ export function registerAllHandlers(win: BrowserWindow): void {
         coordinator.setDockerContainerName(args.coordinatorTaskId, args.dockerContainerName ?? '');
         coordinator.setDockerImage(args.coordinatorTaskId, args.dockerImage ?? null);
         console.warn('[MCP] Docker mode: copied MCP server to', dockerMcpServerPath);
-        // Keep .parallel-code/ out of git status in the sub-task worktree.
+        // Keep .forge/ out of git status in the sub-task worktree.
         // Use .git/info/exclude (local-only, never committed) to avoid dirtying
         // a tracked .gitignore file on every Docker coordinator startup.
         appendGitExclude(
           args.worktreePath ?? args.projectRoot,
-          '.parallel-code/',
-          '\n# Parallel Code Docker MCP dir\n.parallel-code/\n',
+          '.forge/',
+          '\n# Forge Docker MCP dir\n.forge/\n',
         );
       } else {
         coordinator.setDockerContainerName(args.coordinatorTaskId, null);
@@ -1707,32 +1707,29 @@ export function registerAllHandlers(win: BrowserWindow): void {
       // No host-temp configPath needed.
       let configPath: string | undefined;
       if (!args.dockerContainerName) {
-        configPath = path.join(
-          app.getPath('temp'),
-          `parallel-code-mcp-${args.coordinatorTaskId}.json`,
-        );
+        configPath = path.join(app.getPath('temp'), `forge-mcp-${args.coordinatorTaskId}.json`);
         atomicWriteFileSync(configPath, configJson, { mode: 0o600 });
       }
 
       // Write .mcp.json for auto-discovery. Read before writing — merge only the
-      // parallel-code key so we don't destroy user-defined entries. Track whether
+      // forge key so we don't destroy user-defined entries. Track whether
       // we created the file so deregisterCoordinator can clean up correctly.
       if (mcpJsonDir && worktreeMcpPath && mergedMcpJson !== undefined) {
         atomicWriteFileSync(worktreeMcpPath, mergedMcpJson, { mode: 0o600 });
-        const writtenMcpParallelCode: unknown = mcpConfig.mcpServers['parallel-code'];
+        const writtenMcpForge: unknown = mcpConfig.mcpServers['forge'];
         coordinator.setMcpJsonInfo(
           args.coordinatorTaskId,
           worktreeMcpPath,
           !mcpFileExistedBefore,
-          previousMcpParallelCode,
-          writtenMcpParallelCode,
+          previousMcpForge,
+          writtenMcpForge,
         );
 
         // Append to .git/info/exclude (local-only gitignore, not committed)
         appendGitExclude(
           mcpJsonDir,
           '.mcp.json',
-          '\n# Parallel Code MCP config (contains ephemeral token)\n.mcp.json\n',
+          '\n# Forge MCP config (contains ephemeral token)\n.mcp.json\n',
         );
 
         console.warn('[MCP] .mcp.json written to:', worktreeMcpPath);
