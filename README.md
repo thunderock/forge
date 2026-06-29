@@ -22,7 +22,7 @@
   <img src="https://img.shields.io/badge/SolidJS-2C4F7C?logo=solid&logoColor=white" alt="SolidJS">
   <img src="https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white" alt="TypeScript">
   <img src="https://img.shields.io/badge/Platform-macOS%20%7C%20Linux-lightgrey" alt="macOS | Linux">
-  <img src="https://img.shields.io/github/license/johannesjo/forge" alt="License">
+  <img src="https://img.shields.io/github/license/thunderock/forge" alt="License">
 </p>
 
 <p align="center">
@@ -111,7 +111,7 @@ When you're happy with the result, merge the branch back to main from the sideba
 
 ## Getting Started
 
-1. **Download** the latest release for your platform from the [releases page](https://github.com/johannesjo/forge/releases/latest):
+1. **Download** the latest release for your platform from the [releases page](https://github.com/thunderock/forge/releases/latest):
    - **macOS** — `.dmg` (universal)
    - **Linux** — `.AppImage` or `.deb`
 
@@ -132,7 +132,7 @@ The bundled image still ships the `agy` binary, and `~/.gemini/antigravity-cli` 
 <summary><strong>Build from source</strong></summary>
 
 ```sh
-git clone https://github.com/johannesjo/forge.git
+git clone https://github.com/thunderock/forge.git
 cd forge
 npm install
 npm run dev
@@ -176,8 +176,10 @@ Requires [Node.js](https://nodejs.org/) v18+.
 
 ---
 
-If Forge saves you time, consider giving it a [star on GitHub](https://github.com/johannesjo/forge). It helps others find the project.
+If Forge saves you time, consider giving it a [star on GitHub](https://github.com/thunderock/forge). It helps others find the project.
 
 ## License
 
 MIT
+
+Forge is an open-source fork of [Parallel Code](https://github.com/johannesjo/parallel-code) by Johannes Millan, also MIT-licensed.

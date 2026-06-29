@@ -3,8 +3,8 @@
   "version": "1.11.0",
   "description": "",
   "author": {
-    "name": "Johannes Millan",
-    "email": "contact@super-productivity.com"
+    "name": "thunderock",
+    "email": "findashutoshtiwari@gmail.com"
   },
   "main": "dist-electron/main.js",
   "type": "module",
@@ -106,7 +106,7 @@
     "publish": [
       {
         "provider": "github",
-        "owner": "johannesjo",
+        "owner": "thunderock",
         "repo": "forge"
       }
     ],
