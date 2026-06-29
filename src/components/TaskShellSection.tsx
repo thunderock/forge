@@ -276,6 +276,7 @@ export function TaskShellSection(props: TaskShellSectionProps) {
                     taskId={props.task.id}
                     agentId={shellId}
                     isShell
+                    bookmarksEnabled={false}
                     isFocused={isShellPanelFocused()}
                     command={''}
                     args={['-l']}

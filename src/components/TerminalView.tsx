@@ -115,8 +115,9 @@ interface TerminalViewProps {
   cwd: string;
   env?: Record<string, string>;
   isShell?: boolean;
-  /** Scroll bookmarks reserve a 24px left gutter. Standalone full-size terminal
-   *  panels opt out (pass false) so they fill the pane with no left inset. */
+  /** Scroll bookmarks reserve a 24px left gutter. Only agent terminals use it;
+   *  shell terminals (in-task shells and standalone full-size panels) opt out
+   *  (pass false) so they fill the pane with no left inset. */
   bookmarksEnabled?: boolean;
   stepsEnabled?: boolean;
   dockerMode?: boolean;
@@ -1141,8 +1142,9 @@ export function TerminalView(props: TerminalViewProps) {
   const mcpError = () => store.tasks[props.taskId]?.mcpStartupError;
   const mcpStatus = () => store.tasks[props.taskId]?.mcpStartupStatus;
 
-  // Standalone full-size terminal panels opt out of the bookmark gutter so they
-  // fill the pane with no left inset; everything else reserves the strip.
+  // Only agent terminals reserve the bookmark gutter. Shell terminals (in-task
+  // shells and standalone full-size panels) opt out so they fill the pane with
+  // no left inset.
   const showBookmarks = () => props.bookmarksEnabled !== false;
 
   return (
