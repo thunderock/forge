@@ -230,7 +230,7 @@ export function AgentDetail(props: AgentDetailProps) {
           style={{
             background: 'none',
             border: 'none',
-            color: '#2ec8ff',
+            color: '#ff6a2c',
             'font-size': '17px',
             cursor: 'pointer',
             padding: '8px 10px',
@@ -379,7 +379,7 @@ export function AgentDetail(props: AgentDetailProps) {
             disabled={!inputText().trim()}
             onClick={() => handleSend()}
             style={{
-              background: inputText().trim() ? '#2ec8ff' : '#1a2430',
+              background: inputText().trim() ? '#ff6a2c' : '#1a2430',
               border: 'none',
               'border-radius': '50%',
               width: '40px',

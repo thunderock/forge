@@ -20,7 +20,7 @@ const graphiteColors: PresetColors = {
   fgMuted: '#9bb0c3',
   fgSubtle: '#678197',
   border: '#2e3e50',
-  accent: '#2ec8ff',
+  accent: '#ff6a2c',
 };
 
 const presetColors: Record<LookPreset, PresetColors> = {

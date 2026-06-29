@@ -113,7 +113,7 @@ export function AgentList(props: AgentListProps) {
             href="https://github.com/thunderock/forge/issues"
             target="_blank"
             rel="noopener noreferrer"
-            style={{ color: '#2ec8ff' }}
+            style={{ color: '#ff6a2c' }}
           >
             Report bugs
           </a>
