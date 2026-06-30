@@ -54,7 +54,7 @@ export const [store, setStore] = createStore<AppStore>({
   desktopNotificationsEnabled: false,
   inactiveColumnOpacity: 0.6,
   editorCommand: '',
-  dockerImage: 'forge-agent:latest',
+  dockerImage: 'thunderockforge/forge-agent:latest',
   dockerAvailable: false,
   shareDockerAgentAuth: false,
   askCodeProvider: 'claude',

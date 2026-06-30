@@ -1,0 +1,25 @@
+" --- vim-gitgutter: red/green diff hints when editing tracked files ---
+" Plugin is installed via vim 8 native packages at:
+"   ~/.vim/pack/plugins/start/vim-gitgutter
+" (cloned by the Dockerfile). No plugin manager needed.
+
+set updatetime=100                    " faster gutter refresh
+let g:gitgutter_highlight_lines = 1   " highlight whole changed line, not just sign column
+
+" jump between hunks
+nmap ]h <Plug>(GitGutterNextHunk)
+nmap [h <Plug>(GitGutterPrevHunk)
+
+" preview / stage / undo a hunk under cursor
+nmap <leader>hp <Plug>(GitGutterPreviewHunk)
+nmap <leader>hs <Plug>(GitGutterStageHunk)
+nmap <leader>hu <Plug>(GitGutterUndoHunk)
+
+" basic editor sanity (safe defaults; remove or override if you have preferences)
+syntax on
+set number
+set ruler
+set hlsearch
+set incsearch
+set ignorecase
+set smartcase

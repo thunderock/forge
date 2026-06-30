@@ -1,6 +1,6 @@
 export type DockerSource = 'default' | 'project' | 'custom';
 
-export const DEFAULT_DOCKER_IMAGE = 'forge-agent:latest';
+export const DEFAULT_DOCKER_IMAGE = 'thunderockforge/forge-agent:latest';
 export const PROJECT_DOCKER_IMAGE_PREFIX = 'forge-project:';
 export const PROJECT_DOCKERFILE_RELATIVE_PATH = '.forge/Dockerfile';
 

@@ -1,0 +1,35 @@
+[alias]
+    co = checkout
+    a = add
+    b = branch
+    c = commit
+    d = diff
+    f = fetch
+    g = grep
+    l = log
+    m = merge
+    p = pull
+    r = remote
+    s = status
+    w = whatchanged
+    lg = log --graph
+    lo = log --oneline
+    lp = log --patch
+    lfp = log --first-parent
+    lt = log --topo-order
+    ll = log --graph --topo-order --abbrev-commit --date=short --decorate --all --boundary --pretty=format:'%Cgreen%ad %Cred%h%Creset -%C(yellow)%d%Creset %s %Cblue[%cn]%Creset %Cblue%G?%Creset'
+    unstage = reset HEAD --
+    slast = rev-parse @~
+    head = log --name-status HEAD^..HEAD
+[core]
+    editor = vim
+    pager = delta
+[interactive]
+    diffFilter = delta --color-only
+[delta]
+    navigate = true
+    dark = true
+[merge]
+    conflictStyle = zdiff3
+[pull]
+    rebase = true

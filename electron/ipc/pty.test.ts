@@ -250,6 +250,14 @@ describe('spawnAgent docker mode', () => {
     expect(getFlagValues(args, '-e')).toContain(`HOME=${DOCKER_CONTAINER_HOME}/agent-${agentId}`);
   });
 
+  it('seeds baked gsd config into the per-agent HOME at container start', () => {
+    spawnAgent(createMockWindow(), buildSpawnArgs({ agentId: nextAgentId() }));
+    const bootstrap = getLastSpawnCall().args.find((a) => a.includes('exec "$@"'));
+    expect(bootstrap).toBeDefined();
+    expect(bootstrap).toContain('cp -an /home/agent/.claude/.');
+    expect(bootstrap).toContain('cp -an /home/agent/.gsd/.');
+  });
+
   it('does not forward host or renderer HOME as a generic docker env flag', () => {
     const hostHome = '/Users/host-home';
     const rendererHome = '/Users/renderer-home';

@@ -1,0 +1,68 @@
+{
+  "resolve_model_ids": "anthropic",
+  "model_profile": "quality",
+  "model_overrides": {
+    "gsd-planner": "claude-opus-4-8",
+    "gsd-roadmapper": "claude-opus-4-8",
+    "gsd-pattern-mapper": "claude-opus-4-8",
+    "gsd-executor": "claude-opus-4-8",
+    "gsd-debugger": "claude-opus-4-8",
+    "gsd-doc-writer": "claude-opus-4-8",
+    "gsd-verifier": "claude-opus-4-8",
+    "gsd-plan-checker": "claude-opus-4-8",
+    "gsd-integration-checker": "claude-opus-4-8",
+    "gsd-nyquist-auditor": "claude-opus-4-8",
+    "gsd-ui-checker": "claude-opus-4-8",
+    "gsd-ui-auditor": "claude-opus-4-8",
+    "gsd-doc-verifier": "claude-opus-4-8",
+    "gsd-phase-researcher": "claude-opus-4-8",
+    "gsd-project-researcher": "claude-opus-4-8",
+    "gsd-ui-researcher": "claude-opus-4-8",
+    "gsd-codebase-mapper": "claude-opus-4-8",
+    "gsd-research-synthesizer": "claude-opus-4-8"
+  },
+  "mode": "yolo",
+  "granularity": "standard",
+  "commit_docs": false,
+  "parallelization": true,
+  "branching_strategy": "phase",
+  "quick_branch_template": null,
+  "workflow": {
+    "research": true,
+    "plan_check": true,
+    "verifier": true,
+    "auto_advance": true,
+    "nyquist_validation": true,
+    "pattern_mapper": true,
+    "ui_phase": true,
+    "ui_safety_gate": true,
+    "ai_integration_phase": true,
+    "tdd_mode": true,
+    "code_review": true,
+    "code_review_depth": "deep",
+    "use_worktrees": true,
+    "ui_review": true,
+    "skip_discuss": false,
+    "research_before_questions": true
+  },
+  "hooks": {
+    "workflow_guard": false,
+    "context_warnings": true
+  },
+  "code_quality": {
+    "fallow": {
+      "enabled": true,
+      "scope": "phase",
+      "profile": "quality",
+      "mcp": false
+    }
+  },
+  "intel": {
+    "enabled": true
+  },
+  "graphify": {
+    "enabled": true,
+    "build_timeout": 300,
+    "auto_update": true
+  }
+}
