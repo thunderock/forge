@@ -2,7 +2,7 @@
 # Pre-installs common dev tools + language toolchains so agents don't waste time on setup.
 # Multi-stage: the `rust`, `go`, and `tools` builder stages build in parallel under BuildKit;
 # the final stage (the shipped agent image) copies their artifacts in.
-# Build:  DOCKER_BUILDKIT=1 docker build -t forge-agent:latest docker/
+# Build:  DOCKER_BUILDKIT=1 docker build -t thunderockforge/forge-agent:latest docker/
 
 ARG UBUNTU=ubuntu:22.04
 

@@ -856,7 +856,7 @@ export async function isDockerAvailable(): Promise<boolean> {
 }
 
 /** The default image name for Docker-isolated tasks. */
-export const DOCKER_DEFAULT_IMAGE = 'forge-agent:latest';
+export const DOCKER_DEFAULT_IMAGE = 'thunderockforge/forge-agent:latest';
 
 /** Label key used to stamp the Dockerfile content hash on built images. */
 const DOCKERFILE_HASH_LABEL = 'forge-dockerfile-hash';

@@ -226,7 +226,7 @@ export function setEditorCommand(command: string): void {
 }
 
 export function setDockerImage(image: string): void {
-  setStore('dockerImage', image || 'forge-agent:latest');
+  setStore('dockerImage', image || 'thunderockforge/forge-agent:latest');
 }
 
 export function setAskCodeProvider(provider: 'claude' | 'minimax'): void {
