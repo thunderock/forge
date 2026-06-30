@@ -1,0 +1,35 @@
+# ~/.bashrc — personal agent sandbox. Curated from ashutosh_setup.
+# Secrets and Adobe-specific logic intentionally omitted.
+
+set -o emacs
+bind '"\e[A": previous-history' 2>/dev/null
+bind '"\e[B": next-history' 2>/dev/null
+bind '"\eOA": previous-history' 2>/dev/null
+bind '"\eOB": next-history' 2>/dev/null
+
+export HISTFILE=$HOME/.bash_history
+export HISTSIZE=10000000
+export HISTFILESIZE=10000000
+export HISTCONTROL=ignoreboth:erasedups
+export HISTTIMEFORMAT='%F %T '
+shopt -s histappend cmdhist checkwinsize globstar
+PROMPT_COMMAND='history -a; history -n'
+
+alias grep='grep --color=auto'
+alias ls='ls --color=auto'
+alias ll='ls -lh --color=auto'
+alias la='ls -lAh --color=auto'
+alias lg='lazygit'
+alias fvim='vim "$(fzf)"'
+alias fcat="fzf --preview 'bat --color=always --style=numbers {}'"
+
+for _f in \
+  /usr/share/doc/fzf/examples/key-bindings.bash \
+  /usr/share/fzf/key-bindings.bash \
+  /usr/share/doc/fzf/examples/completion.bash \
+  /usr/share/fzf/completion.bash; do
+  [ -f "$_f" ] && source "$_f"
+done
+unset _f
+
+command -v starship >/dev/null 2>&1 && eval "$(starship init bash)"

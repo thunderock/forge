@@ -1,0 +1,19 @@
+add_newline = false
+
+[character]
+success_symbol = "[➜](bold green)"
+error_symbol   = "[✗](bold red) "
+
+[time]
+disabled    = false
+format      = '🕙[\[ $time \]]($style) '
+time_format = "%T"
+time_range  = "00:00:00-23:59:00"
+
+[cmd_duration]
+disabled           = false
+show_notifications = true
+
+# Hide the docker context segment.
+[docker_context]
+disabled = true
