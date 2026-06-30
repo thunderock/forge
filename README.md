@@ -26,12 +26,6 @@
 </p>
 
 <p align="center">
-  <a href="https://youtu.be/sLf0tsQA3pU">
-    <img src="https://img.shields.io/badge/Watch%20Intro-YouTube-red?logo=youtube&logoColor=white&style=for-the-badge" alt="Watch intro on YouTube">
-  </a>
-</p>
-
-<p align="center">
   <img src="screens/longer-video.gif" alt="Forge demo" width="800">
 </p>
 
