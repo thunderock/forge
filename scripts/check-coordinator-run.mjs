@@ -201,7 +201,7 @@ export function formatCoordinatorRunReport(result, options = {}) {
 function main(argv) {
   const file = argv[2];
   if (!file) {
-    console.error('Usage: node scripts/check-coordinator-run.mjs /tmp/parallel-code-*.out');
+    console.error('Usage: node scripts/check-coordinator-run.mjs /tmp/forge-*.out');
     return 2;
   }
   const text = readFileSync(file, 'utf8');

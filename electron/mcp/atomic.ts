@@ -77,7 +77,7 @@ export function atomicWriteFileSync(
   options?: { mode?: number },
 ): void {
   const mode = resolveMode(filePath, options?.mode);
-  const tmp = join(dirname(filePath), `.parallel-code-atomic-${randomUUID()}.tmp`);
+  const tmp = join(dirname(filePath), `.forge-atomic-${randomUUID()}.tmp`);
   let fd = -1;
   try {
     fd = openSync(tmp, 'w', mode); // pre-set mode; still subject to umask
@@ -114,7 +114,7 @@ export async function atomicWriteFile(
   options?: { mode?: number },
 ): Promise<void> {
   const mode = await resolveModeAsync(filePath, options?.mode);
-  const tmp = join(dirname(filePath), `.parallel-code-atomic-${randomUUID()}.tmp`);
+  const tmp = join(dirname(filePath), `.forge-atomic-${randomUUID()}.tmp`);
   let fh: Awaited<ReturnType<typeof open>> | undefined;
   try {
     fh = await open(tmp, 'w', mode); // pre-set mode; still subject to umask

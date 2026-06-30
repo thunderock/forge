@@ -14,7 +14,7 @@ if (probe.error?.code === 'ENOENT' || probe.status !== 0) {
   process.exit(1);
 }
 
-const tmp = mkdtempSync(join(tmpdir(), 'parallel-code-semgrep-'));
+const tmp = mkdtempSync(join(tmpdir(), 'forge-semgrep-'));
 
 try {
   const mcpDir = join(tmp, 'electron', 'mcp');

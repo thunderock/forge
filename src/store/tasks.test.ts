@@ -217,7 +217,7 @@ const baseEvent = {
   worktreePath: '/repo/.worktrees/sub-task-1',
   agentId: 'agent-sub-1',
   coordinatorTaskId: 'coordinator-1',
-  mcpLaunchArgs: ['--config', 'mcp_servers.parallel-code={ command = "node" }'],
+  mcpLaunchArgs: ['--config', 'mcp_servers.forge={ command = "node" }'],
 };
 
 describe('coordinator controlledBy state machine (item 9: UI disabled-state regression tests)', () => {

@@ -15,7 +15,7 @@ export default defineConfig({
     watch: {
       // Creating git worktrees inside this repo would otherwise look like a giant
       // source-tree change to Vite in dev mode, causing the renderer to reload
-      // right when Parallel Code creates a task for itself. The function ignores
+      // right when Forge creates a task for itself. The function ignores
       // anything resolving outside the project root (e.g. host parent dirs).
       ignored: [
         '**/.worktrees/**',

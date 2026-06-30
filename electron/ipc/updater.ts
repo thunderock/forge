@@ -66,7 +66,6 @@ const status: UpdateStatus = {
 
 let mainWindow: BrowserWindow | null = null;
 let wired = false;
-let startupCheckTimer: ReturnType<typeof setTimeout> | null = null;
 
 function broadcast(): void {
   if (mainWindow && !mainWindow.isDestroyed()) {
@@ -125,7 +124,8 @@ function wireUpdaterEvents(): void {
 }
 
 /**
- * Wire the updater to a window and run one silent check shortly after launch.
+ * Wire the updater to a window. Forge disables the automatic post-launch
+ * check; updates are user-initiated via `checkForUpdates`.
  * Safe to call when auto-update is unsupported — it becomes a no-op.
  */
 export function initAutoUpdater(win: BrowserWindow): void {
@@ -137,16 +137,9 @@ export function initAutoUpdater(win: BrowserWindow): void {
     return;
   }
   wireUpdaterEvents();
-  // Delay the first check so it does not compete with app startup work.
-  startupCheckTimer = setTimeout(() => {
-    startupCheckTimer = null;
-    void checkForUpdates();
-  }, 10_000);
+  // Forge: startup auto-check disabled (local/personal build). Updates are
+  // user-initiated via the "Check for updates" action.
   win.once('closed', () => {
-    if (startupCheckTimer) {
-      clearTimeout(startupCheckTimer);
-      startupCheckTimer = null;
-    }
     // Detach event handlers so a re-created window re-wires from a clean
     // slate. `removeAllListeners` is safe because this module is the sole
     // consumer of the `autoUpdater` singleton.

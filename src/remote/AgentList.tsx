@@ -30,9 +30,7 @@ export function AgentList(props: AgentListProps) {
           background: '#12181f',
         }}
       >
-        <span style={{ 'font-size': '18px', 'font-weight': '600', color: '#d7e4f0' }}>
-          Parallel Code
-        </span>
+        <span style={{ 'font-size': '18px', 'font-weight': '600', color: '#d7e4f0' }}>Forge</span>
         <div style={{ display: 'flex', 'align-items': 'center', gap: '8px' }}>
           <div
             style={{
@@ -112,10 +110,10 @@ export function AgentList(props: AgentListProps) {
         >
           This is an experimental feature.{' '}
           <a
-            href="https://github.com/johannesjo/parallel-code/issues"
+            href="https://github.com/thunderock/forge/issues"
             target="_blank"
             rel="noopener noreferrer"
-            style={{ color: '#2ec8ff' }}
+            style={{ color: '#ff6a2c' }}
           >
             Report bugs
           </a>

@@ -1,14 +1,14 @@
-title = "Gitleaks config for Parallel Code"
+title = "Gitleaks config for Forge"
 
 [extend]
 # Use the default Gitleaks ruleset as the base
 useDefault = true
 
 [[rules]]
-id = "parallel-code-mcp-token"
-description = "Parallel Code MCP bearer token"
-regex = '''PARALLEL_CODE_MCP_TOKEN\s*[=:]\s*['"]?[A-Za-z0-9+/_-]{20,}['"]?'''
-tags = ["token", "parallel-code"]
+id = "forge-mcp-token"
+description = "Forge MCP bearer token"
+regex = '''FORGE_MCP_TOKEN\s*[=:]\s*['"]?[A-Za-z0-9+/_-]{20,}['"]?'''
+tags = ["token", "forge"]
 
 [[rules]]
 id = "bearer-token-in-url"

@@ -788,7 +788,7 @@ describe('Coordinator registerCoordinator — idempotency', () => {
         coordinatorTaskId: 'coord-1',
       });
       const output = mockSubscribeToAgent.mock.calls[0]?.[1] as (encoded: string) => void;
-      output(encode('Starting MCP servers (0/2): codex_apps, parallel-code\n›'));
+      output(encode('Starting MCP servers (0/2): codex_apps, forge\n›'));
 
       await vi.advanceTimersByTimeAsync(1_500);
 
@@ -3196,7 +3196,7 @@ describe('Coordinator MCP_TaskCreated spawn settings', () => {
     };
     expect(payload.mcpLaunchArgs).toEqual([
       '--config',
-      expect.stringContaining('mcp_servers.parallel-code'),
+      expect.stringContaining('mcp_servers.forge'),
     ]);
   });
 
@@ -3265,15 +3265,15 @@ describe('Coordinator sub-task MCP config isolation', () => {
     await coordinator.createTask({ name: 'task-b', prompt: 'do b', coordinatorTaskId: 'coord-1' });
 
     const configWrites = mockAtomicWriteFile.mock.calls.filter((c) =>
-      (c[0] as string).includes('parallel-code-subtask-'),
+      (c[0] as string).includes('forge-subtask-'),
     );
     expect(configWrites).toHaveLength(2);
 
     const taskIds = configWrites.map((c) => {
       const cfg = JSON.parse(c[1] as string) as {
-        mcpServers: { 'parallel-code': { args: string[] } };
+        mcpServers: { forge: { args: string[] } };
       };
-      const args = cfg.mcpServers['parallel-code'].args;
+      const args = cfg.mcpServers['forge'].args;
       const idx = args.indexOf('--task-id');
       return idx >= 0 ? args[idx + 1] : null;
     });
@@ -3303,7 +3303,7 @@ describe('Coordinator sub-task MCP config isolation', () => {
     await coordinator.createTask({ name: 'task-b', prompt: 'do b', coordinatorTaskId: 'coord-1' });
 
     const configPaths = mockAtomicWriteFile.mock.calls
-      .filter((c) => (c[0] as string).includes('parallel-code-subtask-'))
+      .filter((c) => (c[0] as string).includes('forge-subtask-'))
       .map((c) => c[0] as string);
 
     expect(configPaths[0]).not.toBe(configPaths[1]);
@@ -3343,17 +3343,15 @@ describe('Coordinator MCP config restart rewrite', () => {
     expect(task?.mcpConfigPath).toBeDefined();
 
     const initialWrite = mockAtomicWriteFile.mock.calls.find((c) =>
-      (c[0] as string).includes('parallel-code-subtask-'),
+      (c[0] as string).includes('forge-subtask-'),
     );
     expect(initialWrite).toBeDefined();
     if (!initialWrite) throw new Error('expected initial config write');
     const initialConfig = JSON.parse(initialWrite[1] as string) as {
-      mcpServers: { 'parallel-code': { args: string[]; env: Record<string, string> } };
+      mcpServers: { forge: { args: string[]; env: Record<string, string> } };
     };
-    expect(initialConfig.mcpServers['parallel-code'].env['PARALLEL_CODE_MCP_TOKEN']).toBe(
-      'old-token',
-    );
-    expect(initialConfig.mcpServers['parallel-code'].args).toContain('http://localhost:3001');
+    expect(initialConfig.mcpServers['forge'].env['FORGE_MCP_TOKEN']).toBe('old-token');
+    expect(initialConfig.mcpServers['forge'].args).toContain('http://localhost:3001');
 
     // Simulate coordinator restart with new port/token
     mockAtomicWriteFileSync.mockClear();
@@ -3366,7 +3364,7 @@ describe('Coordinator MCP config restart rewrite', () => {
     );
 
     const rewriteCall = mockAtomicWriteFileSync.mock.calls.find((c) =>
-      (c[0] as string).includes('parallel-code-subtask-'),
+      (c[0] as string).includes('forge-subtask-'),
     );
     expect(rewriteCall).toBeDefined();
     if (!rewriteCall) throw new Error('expected rewrite call');
@@ -3375,16 +3373,14 @@ describe('Coordinator MCP config restart rewrite', () => {
 
     // Rewritten config is valid JSON with updated URL and token, preserving the task id
     const newConfig = JSON.parse(rewriteCall[1] as string) as {
-      mcpServers: { 'parallel-code': { args: string[]; env: Record<string, string> } };
+      mcpServers: { forge: { args: string[]; env: Record<string, string> } };
     };
-    const newArgs = newConfig.mcpServers['parallel-code'].args;
-    expect(newConfig.mcpServers['parallel-code'].env['PARALLEL_CODE_MCP_TOKEN']).toBe('new-token');
+    const newArgs = newConfig.mcpServers['forge'].args;
+    expect(newConfig.mcpServers['forge'].env['FORGE_MCP_TOKEN']).toBe('new-token');
     expect(newArgs).toContain('http://localhost:3002');
     expect(newArgs).toContain('task-1');
     // Old values must be gone
-    expect(newConfig.mcpServers['parallel-code'].env['PARALLEL_CODE_MCP_TOKEN']).not.toBe(
-      'old-token',
-    );
+    expect(newConfig.mcpServers['forge'].env['FORGE_MCP_TOKEN']).not.toBe('old-token');
     expect(newArgs).not.toContain('http://localhost:3001');
   });
 
@@ -3406,7 +3402,7 @@ describe('Coordinator MCP config restart rewrite', () => {
     );
 
     const configWrites = mockAtomicWriteFileSync.mock.calls.filter((c) =>
-      (c[0] as string).includes('parallel-code-subtask-'),
+      (c[0] as string).includes('forge-subtask-'),
     );
     expect(configWrites).toHaveLength(0);
   });
@@ -3436,16 +3432,16 @@ describe('Coordinator MCP config restart rewrite', () => {
     );
 
     const rewrites = mockAtomicWriteFileSync.mock.calls.filter((c) =>
-      (c[0] as string).includes('parallel-code-subtask-'),
+      (c[0] as string).includes('forge-subtask-'),
     );
     expect(rewrites).toHaveLength(2);
 
     for (const rewrite of rewrites) {
       const cfg = JSON.parse(rewrite[1] as string) as {
-        mcpServers: { 'parallel-code': { args: string[]; env: Record<string, string> } };
+        mcpServers: { forge: { args: string[]; env: Record<string, string> } };
       };
-      expect(cfg.mcpServers['parallel-code'].env['PARALLEL_CODE_MCP_TOKEN']).toBe('new-token');
-      expect(cfg.mcpServers['parallel-code'].args).toContain('http://localhost:3002');
+      expect(cfg.mcpServers['forge'].env['FORGE_MCP_TOKEN']).toBe('new-token');
+      expect(cfg.mcpServers['forge'].args).toContain('http://localhost:3002');
     }
   });
 
@@ -3464,7 +3460,7 @@ describe('Coordinator MCP config restart rewrite', () => {
     );
 
     const configWrites = mockAtomicWriteFileSync.mock.calls.filter((c) =>
-      (c[0] as string).includes('parallel-code-subtask-'),
+      (c[0] as string).includes('forge-subtask-'),
     );
     expect(configWrites).toHaveLength(0);
   });
@@ -3500,15 +3496,15 @@ describe('Coordinator two-class token — subtask configs use subtaskToken', () 
     await coordinator.createTask({ name: 'test', prompt: 'do', coordinatorTaskId: 'coord-1' });
 
     const configWrite = mockAtomicWriteFile.mock.calls.find((c) =>
-      (c[0] as string).includes('parallel-code-subtask-'),
+      (c[0] as string).includes('forge-subtask-'),
     );
     expect(configWrite).toBeDefined();
     if (!configWrite) throw new Error('expected config write');
 
     const config = JSON.parse(configWrite[1] as string) as {
-      mcpServers: { 'parallel-code': { env: Record<string, string> } };
+      mcpServers: { forge: { env: Record<string, string> } };
     };
-    const writtenToken = config.mcpServers['parallel-code'].env['PARALLEL_CODE_MCP_TOKEN'];
+    const writtenToken = config.mcpServers['forge'].env['FORGE_MCP_TOKEN'];
     expect(writtenToken).toBe('subtask-secret');
     expect(writtenToken).not.toBe('coordinator-secret');
   });
@@ -3533,15 +3529,15 @@ describe('Coordinator two-class token — subtask configs use subtaskToken', () 
     );
 
     const rewrite = mockAtomicWriteFileSync.mock.calls.find((c) =>
-      (c[0] as string).includes('parallel-code-subtask-'),
+      (c[0] as string).includes('forge-subtask-'),
     );
     expect(rewrite).toBeDefined();
     if (!rewrite) throw new Error('expected rewrite');
 
     const config = JSON.parse(rewrite[1] as string) as {
-      mcpServers: { 'parallel-code': { env: Record<string, string> } };
+      mcpServers: { forge: { env: Record<string, string> } };
     };
-    const writtenToken = config.mcpServers['parallel-code'].env['PARALLEL_CODE_MCP_TOKEN'];
+    const writtenToken = config.mcpServers['forge'].env['FORGE_MCP_TOKEN'];
     expect(writtenToken).toBe('new-subtask');
     expect(writtenToken).not.toBe('new-coordinator');
   });
@@ -4330,7 +4326,7 @@ describe('Coordinator cleanupTask — Docker sub-task container stop', () => {
     coordinator.setDefaultProject('proj-1', '/tmp/project');
     coordinator.registerCoordinator('coord-1', 'proj-1');
     coordinator.setDockerContainerName('coord-1', 'my-coord-container');
-    coordinator.setDockerImage('coord-1', 'parallel-code-agent:latest');
+    coordinator.setDockerImage('coord-1', 'forge-agent:latest');
   });
 
   it('closeTask calls killAgent (which stops the sub-task Docker container via pty.ts)', async () => {
@@ -4480,11 +4476,11 @@ describe('Multiple Docker coordinators — isolation', () => {
   });
 
   it('each coordinator has an isolated docker container name (no singleton leak)', () => {
-    coordA.setDockerContainerName('coord-a', 'parallel-code-container-a');
-    coordB.setDockerContainerName('coord-b', 'parallel-code-container-b');
+    coordA.setDockerContainerName('coord-a', 'forge-container-a');
+    coordB.setDockerContainerName('coord-b', 'forge-container-b');
 
     // The container names must differ — no shared singleton
-    expect('parallel-code-container-a').not.toBe('parallel-code-container-b');
+    expect('forge-container-a').not.toBe('forge-container-b');
   });
 
   it('sub-task MCP config for coord-a uses coord-a coordinator id, not coord-b', async () => {
@@ -4498,17 +4494,15 @@ describe('Multiple Docker coordinators — isolation', () => {
     await coordA.createTask({ name: 'task-a', prompt: 'do a', coordinatorTaskId: 'coord-a' });
 
     const configWrites = mockAtomicWriteFile.mock.calls.filter((c) =>
-      (c[0] as string).includes('parallel-code-subtask-'),
+      (c[0] as string).includes('forge-subtask-'),
     );
     expect(configWrites).toHaveLength(1);
 
     const cfg = JSON.parse(configWrites[0][1] as string) as {
-      mcpServers: { 'parallel-code': { args: string[]; env: Record<string, string> } };
+      mcpServers: { forge: { args: string[]; env: Record<string, string> } };
     };
-    expect(cfg.mcpServers['parallel-code'].env['PARALLEL_CODE_MCP_TOKEN']).toBe('subtask-tok-a');
-    expect(cfg.mcpServers['parallel-code'].env['PARALLEL_CODE_MCP_TOKEN']).not.toBe(
-      'subtask-tok-b',
-    );
+    expect(cfg.mcpServers['forge'].env['FORGE_MCP_TOKEN']).toBe('subtask-tok-a');
+    expect(cfg.mcpServers['forge'].env['FORGE_MCP_TOKEN']).not.toBe('subtask-tok-b');
   });
 });
 
@@ -4530,7 +4524,7 @@ describe('Coordinator Docker sub-task — per-container spawn', () => {
     coordinator.setDefaultProject('proj-1', '/tmp/project');
     coordinator.registerCoordinator('coord-1', 'proj-1');
     coordinator.setDockerContainerName('coord-1', 'my-coord-container');
-    coordinator.setDockerImage('coord-1', 'parallel-code-agent:latest');
+    coordinator.setDockerImage('coord-1', 'forge-agent:latest');
   });
 
   it('sub-task spawned with dockerMode: true (docker run), not docker exec', async () => {
@@ -4728,7 +4722,7 @@ describe('Coordinator close with active sub-tasks', () => {
     const task = coordinator.getTask('task-1');
     const configPath = task?.mcpConfigPath;
     expect(configPath).toBeDefined();
-    expect(configPath).toMatch(/parallel-code-subtask-task-1\.json$/);
+    expect(configPath).toMatch(/forge-subtask-task-1\.json$/);
 
     mockUnlinkSync.mockClear();
     await coordinator.closeTask('task-1');
@@ -4747,11 +4741,11 @@ describe('Coordinator close with active sub-tasks', () => {
     mockUnlinkSync.mockClear();
     await coordinator.closeTask('task-1');
 
-    // unlinkSync should NOT have been called with a parallel-code path
-    const parallelCodeCalls = mockUnlinkSync.mock.calls.filter(
-      (c) => typeof c[0] === 'string' && (c[0] as string).includes('parallel-code-subtask'),
+    // unlinkSync should NOT have been called with a forge path
+    const forgeCalls = mockUnlinkSync.mock.calls.filter(
+      (c) => typeof c[0] === 'string' && (c[0] as string).includes('forge-subtask'),
     );
-    expect(parallelCodeCalls).toHaveLength(0);
+    expect(forgeCalls).toHaveLength(0);
   });
 
   it('task is removed from map even when docker exec sub-tasks are active', async () => {
@@ -4938,10 +4932,10 @@ describe('Coordinator removeCoordinatedTask', () => {
     mockUnlinkSync.mockClear();
     coordinator.removeCoordinatedTask('task-1');
 
-    const parallelCodeCalls = mockUnlinkSync.mock.calls.filter(
-      (c) => typeof c[0] === 'string' && (c[0] as string).includes('parallel-code-subtask'),
+    const forgeCalls = mockUnlinkSync.mock.calls.filter(
+      (c) => typeof c[0] === 'string' && (c[0] as string).includes('forge-subtask'),
     );
-    expect(parallelCodeCalls).toHaveLength(0);
+    expect(forgeCalls).toHaveLength(0);
   });
 
   it('does NOT notify renderer (UI already removed the task)', async () => {
@@ -5002,7 +4996,7 @@ describe('Coordinator restart round-trip integration', () => {
     );
 
     const taskId = 'hydrated-restart-1';
-    const configPath = join(os.tmpdir(), `parallel-code-subtask-${taskId}.json`);
+    const configPath = join(os.tmpdir(), `forge-subtask-${taskId}.json`);
 
     mockAtomicWriteFileSync.mockClear();
     coordinator.hydrateTask({
@@ -5021,9 +5015,9 @@ describe('Coordinator restart round-trip integration', () => {
     expect(rewrite).toBeDefined();
     if (!rewrite) throw new Error('expected config rewrite');
     const config = JSON.parse(rewrite[1] as string) as {
-      mcpServers: { 'parallel-code': { env: Record<string, string> } };
+      mcpServers: { forge: { env: Record<string, string> } };
     };
-    const writtenToken = config.mcpServers['parallel-code'].env['PARALLEL_CODE_MCP_TOKEN'];
+    const writtenToken = config.mcpServers['forge'].env['FORGE_MCP_TOKEN'];
     expect(writtenToken).toBe('new-subtask-secret');
     expect(writtenToken).not.toBe('new-coordinator-secret');
   });
@@ -5038,7 +5032,7 @@ describe('Coordinator restart round-trip integration', () => {
     );
 
     const taskId = 'hydrated-restart-codex';
-    const configPath = join(os.tmpdir(), `parallel-code-subtask-${taskId}.json`);
+    const configPath = join(os.tmpdir(), `forge-subtask-${taskId}.json`);
 
     const result = coordinator.hydrateTask({
       id: taskId,
@@ -5100,7 +5094,7 @@ describe('Coordinator restart round-trip integration', () => {
     );
 
     const taskId = 'hydrated-restart-existing';
-    const configPath = join(os.tmpdir(), `parallel-code-subtask-${taskId}.json`);
+    const configPath = join(os.tmpdir(), `forge-subtask-${taskId}.json`);
     const args = {
       id: taskId,
       name: 'hydrated-task',
@@ -5134,7 +5128,7 @@ describe('Coordinator restart round-trip integration', () => {
 
     const taskId = 'hydrated-restart-2';
     const agentId = 'agent-restart-2';
-    const configPath = join(os.tmpdir(), `parallel-code-subtask-${taskId}.json`);
+    const configPath = join(os.tmpdir(), `forge-subtask-${taskId}.json`);
 
     coordinator.hydrateTask({
       id: taskId,
@@ -5184,7 +5178,7 @@ describe('Coordinator hydrateTask — mcpConfigPath directory scoping', () => {
       'http://localhost:3001',
       'tok',
       'subtok',
-      '/srv/app/.parallel-code/mcp-server.js',
+      '/srv/app/.forge/mcp-server.js',
     );
   });
 
@@ -5219,7 +5213,7 @@ describe('Coordinator hydrateTask — mcpConfigPath directory scoping', () => {
       worktreePath: '/tmp/wrong-dir',
       agentId: 'agent-wrong-dir',
       coordinatorTaskId: 'coord-1',
-      mcpConfigPath: `/tmp/evil/parallel-code-subtask-${taskId}.json`,
+      mcpConfigPath: `/tmp/evil/forge-subtask-${taskId}.json`,
     });
 
     expect(coordinator.getTask(taskId)?.mcpConfigPath).toBeUndefined();
@@ -5227,7 +5221,7 @@ describe('Coordinator hydrateTask — mcpConfigPath directory scoping', () => {
 
   it('correct host tmpdir path is accepted and config write occurs', () => {
     const taskId = 'task-valid-host';
-    const validPath = join(os.tmpdir(), `parallel-code-subtask-${taskId}.json`);
+    const validPath = join(os.tmpdir(), `forge-subtask-${taskId}.json`);
 
     mockAtomicWriteFileSync.mockClear();
     coordinator.hydrateTask({
@@ -5249,7 +5243,7 @@ describe('Coordinator hydrateTask — mcpConfigPath directory scoping', () => {
 
   it('Docker mode: dirname(serverPath)/subtask-{id}.json is accepted and config write occurs', () => {
     const taskId = 'task-valid-docker';
-    const serverPath = '/srv/app/.parallel-code/mcp-server.js';
+    const serverPath = '/srv/app/.forge/mcp-server.js';
     const dockerPath = join(dirname(serverPath), `subtask-${taskId}.json`);
 
     mockAtomicWriteFileSync.mockClear();
@@ -5361,8 +5355,8 @@ describe('Coordinator Docker mode — per-container sub-tasks', () => {
     coordinator.registerCoordinator('coord-docker', 'proj-1', {
       worktreePath: '/tmp/project/.worktrees/task/coord',
     });
-    coordinator.setDockerContainerName('coord-docker', 'parallel-code-abcdef123456');
-    coordinator.setDockerImage('coord-docker', 'parallel-code-agent:latest');
+    coordinator.setDockerContainerName('coord-docker', 'forge-abcdef123456');
+    coordinator.setDockerImage('coord-docker', 'forge-agent:latest');
     coordinator.setCoordinatorSpawnDefaults('coord-docker', 'claude', []);
   });
 
@@ -5382,7 +5376,7 @@ describe('Coordinator Docker mode — per-container sub-tasks', () => {
     // Args do not contain 'exec'
     expect(spawnCall.args).not.toContain('exec');
     // Args do not contain the coordinator container name
-    expect(spawnCall.args).not.toContain('parallel-code-abcdef123456');
+    expect(spawnCall.args).not.toContain('forge-abcdef123456');
   });
 
   it('createTask passes the coordinator Docker image to spawnAgent', async () => {
@@ -5392,10 +5386,10 @@ describe('Coordinator Docker mode — per-container sub-tasks', () => {
     });
 
     const spawnCall = mockSpawnAgent.mock.calls[0][1];
-    expect(spawnCall.dockerImage).toBe('parallel-code-agent:latest');
+    expect(spawnCall.dockerImage).toBe('forge-agent:latest');
   });
 
-  it('createTask sets dockerMountWorktreeParent: true so coordinator .parallel-code/ is accessible', async () => {
+  it('createTask sets dockerMountWorktreeParent: true so coordinator .forge/ is accessible', async () => {
     await coordinator.createTask({
       name: 'docker-sub-task',
       coordinatorTaskId: 'coord-docker',
@@ -5854,13 +5848,13 @@ describe('Coordinator deregisterCoordinator — .mcp.json cleanup', () => {
     coordinator.setMcpJsonInfo('coord-1', '/tmp/.mcp.json', false);
   });
 
-  it('removes only the parallel-code key and preserves other servers', () => {
+  it('removes only the forge key and preserves other servers', () => {
     mockExistsSync.mockReturnValue(true);
     mockReadFileSync.mockReturnValue(
       JSON.stringify({
         mcpServers: {
           'my-server': { command: 'my-tool', args: [] },
-          'parallel-code': { command: 'node', args: ['server.js'] },
+          forge: { command: 'node', args: ['server.js'] },
         },
       }),
     );
@@ -5875,15 +5869,15 @@ describe('Coordinator deregisterCoordinator — .mcp.json cleanup', () => {
       mcpServers: Record<string, unknown>;
     };
     expect(written.mcpServers['my-server']).toBeDefined();
-    expect(written.mcpServers['parallel-code']).toBeUndefined();
+    expect(written.mcpServers['forge']).toBeUndefined();
     expect(mockUnlinkSync).not.toHaveBeenCalledWith('/tmp/.mcp.json');
   });
 
-  it('deletes the file when parallel-code was the only entry', () => {
+  it('deletes the file when forge was the only entry', () => {
     mockExistsSync.mockReturnValue(true);
     mockReadFileSync.mockReturnValue(
       JSON.stringify({
-        mcpServers: { 'parallel-code': { command: 'node', args: ['server.js'] } },
+        mcpServers: { forge: { command: 'node', args: ['server.js'] } },
       }),
     );
 
@@ -5909,7 +5903,7 @@ describe('Coordinator deregisterCoordinator — .mcp.json cleanup', () => {
     mockExistsSync.mockReturnValue(true);
     mockReadFileSync.mockReturnValue(
       JSON.stringify({
-        mcpServers: { 'parallel-code': { command: 'node', args: [] } },
+        mcpServers: { forge: { command: 'node', args: [] } },
         someOtherKey: 'kept',
       }),
     );

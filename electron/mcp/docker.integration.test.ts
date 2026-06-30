@@ -69,9 +69,9 @@ describeDocker('Docker MCP integration', () => {
     if (worktreePath) rmSync(worktreePath, { recursive: true, force: true });
   });
 
-  it('runs the bundled MCP server inside the Parallel Code Docker image and reaches the host remote API', async () => {
-    worktreePath = mkdtempSync(join(tmpdir(), 'parallel-code-docker-mcp-'));
-    const mcpDir = join(worktreePath, '.parallel-code');
+  it('runs the bundled MCP server inside the Forge Docker image and reaches the host remote API', async () => {
+    worktreePath = mkdtempSync(join(tmpdir(), 'forge-docker-mcp-'));
+    const mcpDir = join(worktreePath, '.forge');
     mkdirSync(mcpDir, { recursive: true });
 
     const bundledMcpServerPath = join(process.cwd(), 'dist-electron', 'mcp-server.cjs');
@@ -115,14 +115,14 @@ describeDocker('Docker MCP integration', () => {
       getCoordinator: () => coordinator,
     });
 
-    const serverUrl = getMCPRemoteServerUrl(remoteServer.port, 'parallel-code-test-container');
+    const serverUrl = getMCPRemoteServerUrl(remoteServer.port, 'forge-test-container');
     const mcpConfig = {
       mcpServers: {
-        'parallel-code': {
+        forge: {
           type: 'stdio',
           command: 'node',
           args: [dockerMcpServerPath, '--url', serverUrl, '--coordinator-id', 'coord-1'],
-          env: { PARALLEL_CODE_MCP_TOKEN: remoteServer.token },
+          env: { FORGE_MCP_TOKEN: remoteServer.token },
         },
       },
     };
@@ -141,7 +141,7 @@ describeDocker('Docker MCP integration', () => {
         '-w',
         worktreePath,
         '-e',
-        `PARALLEL_CODE_MCP_TOKEN=${remoteServer.token}`,
+        `FORGE_MCP_TOKEN=${remoteServer.token}`,
         DOCKER_DEFAULT_IMAGE,
         'node',
         dockerMcpServerPath,
@@ -151,7 +151,7 @@ describeDocker('Docker MCP integration', () => {
         'coord-1',
       ],
     });
-    const client = new Client({ name: 'parallel-code-docker-mcp-test', version: '1.0.0' });
+    const client = new Client({ name: 'forge-docker-mcp-test', version: '1.0.0' });
 
     try {
       await client.connect(transport);
@@ -174,9 +174,9 @@ describeDocker('Docker MCP integration', () => {
   // Regression test for the bug where sub-task MCP config was written to the sub-task
   // worktree (not a Docker volume mount) and relied on auto-discovery instead of --mcp-config.
   // This test simulates a sub-task running via `docker exec --mcp-config <coordinator-vol-path>`.
-  it('sub-task reaches MCP server via explicit --mcp-config in coordinator .parallel-code dir', async () => {
-    const coordWorktree = mkdtempSync(join(tmpdir(), 'parallel-code-coord-'));
-    const mcpDir = join(coordWorktree, '.parallel-code');
+  it('sub-task reaches MCP server via explicit --mcp-config in coordinator .forge dir', async () => {
+    const coordWorktree = mkdtempSync(join(tmpdir(), 'forge-coord-'));
+    const mcpDir = join(coordWorktree, '.forge');
     mkdirSync(mcpDir, { recursive: true });
 
     const bundledMcpServerPath = join(process.cwd(), 'dist-electron', 'mcp-server.cjs');
@@ -212,28 +212,28 @@ describeDocker('Docker MCP integration', () => {
     });
 
     try {
-      const serverUrl = getMCPRemoteServerUrl(port2, 'parallel-code-test-container');
+      const serverUrl = getMCPRemoteServerUrl(port2, 'forge-test-container');
       const taskId = 'sub-task-docker-test';
 
-      // getSubTaskMcpConfigPath must use the coordinator's .parallel-code dir, not a sub-task worktree
+      // getSubTaskMcpConfigPath must use the coordinator's .forge dir, not a sub-task worktree
       const configPath = getSubTaskMcpConfigPath(
-        'parallel-code-test-container',
+        'forge-test-container',
         dockerMcpServerPath,
         taskId,
       );
       expect(dirname(configPath)).toBe(mcpDir); // the coordinator's volume dir
-      // Assert the config path is inside the coordinator's .parallel-code dir (which IS a Docker volume)
+      // Assert the config path is inside the coordinator's .forge dir (which IS a Docker volume)
       // NOT in any sub-task worktree (which is NOT a Docker volume)
-      expect(dirname(configPath).endsWith('/.parallel-code')).toBe(true);
+      expect(dirname(configPath).endsWith('/.forge')).toBe(true);
       expect(configPath.startsWith(coordWorktree)).toBe(true);
 
       const subMcpConfig = {
         mcpServers: {
-          'parallel-code': {
+          forge: {
             type: 'stdio',
             command: 'node',
             args: [dockerMcpServerPath, '--url', serverUrl, '--task-id', taskId],
-            env: { PARALLEL_CODE_MCP_TOKEN: subServer.token },
+            env: { FORGE_MCP_TOKEN: subServer.token },
           },
         },
       };
@@ -252,7 +252,7 @@ describeDocker('Docker MCP integration', () => {
           '-w',
           coordWorktree,
           '-e',
-          `PARALLEL_CODE_MCP_TOKEN=${subServer.token}`,
+          `FORGE_MCP_TOKEN=${subServer.token}`,
           DOCKER_DEFAULT_IMAGE,
           'node',
           dockerMcpServerPath,
@@ -262,7 +262,7 @@ describeDocker('Docker MCP integration', () => {
           taskId,
         ],
       });
-      const subClient = new Client({ name: 'parallel-code-subtask-test', version: '1.0.0' });
+      const subClient = new Client({ name: 'forge-subtask-test', version: '1.0.0' });
 
       try {
         await subClient.connect(transport);
@@ -295,7 +295,7 @@ describeDocker('Layer 2 — Docker smoke tests', () => {
 
   beforeAll(async () => {
     requireDockerImage(DOCKER_DEFAULT_IMAGE);
-    coordWorktree = mkdtempSync(join(tmpdir(), 'parallel-code-smoke-'));
+    coordWorktree = mkdtempSync(join(tmpdir(), 'forge-smoke-'));
     remotePort = await findFreePort();
 
     const mockCoordinator = { listTasks: () => [] } as unknown as Coordinator;
@@ -437,7 +437,7 @@ describeDocker('Layer 4 — Production-path coordinator Docker scenario', () => 
   });
 
   it('uses production config pipeline to generate .mcp.json, then create_task reaches coordinator', async () => {
-    scenarioWorktree = mkdtempSync(join(tmpdir(), 'parallel-code-prod-path-'));
+    scenarioWorktree = mkdtempSync(join(tmpdir(), 'forge-prod-path-'));
 
     // --- Start remote server with a real coordinator stub ---
     const port = await findFreePort();
@@ -490,7 +490,7 @@ describeDocker('Layer 4 — Production-path coordinator Docker scenario', () => 
     writeFileSync(mcpJsonPath, JSON.stringify(mcpConfig, null, 2), { mode: 0o600 });
 
     // --- Assert the generated config uses the correct URL ---
-    const args = mcpConfig.mcpServers['parallel-code'].args;
+    const args = mcpConfig.mcpServers['forge'].args;
     const urlIdx = args.indexOf('--url');
     if (platform() === 'darwin') {
       expect(args[urlIdx + 1]).toContain('host.docker.internal');
@@ -515,7 +515,7 @@ describeDocker('Layer 4 — Production-path coordinator Docker scenario', () => 
         '-w',
         scenarioWorktree,
         '-e',
-        `PARALLEL_CODE_MCP_TOKEN=${scenarioServer.token}`,
+        `FORGE_MCP_TOKEN=${scenarioServer.token}`,
         DOCKER_DEFAULT_IMAGE,
         'node',
         destPath,
@@ -525,7 +525,7 @@ describeDocker('Layer 4 — Production-path coordinator Docker scenario', () => 
         'coord-prod',
       ],
     });
-    const client = new Client({ name: 'parallel-code-prod-path-test', version: '1.0.0' });
+    const client = new Client({ name: 'forge-prod-path-test', version: '1.0.0' });
 
     try {
       await client.connect(transport);
@@ -552,7 +552,7 @@ describeDocker('Layer 4 — Production-path coordinator Docker scenario', () => 
 //
 // No Docker required. Verifies that StartMCPServer args accept `dockerImage`
 // and that `getSubTaskMcpConfigPath` still returns a path in the coordinator's
-// .parallel-code/ dir (the only dir that is a mounted volume in both coordinator
+// .forge/ dir (the only dir that is a mounted volume in both coordinator
 // and per-sub-task containers).
 
 describe('Docker per-container sub-tasks — StartMCPServer arg validation', () => {
@@ -564,8 +564,8 @@ describe('Docker per-container sub-tasks — StartMCPServer arg validation', () 
         coordinatorTaskId: VALID_UUID,
         projectId: 'proj-1',
         projectRoot: '/tmp/project',
-        dockerContainerName: 'parallel-code-abc123',
-        dockerImage: 'parallel-code-agent:latest',
+        dockerContainerName: 'forge-abc123',
+        dockerImage: 'forge-agent:latest',
       }),
     ).not.toThrow();
   });
@@ -581,12 +581,12 @@ describe('Docker per-container sub-tasks — StartMCPServer arg validation', () 
     ).toThrow('dockerImage must not be blank');
   });
 
-  it('sub-task MCP config path is in coordinator .parallel-code/ dir (a Docker volume), not the sub-task worktree', () => {
+  it('sub-task MCP config path is in coordinator .forge/ dir (a Docker volume), not the sub-task worktree', () => {
     const coordWorktree = '/tmp/project/.worktrees/task/coord-abc';
-    const mcpServerPath = `${coordWorktree}/.parallel-code/mcp-server.cjs`;
-    const configPath = getSubTaskMcpConfigPath('parallel-code-coord-abc', mcpServerPath, 'sub-1');
-    // Must be inside the coordinator's .parallel-code/ dir
-    expect(configPath.startsWith(`${coordWorktree}/.parallel-code/`)).toBe(true);
+    const mcpServerPath = `${coordWorktree}/.forge/mcp-server.cjs`;
+    const configPath = getSubTaskMcpConfigPath('forge-coord-abc', mcpServerPath, 'sub-1');
+    // Must be inside the coordinator's .forge/ dir
+    expect(configPath.startsWith(`${coordWorktree}/.forge/`)).toBe(true);
     // Must NOT be in a sub-task worktree (which is not a Docker volume)
     expect(configPath).not.toContain('.worktrees/task/sub-');
   });
@@ -616,7 +616,7 @@ describe('Docker coordinator bootstrap — path edge cases', () => {
   it('preserves spaces in worktree path for mcp-server.cjs dest', () => {
     const worktreePath = '/Users/alice bob/my repos/.worktrees/task/coord-abc';
     const dest = getDockerMcpServerDestPath(worktreePath, '/irrelevant');
-    expect(dest).toBe(`${worktreePath}/.parallel-code/mcp-server.cjs`);
+    expect(dest).toBe(`${worktreePath}/.forge/mcp-server.cjs`);
   });
 
   it('preserves spaces in worktree path for .mcp.json dir selection', () => {
@@ -630,15 +630,13 @@ describe('Docker coordinator bootstrap — path edge cases', () => {
     // Separately, the worktreePath IS the Claude trust key — verify it is not mangled.
     const worktreePath = '/Users/alice bob/my repos/.worktrees/task/coord abc 123';
     const cfg = buildCoordinatorMCPConfig({
-      mcpServerPath: `${worktreePath}/.parallel-code/mcp-server.cjs`,
+      mcpServerPath: `${worktreePath}/.forge/mcp-server.cjs`,
       serverUrl: 'http://host.docker.internal:3001',
       token: 'tok',
       coordinatorTaskId: 'coord-1',
     });
     // The MCP server path arg must contain the verbatim worktree path
-    expect(cfg.mcpServers['parallel-code'].args[0]).toBe(
-      `${worktreePath}/.parallel-code/mcp-server.cjs`,
-    );
+    expect(cfg.mcpServers['forge'].args[0]).toBe(`${worktreePath}/.forge/mcp-server.cjs`);
   });
 });
 
@@ -647,15 +645,15 @@ describe('Docker coordinator bootstrap — path edge cases', () => {
 describe('Docker coordinator bootstrap — port/token rotation in .mcp.json', () => {
   it('buildCoordinatorMCPConfig reflects new port when called with updated serverUrl', () => {
     const opts = {
-      mcpServerPath: '/worktrees/coord/.parallel-code/mcp-server.cjs',
+      mcpServerPath: '/worktrees/coord/.forge/mcp-server.cjs',
       serverUrl: 'http://host.docker.internal:3001',
       token: 'old-token',
       coordinatorTaskId: 'coord-1',
     };
     const cfgBefore = buildCoordinatorMCPConfig(opts);
-    const argsBefore = cfgBefore.mcpServers['parallel-code'].args;
+    const argsBefore = cfgBefore.mcpServers['forge'].args;
     expect(argsBefore).toContain('http://host.docker.internal:3001');
-    expect(cfgBefore.mcpServers['parallel-code'].env['PARALLEL_CODE_MCP_TOKEN']).toBe('old-token');
+    expect(cfgBefore.mcpServers['forge'].env['FORGE_MCP_TOKEN']).toBe('old-token');
 
     // Simulate restart: new port and token
     const cfgAfter = buildCoordinatorMCPConfig({
@@ -663,13 +661,11 @@ describe('Docker coordinator bootstrap — port/token rotation in .mcp.json', ()
       serverUrl: 'http://host.docker.internal:3099',
       token: 'new-token',
     });
-    const argsAfter = cfgAfter.mcpServers['parallel-code'].args;
+    const argsAfter = cfgAfter.mcpServers['forge'].args;
     expect(argsAfter).toContain('http://host.docker.internal:3099');
-    expect(cfgAfter.mcpServers['parallel-code'].env['PARALLEL_CODE_MCP_TOKEN']).toBe('new-token');
+    expect(cfgAfter.mcpServers['forge'].env['FORGE_MCP_TOKEN']).toBe('new-token');
     expect(argsAfter).not.toContain('http://host.docker.internal:3001');
-    expect(cfgAfter.mcpServers['parallel-code'].env['PARALLEL_CODE_MCP_TOKEN']).not.toBe(
-      'old-token',
-    );
+    expect(cfgAfter.mcpServers['forge'].env['FORGE_MCP_TOKEN']).not.toBe('old-token');
   });
 });
 
@@ -680,14 +676,14 @@ describe('Docker coordinator bootstrap — non-Claude agent MCP connectivity', (
     // MCP config is written by the coordinator bootstrap, not by the inner agent.
     // A Codex or OpenCode agent in Docker still gets MCP injected via .mcp.json.
     const cfg = buildCoordinatorMCPConfig({
-      mcpServerPath: '/worktrees/coord/.parallel-code/mcp-server.cjs',
+      mcpServerPath: '/worktrees/coord/.forge/mcp-server.cjs',
       serverUrl: 'http://host.docker.internal:3001',
       token: 'tok',
       coordinatorTaskId: 'coord-1',
     });
     // Config structure is the same regardless of inner agent command
-    expect(cfg.mcpServers['parallel-code'].type).toBe('stdio');
-    expect(cfg.mcpServers['parallel-code'].command).toBe('node');
+    expect(cfg.mcpServers['forge'].type).toBe('stdio');
+    expect(cfg.mcpServers['forge'].command).toBe('node');
   });
 });
 
@@ -739,7 +735,7 @@ describeDocker('Layer 9 — Project Dockerfile image MCP smoke test', () => {
     requireDockerImage(projectImage);
 
     const worktree = mkdtempSync(join(tmpdir(), 'docker-project-img-'));
-    const mcpDir = join(worktree, '.parallel-code');
+    const mcpDir = join(worktree, '.forge');
     mkdirSync(mcpDir, { recursive: true });
 
     const mcpServerSrc = join(dirname(new URL(import.meta.url).pathname), '..', 'mcp-server.cjs');
@@ -769,7 +765,7 @@ describeDocker('Layer 9 — Project Dockerfile image MCP smoke test', () => {
           '-w',
           worktree,
           '-e',
-          `PARALLEL_CODE_MCP_TOKEN=${server.token}`,
+          `FORGE_MCP_TOKEN=${server.token}`,
           projectImage,
           'node',
           destPath,
@@ -799,7 +795,7 @@ describe('Docker coordinator bootstrap — unicode paths', () => {
   it('unicode characters in worktree path are preserved verbatim in config', () => {
     const worktreePath = '/Users/张三/projects/我的代码/.worktrees/task/coord-abc';
     const dest = getDockerMcpServerDestPath(worktreePath, '/irrelevant');
-    expect(dest).toBe(`${worktreePath}/.parallel-code/mcp-server.cjs`);
+    expect(dest).toBe(`${worktreePath}/.forge/mcp-server.cjs`);
     expect(selectMcpJsonDir(worktreePath, '/irrelevant')).toBe(worktreePath);
   });
 
@@ -810,21 +806,21 @@ describe('Docker coordinator bootstrap — unicode paths', () => {
       token: 'tok',
       coordinatorTaskId: 'coord-任务-1',
     });
-    const coordIdx = cfg.mcpServers['parallel-code'].args.indexOf('--coordinator-id');
-    expect(cfg.mcpServers['parallel-code'].args[coordIdx + 1]).toBe('coord-任务-1');
+    const coordIdx = cfg.mcpServers['forge'].args.indexOf('--coordinator-id');
+    expect(cfg.mcpServers['forge'].args[coordIdx + 1]).toBe('coord-任务-1');
   });
 
   it('unicode in worktree path generates valid JSON', () => {
     const worktreePath = '/home/ünïcödé/project/.worktrees/tâsk/coord';
     const cfg = buildCoordinatorMCPConfig({
-      mcpServerPath: `${worktreePath}/.parallel-code/mcp-server.cjs`,
+      mcpServerPath: `${worktreePath}/.forge/mcp-server.cjs`,
       serverUrl: 'http://host.docker.internal:3001',
       token: 'tök',
       coordinatorTaskId: 'coord-ünïcödé',
     });
     const json = JSON.stringify(cfg, null, 2);
     const parsed = JSON.parse(json) as typeof cfg;
-    expect(parsed.mcpServers['parallel-code'].args[0]).toContain('ünïcödé');
+    expect(parsed.mcpServers['forge'].args[0]).toContain('ünïcödé');
   });
 });
 
@@ -835,7 +831,7 @@ describeDocker('Layer 2 — MCP tool schema drift between host and Docker', () =
     requireDockerImage(DOCKER_DEFAULT_IMAGE);
 
     const worktree = mkdtempSync(join(tmpdir(), 'docker-schema-drift-'));
-    const mcpDir = join(worktree, '.parallel-code');
+    const mcpDir = join(worktree, '.forge');
     mkdirSync(mcpDir, { recursive: true });
 
     const bundledMcpServerPath = join(process.cwd(), 'dist-electron', 'mcp-server.cjs');
@@ -859,7 +855,7 @@ describeDocker('Layer 2 — MCP tool schema drift between host and Docker', () =
     const hostTransport = new HostTransport({
       command: 'node',
       args: [destPath, '--url', `http://127.0.0.1:${port}`],
-      env: { ...process.env, PARALLEL_CODE_MCP_TOKEN: server.token },
+      env: { ...process.env, FORGE_MCP_TOKEN: server.token },
     });
     const hostClient = new HostClient({ name: 'host-schema-test', version: '1.0.0' });
 
@@ -882,7 +878,7 @@ describeDocker('Layer 2 — MCP tool schema drift between host and Docker', () =
           '-w',
           worktree,
           '-e',
-          `PARALLEL_CODE_MCP_TOKEN=${server.token}`,
+          `FORGE_MCP_TOKEN=${server.token}`,
           DOCKER_DEFAULT_IMAGE,
           'node',
           destPath,
@@ -929,7 +925,7 @@ describeDocker('Layer 2 — Large MCP response over Docker stdio', () => {
     requireDockerImage(DOCKER_DEFAULT_IMAGE);
 
     const worktree = mkdtempSync(join(tmpdir(), 'docker-large-resp-'));
-    const mcpDir = join(worktree, '.parallel-code');
+    const mcpDir = join(worktree, '.forge');
     mkdirSync(mcpDir, { recursive: true });
 
     const bundledMcpServerPath = join(process.cwd(), 'dist-electron', 'mcp-server.cjs');
@@ -972,7 +968,7 @@ describeDocker('Layer 2 — Large MCP response over Docker stdio', () => {
           '-w',
           worktree,
           '-e',
-          `PARALLEL_CODE_MCP_TOKEN=${server.token}`,
+          `FORGE_MCP_TOKEN=${server.token}`,
           DOCKER_DEFAULT_IMAGE,
           'node',
           destPath,

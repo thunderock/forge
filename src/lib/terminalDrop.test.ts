@@ -127,13 +127,13 @@ describe('dataTransferToShellArgs', () => {
 
   it('falls back to SaveDroppedImage IPC when File has no path', async () => {
     getPathForFile.mockReturnValue('');
-    invoke.mockResolvedValue('/tmp/parallel-code-drop-123-screenshot.png');
+    invoke.mockResolvedValue('/tmp/forge-drop-123-screenshot.png');
     const bytes = new Uint8Array([137, 80, 78, 71]); // PNG magic
     const dt = makeFakeDt([makeFakeFile('screenshot.png', bytes)]);
 
     const args = await dataTransferToShellArgs(dt);
 
-    expect(args).toBe('/tmp/parallel-code-drop-123-screenshot.png');
+    expect(args).toBe('/tmp/forge-drop-123-screenshot.png');
     expect(invoke).toHaveBeenCalledTimes(1);
     const [channel, payload] = invoke.mock.calls[0];
     expect(channel).toBe('save_dropped_image');

@@ -265,13 +265,13 @@ function parseArgs(argv: string[]): { url: string; taskId: string; coordinatorId
 
 async function main(): Promise<void> {
   const { url, taskId, coordinatorId } = parseArgs(process.argv.slice(2));
-  const token = process.env.PARALLEL_CODE_MCP_TOKEN ?? '';
-  const doneToken = process.env.PARALLEL_CODE_MCP_DONE_TOKEN || undefined;
+  const token = process.env.FORGE_MCP_TOKEN ?? '';
+  const doneToken = process.env.FORGE_MCP_DONE_TOKEN || undefined;
 
   if (!url || !token) {
     console.error(
       'Usage: node server.js --url <remote-server-url> [--task-id <taskId>] [--coordinator-id <coordinatorId>]\n' +
-        'Token must be set via PARALLEL_CODE_MCP_TOKEN environment variable.',
+        'Token must be set via FORGE_MCP_TOKEN environment variable.',
     );
     process.exit(1);
   }
@@ -289,10 +289,7 @@ async function main(): Promise<void> {
   }
 
   const client = new MCPClient(url, token, coordinatorId || undefined, doneToken);
-  const server = new Server(
-    { name: 'parallel-code', version: '1.0.0' },
-    { capabilities: { tools: {} } },
-  );
+  const server = new Server({ name: 'forge', version: '1.0.0' }, { capabilities: { tools: {} } });
 
   server.setRequestHandler(ListToolsRequestSchema, async () => {
     return { tools: selectTools(taskId, coordinatorId) };

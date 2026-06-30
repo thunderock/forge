@@ -28,7 +28,7 @@ const TEST_COORDINATOR_ID = '12345678-1234-4234-8234-123456789abc';
 const tempDirs: string[] = [];
 
 function mkTemp(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'parallel-code-mcp-test-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-mcp-test-'));
   tempDirs.push(dir);
   return dir;
 }
@@ -83,7 +83,7 @@ describe('Layer 3 — MCP startup pipeline (no Electron, real FS)', () => {
     expect(fs.existsSync(destPath)).toBe(true);
 
     const written = JSON.parse(fs.readFileSync(mcpJsonPath, 'utf-8')) as typeof mcpConfig;
-    const server = written.mcpServers['parallel-code'];
+    const server = written.mcpServers['forge'];
 
     // Server path in config points to the COPIED file inside the worktree, not the original
     expect(server.args[0]).toBe(destPath);
@@ -96,10 +96,10 @@ describe('Layer 3 — MCP startup pipeline (no Electron, real FS)', () => {
 
     // Token is passed via env var, not args
     expect(server.args).not.toContain('--token');
-    expect(server.env['PARALLEL_CODE_MCP_TOKEN']).toBe(token);
+    expect(server.env['FORGE_MCP_TOKEN']).toBe(token);
   });
 
-  it('mcp-server.cjs is copied to .parallel-code inside the worktree', () => {
+  it('mcp-server.cjs is copied to .forge inside the worktree', () => {
     const worktreePath = mkTemp();
     const projectRoot = mkTemp();
     const fakeSrc = path.join(mkTemp(), 'mcp-server.cjs');
@@ -109,9 +109,9 @@ describe('Layer 3 — MCP startup pipeline (no Electron, real FS)', () => {
     fs.mkdirSync(path.dirname(destPath), { recursive: true });
     fs.copyFileSync(fakeSrc, destPath);
 
-    // Must be inside worktree, under .parallel-code/
+    // Must be inside worktree, under .forge/
     expect(destPath.startsWith(worktreePath)).toBe(true);
-    expect(destPath).toContain('/.parallel-code/mcp-server.cjs');
+    expect(destPath).toContain('/.forge/mcp-server.cjs');
     expect(fs.existsSync(destPath)).toBe(true);
   });
 
@@ -169,7 +169,7 @@ describe('Layer 3 — MCP startup pipeline (no Electron, real FS)', () => {
 
     const written = JSON.parse(fs.readFileSync(mcpJsonPath, 'utf-8')) as typeof cfg;
     // URL is 127.0.0.1 (non-Docker)
-    const args = written.mcpServers['parallel-code'].args;
+    const args = written.mcpServers['forge'].args;
     const urlIdx = args.indexOf('--url');
     expect(args[urlIdx + 1]).toBe('http://127.0.0.1:3001');
     // Server path is the host path (no copy)
@@ -182,7 +182,7 @@ describe('Layer 3 — MCP startup pipeline (no Electron, real FS)', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('Layer 3b — .mcp.json merge and cleanup', () => {
-  it('merges parallel-code into a pre-existing .mcp.json preserving other servers', () => {
+  it('merges forge into a pre-existing .mcp.json preserving other servers', () => {
     const worktreePath = mkTemp();
     const projectRoot = mkTemp();
     const mcpJsonDir = selectMcpJsonDir(worktreePath, projectRoot);
@@ -207,10 +207,10 @@ describe('Layer 3b — .mcp.json merge and cleanup', () => {
 
     const written = JSON.parse(fs.readFileSync(mcpJsonPath, 'utf-8')) as typeof parsed;
     expect(written.mcpServers?.['my-server']).toEqual({ command: 'my-tool', args: [] });
-    expect(written.mcpServers?.['parallel-code']).toBeDefined();
+    expect(written.mcpServers?.['forge']).toBeDefined();
   });
 
-  it('deregister removes parallel-code key and preserves other servers', () => {
+  it('deregister removes forge key and preserves other servers', () => {
     const worktreePath = mkTemp();
     const projectRoot = mkTemp();
     const mcpJsonDir = selectMcpJsonDir(worktreePath, projectRoot);
@@ -220,7 +220,7 @@ describe('Layer 3b — .mcp.json merge and cleanup', () => {
     const twoServers = {
       mcpServers: {
         'my-server': { command: 'my-tool', args: [] },
-        'parallel-code': { command: 'node', args: ['server.cjs'] },
+        forge: { command: 'node', args: ['server.cjs'] },
       },
     };
     fs.writeFileSync(mcpJsonPath, JSON.stringify(twoServers, null, 2));
@@ -228,7 +228,7 @@ describe('Layer 3b — .mcp.json merge and cleanup', () => {
     // Simulate deregisterCoordinator cleanup logic
     const raw = fs.readFileSync(mcpJsonPath, 'utf-8');
     const content = JSON.parse(raw) as { mcpServers?: Record<string, unknown> };
-    if (content.mcpServers) delete content.mcpServers['parallel-code'];
+    if (content.mcpServers) delete content.mcpServers['forge'];
     const hasServers = Object.keys(content.mcpServers ?? {}).length > 0;
     const hasOtherKeys = Object.keys(content).filter((k) => k !== 'mcpServers').length > 0;
     if (!hasServers && !hasOtherKeys) {
@@ -241,21 +241,21 @@ describe('Layer 3b — .mcp.json merge and cleanup', () => {
     expect(fs.existsSync(mcpJsonPath)).toBe(true);
     const written = JSON.parse(fs.readFileSync(mcpJsonPath, 'utf-8')) as typeof content;
     expect(written.mcpServers?.['my-server']).toEqual({ command: 'my-tool', args: [] });
-    expect(written.mcpServers?.['parallel-code']).toBeUndefined();
+    expect(written.mcpServers?.['forge']).toBeUndefined();
   });
 
-  it('deregister deletes the file when parallel-code was the only entry', () => {
+  it('deregister deletes the file when forge was the only entry', () => {
     const worktreePath = mkTemp();
     const projectRoot = mkTemp();
     const mcpJsonDir = selectMcpJsonDir(worktreePath, projectRoot);
     const mcpJsonPath = path.join(mcpJsonDir, '.mcp.json');
 
-    const onlyUs = { mcpServers: { 'parallel-code': { command: 'node', args: [] } } };
+    const onlyUs = { mcpServers: { forge: { command: 'node', args: [] } } };
     fs.writeFileSync(mcpJsonPath, JSON.stringify(onlyUs, null, 2));
 
     const raw = fs.readFileSync(mcpJsonPath, 'utf-8');
     const content = JSON.parse(raw) as { mcpServers?: Record<string, unknown> };
-    if (content.mcpServers) delete content.mcpServers['parallel-code'];
+    if (content.mcpServers) delete content.mcpServers['forge'];
     const hasServers = Object.keys(content.mcpServers ?? {}).length > 0;
     const hasOtherKeys = Object.keys(content).filter((k) => k !== 'mcpServers').length > 0;
     if (!hasServers && !hasOtherKeys) {
@@ -487,7 +487,7 @@ describe('Layer 5 — Failure modes', () => {
       token: 'tok',
       coordinatorTaskId: TEST_COORDINATOR_ID,
     });
-    const args = staleCfg.mcpServers['parallel-code'].args;
+    const args = staleCfg.mcpServers['forge'].args;
     const urlIdx = args.indexOf('--url');
     const url = args[urlIdx + 1];
 

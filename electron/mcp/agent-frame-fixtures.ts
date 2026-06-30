@@ -14,7 +14,7 @@ export const READY_AGENT_FRAME_FIXTURES: AgentFrameFixture[] = [
       '│ >',
       '❯',
       '',
-      'opus · /Users/brooksc/git/parallel-code/.worktrees/task-023-10-loading-states · ctx:24k/200k',
+      'opus · /Users/brooksc/git/forge/.worktrees/task-023-10-loading-states · ctx:24k/200k',
     ].join('\n'),
   },
   {
@@ -22,7 +22,7 @@ export const READY_AGENT_FRAME_FIXTURES: AgentFrameFixture[] = [
     frame: [
       '│ >',
       '-- INSERT --',
-      'opus · /Users/brooksc/git/parallel-code/.worktrees/task-029-linting · ctx:0/200k',
+      'opus · /Users/brooksc/git/forge/.worktrees/task-029-linting · ctx:0/200k',
     ].join('\n'),
   },
   {
@@ -33,7 +33,7 @@ export const READY_AGENT_FRAME_FIXTURES: AgentFrameFixture[] = [
       '❯ ',
       '────────────────────────────────────────────────────────────────',
       '--INSERT--⏵⏵ bypass permissions on (shift+tab to cycle)',
-      'Sonnet 4 | ~/git/parallel-code/.worktrees/task/example',
+      'Sonnet 4 | ~/git/forge/.worktrees/task/example',
     ].join('\r'),
   },
   {
@@ -41,13 +41,13 @@ export const READY_AGENT_FRAME_FIXTURES: AgentFrameFixture[] = [
     frame: [
       '›',
       '',
-      'gpt-5.5 default · /Users/brooksc/git/parallel-code/.worktrees/task-028-unit-tests',
+      'gpt-5.5 default · /Users/brooksc/git/forge/.worktrees/task-028-unit-tests',
     ].join('\n'),
   },
   {
     name: 'Gemini typed-message prompt',
     frame: [
-      'workspace /Users/brooksc/git/parallel-code/.worktrees/task-gemini branch sandbox',
+      'workspace /Users/brooksc/git/forge/.worktrees/task-gemini branch sandbox',
       '> Type your message or @path/to/file',
     ].join('\n'),
   },
@@ -59,18 +59,16 @@ export const NOT_READY_AGENT_FRAME_FIXTURES: NotReadyAgentFrameFixture[] = [
     reason: 'busy',
     frame: [
       '› Implement the requested fix',
-      'gpt-5.5 default · /Users/brooksc/git/parallel-code/.worktrees/task-028-unit-tests',
+      'gpt-5.5 default · /Users/brooksc/git/forge/.worktrees/task-028-unit-tests',
       'Working (18m 51s • esc to interrupt) • 1 background terminal running • /stop to close',
     ].join('\n'),
   },
   {
     name: 'Codex MCP startup screen',
     reason: 'startup_or_dialog',
-    frame: [
-      'Starting MCP servers (0/2): codex_apps, parallel-code',
-      'Booting MCP server parallel-code',
-      '›',
-    ].join('\n'),
+    frame: ['Starting MCP servers (0/2): codex_apps, forge', 'Booting MCP server forge', '›'].join(
+      '\n',
+    ),
   },
   {
     name: 'Agent trust dialog',

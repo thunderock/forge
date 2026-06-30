@@ -397,7 +397,7 @@ export function Sidebar() {
                 'font-family': "'JetBrains Mono', monospace",
               }}
             >
-              ParallelCode
+              Forge
             </span>
           </div>
           <div style={{ display: 'flex', gap: '6px' }}>

@@ -259,7 +259,7 @@ export function spawnAgent(
     'NODE_OPTIONS',
     'ELECTRON_RUN_AS_NODE',
     // Prevent renderer from injecting or overriding MCP auth tokens.
-    'PARALLEL_CODE_MCP_TOKEN',
+    'FORGE_MCP_TOKEN',
   ]);
   const safeEnvOverrides: Record<string, string> = {};
   for (const [k, v] of Object.entries(args.env ?? {})) {
@@ -290,7 +290,7 @@ export function spawnAgent(
 
   // Derive a predictable, unique container name from the agentId so we can
   // reliably stop it later without having to parse docker inspect output.
-  const containerName = args.dockerMode ? `parallel-code-${args.agentId.slice(0, 12)}` : null;
+  const containerName = args.dockerMode ? `forge-${args.agentId.slice(0, 12)}` : null;
 
   if (args.dockerMode) {
     const name = containerName as string;
@@ -305,7 +305,7 @@ export function spawnAgent(
       name,
       // Label so we can identify all containers owned by this app
       '--label',
-      'parallel-code=true',
+      'forge=true',
       // Host networking — agents need internet access for API calls and package installs.
       // Filesystem isolation (volume mounts) is the primary safety goal, not network isolation.
       '--network',
@@ -806,7 +806,7 @@ function buildDockerCredentialMounts(
   if (shareAgentAuth) {
     const baseCommand = path.basename(agentCommand);
     for (const relDir of AGENT_CONFIG_DIRS[baseCommand] ?? []) {
-      const hostDir = path.join(home, '.parallel-code', 'agent-auth', baseCommand, relDir);
+      const hostDir = path.join(home, '.forge', 'agent-auth', baseCommand, relDir);
       try {
         fs.mkdirSync(hostDir, { recursive: true, mode: 0o700 });
         mounts.push('-v', `${hostDir}:${containerHome}/${relDir}`);
@@ -815,7 +815,7 @@ function buildDockerCredentialMounts(
       }
     }
     for (const relFile of AGENT_CONFIG_FILES[baseCommand] ?? []) {
-      const hostFile = path.join(home, '.parallel-code', 'agent-auth', baseCommand, relFile);
+      const hostFile = path.join(home, '.forge', 'agent-auth', baseCommand, relFile);
       try {
         const hostDir = path.dirname(hostFile);
         fs.mkdirSync(hostDir, { recursive: true, mode: 0o700 });
@@ -856,10 +856,10 @@ export async function isDockerAvailable(): Promise<boolean> {
 }
 
 /** The default image name for Docker-isolated tasks. */
-export const DOCKER_DEFAULT_IMAGE = 'parallel-code-agent:latest';
+export const DOCKER_DEFAULT_IMAGE = 'forge-agent:latest';
 
 /** Label key used to stamp the Dockerfile content hash on built images. */
-const DOCKERFILE_HASH_LABEL = 'parallel-code-dockerfile-hash';
+const DOCKERFILE_HASH_LABEL = 'forge-dockerfile-hash';
 
 /**
  * Resolve the path to the bundled Dockerfile.
@@ -893,11 +893,11 @@ function getDockerfileHash(): string | null {
 }
 
 /**
- * Check if a project has a local Dockerfile at .parallel-code/Dockerfile.
+ * Check if a project has a local Dockerfile at .forge/Dockerfile.
  * Returns the absolute path if found, null otherwise.
  */
 export function resolveProjectDockerfile(projectRoot: string): string | null {
-  const p = path.join(projectRoot, '.parallel-code', 'Dockerfile');
+  const p = path.join(projectRoot, '.forge', 'Dockerfile');
   try {
     return fs.statSync(p).isFile() ? p : null;
   } catch {
@@ -907,11 +907,11 @@ export function resolveProjectDockerfile(projectRoot: string): string | null {
 
 /**
  * Derive a deterministic image tag for a project Dockerfile.
- * Tag format: parallel-code-project:<first-12-of-sha256>
+ * Tag format: forge-project:<first-12-of-sha256>
  */
 export function projectImageTag(dockerfilePath: string): string {
   const hash = hashDockerfile(dockerfilePath);
-  return `parallel-code-project:${(hash ?? 'unknown').slice(0, 12)}`;
+  return `forge-project:${(hash ?? 'unknown').slice(0, 12)}`;
 }
 
 /**

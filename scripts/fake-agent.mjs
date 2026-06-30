@@ -72,7 +72,7 @@ function boot() {
   }
 
   if (profile === 'gemini') {
-    write('Gemini CLI (fake)\r\nStarting MCP servers (0/1): parallel-code\r\n');
+    write('Gemini CLI (fake)\r\nStarting MCP servers (0/1): forge\r\n');
     setTimeout(() => {
       write('Starting MCP servers complete\r\n');
       if (transientReady) {

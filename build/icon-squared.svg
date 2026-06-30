@@ -1,14 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 56 56" fill="none" stroke="#2ec8ff" stroke-width="4">
-
-<!--    <rect width="100%" height="100%" fill="white"/>-->
-<!--    &lt;!&ndash; dein restlicher SVG-Inhalt &ndash;&gt;-->
-
-  <!-- Parallel lines -->
-  <line x1="10" y1="6" x2="10" y2="50"/>
-  <line x1="22" y1="6" x2="22" y2="50"/>
-
-  <!-- ] bracket (top) -->
-  <path d="M30 8 H47 V24 H30"/>
-  <!-- [ bracket (bottom) -->
-  <path d="M49 32 H32 V48 H49"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 56 56" fill="none">
+  <!-- Forge spark mark (no background — bare glyph) -->
+  <path d="M28 7 C 29.6 22, 34 26.4, 49 28 C 34 29.6, 29.6 34, 28 49 C 26.4 34, 22 29.6, 7 28 C 22 26.4, 26.4 22, 28 7 Z" fill="#ff6a2c"/>
 </svg>

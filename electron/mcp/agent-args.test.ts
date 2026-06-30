@@ -10,11 +10,11 @@ import {
 
 const config = {
   mcpServers: {
-    'parallel-code': {
+    forge: {
       command: 'node',
       args: ['/tmp/mcp-server.cjs', '--url', 'http://127.0.0.1:1234', '--coordinator-id', 'task-1'],
       env: {
-        PARALLEL_CODE_MCP_TOKEN: 'token-1',
+        FORGE_MCP_TOKEN: 'token-1',
       },
     },
   },
@@ -37,7 +37,7 @@ describe('MCP agent launch args', () => {
   it('quotes Codex inline config env keys so non-bare TOML keys remain valid', () => {
     const override = buildCodexMcpConfigOverride({
       mcpServers: {
-        'parallel-code': {
+        forge: {
           command: 'node',
           args: [],
           env: {

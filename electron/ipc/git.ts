@@ -162,7 +162,7 @@ const SANDBOX_EXCLUDE_PATTERNS = [
   '/.zprofile',
   '/.zshrc',
 ];
-const SANDBOX_EXCLUDE_HEADER = '# parallel-code: sandbox bind-mount artifacts';
+const SANDBOX_EXCLUDE_HEADER = '# forge: sandbox bind-mount artifacts';
 const seededSandboxExcludes = new Set<string>();
 
 /**
@@ -170,7 +170,7 @@ const seededSandboxExcludes = new Set<string>();
  * symlinked name is appended individually on subsequent calls so new names
  * added in later worktrees are also covered.
  */
-const SYMLINK_EXCLUDE_HEADER = '# parallel-code: worktree symlinks';
+const SYMLINK_EXCLUDE_HEADER = '# forge: worktree symlinks';
 
 // --- Internal helpers ---
 

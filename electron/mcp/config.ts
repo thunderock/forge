@@ -18,7 +18,7 @@ export function getMCPRemoteServerUrl(
  *
  * In Docker mode the sub-task worktree is NOT an explicit volume mount, so
  * auto-discovery inside the container is unreliable. Instead, write the config
- * to the coordinator's .parallel-code/ dir (same dir as mcp-server.cjs) which
+ * to the coordinator's .forge/ dir (same dir as mcp-server.cjs) which
  * IS the explicit volume, and always pass it via --mcp-config.
  *
  * In host mode, use the OS temp directory (existing behaviour).
@@ -31,7 +31,7 @@ export function getSubTaskMcpConfigPath(
 ): string {
   return dockerContainerName
     ? join(dirname(serverPath), `subtask-${taskId}.json`)
-    : join(tempDir, `parallel-code-subtask-${taskId}.json`);
+    : join(tempDir, `forge-subtask-${taskId}.json`);
 }
 
 /**

@@ -138,7 +138,7 @@ function execStdout(result: Awaited<ReturnType<typeof execAsync>>): string {
 }
 
 /**
- * The per-sub-task MCP config: a stdio launch of the parallel-code MCP server
+ * The per-sub-task MCP config: a stdio launch of the forge MCP server
  * scoped to one task. Identical across createTask, coordinator re-registration,
  * and hydration rewrite — only the resolved doneToken differs, so callers own
  * token generation and pass the final value in.
@@ -152,13 +152,13 @@ function buildSubtaskMcpConfig(args: {
 }) {
   return {
     mcpServers: {
-      'parallel-code': {
+      forge: {
         type: 'stdio' as const,
         command: 'node',
         args: [args.serverPath, '--url', args.serverUrl, '--task-id', args.taskId],
         env: {
-          PARALLEL_CODE_MCP_TOKEN: args.subtaskToken,
-          PARALLEL_CODE_MCP_DONE_TOKEN: args.doneToken,
+          FORGE_MCP_TOKEN: args.subtaskToken,
+          FORGE_MCP_DONE_TOKEN: args.doneToken,
         },
       },
     },
@@ -963,7 +963,7 @@ export class Coordinator {
       }
       task.preambleFileExistedBefore = preambleFileOriginalContent !== null;
       // Write a per-sub-task MCP config so the agent can call signal_done.
-      // In Docker mode, write to the coordinator's .parallel-code/ dir (which IS the explicitly
+      // In Docker mode, write to the coordinator's .forge/ dir (which IS the explicitly
       // mounted volume) rather than the sub-task worktree (which may not be in the container).
       // Always pass explicit MCP launch args so agents don't rely on auto-discovery.
       const mcpServerInfoForTask = coordinatorState.mcpServerInfo;
@@ -1016,7 +1016,7 @@ export class Coordinator {
               dockerMode: true,
               dockerImage: coordinatorState.dockerImage ?? undefined,
               // Mount parent dir so the sub-task can reach the coordinator's
-              // .parallel-code/ dir (which holds the per-sub-task MCP config).
+              // .forge/ dir (which holds the per-sub-task MCP config).
               // resolveWorktreeGitDirMount adds the main .git dir mount.
               dockerMountWorktreeParent: true,
             }
@@ -1504,7 +1504,7 @@ export class Coordinator {
       }
       await execAsync('git', ['add', '-A', '--', ...dirtyPaths], { cwd: task.worktreePath });
       try {
-        await execAsync('git', ['commit', '-m', 'Remove Parallel Code sub-task preamble'], {
+        await execAsync('git', ['commit', '-m', 'Remove Forge sub-task preamble'], {
           cwd: task.worktreePath,
         });
       } catch {
@@ -1984,10 +1984,10 @@ export class Coordinator {
     // Validate the persisted mcpConfigPath is exactly one of the two paths that
     // getSubTaskMcpConfigPath generates — basename-only is too permissive and would
     // allow a crafted state file to direct the token write to an arbitrary location.
-    // Host mode: os.tmpdir()/parallel-code-subtask-{id}.json
+    // Host mode: os.tmpdir()/forge-subtask-{id}.json
     // Docker mode: dirname(serverPath)/subtask-{id}.json  (looked up from live coordinator state)
     const serverInfo = this.coordinators.get(opts.coordinatorTaskId)?.mcpServerInfo;
-    const expectedHostPath = join(os.tmpdir(), `parallel-code-subtask-${opts.id}.json`);
+    const expectedHostPath = join(os.tmpdir(), `forge-subtask-${opts.id}.json`);
     const expectedDockerPath = serverInfo
       ? join(dirname(serverInfo.serverPath), `subtask-${opts.id}.json`)
       : null;
@@ -2148,15 +2148,15 @@ export class Coordinator {
     coordinatorTaskId: string,
     mcpJsonPath: string,
     createdMcpJson: boolean,
-    previousMcpParallelCode?: unknown,
-    writtenMcpParallelCode?: unknown,
+    previousMcpForge?: unknown,
+    writtenMcpForge?: unknown,
   ): void {
     const state = this.coordinators.get(coordinatorTaskId);
     if (state) {
       state.mcpJsonPath = mcpJsonPath;
       state.createdMcpJson = createdMcpJson;
-      state.previousMcpParallelCode = previousMcpParallelCode;
-      state.writtenMcpParallelCode = writtenMcpParallelCode;
+      state.previousMcpForge = previousMcpForge;
+      state.writtenMcpForge = writtenMcpForge;
     }
   }
 
@@ -2176,9 +2176,9 @@ export class Coordinator {
       });
     }
 
-    // Clean up coordinator .mcp.json — restore or remove only the parallel-code key.
+    // Clean up coordinator .mcp.json — restore or remove only the forge key.
     // Always read current contents (user may have added keys while running).
-    // If there was a pre-existing parallel-code entry, restore it; otherwise delete the key.
+    // If there was a pre-existing forge entry, restore it; otherwise delete the key.
     if (coordinator.mcpJsonPath) {
       try {
         const raw = existsSync(coordinator.mcpJsonPath)
@@ -2187,17 +2187,17 @@ export class Coordinator {
         if (raw !== null) {
           const content = JSON.parse(raw) as { mcpServers?: Record<string, unknown> };
           if (content.mcpServers) {
-            const current = content.mcpServers['parallel-code'];
-            const weWrote = coordinator.writtenMcpParallelCode;
+            const current = content.mcpServers['forge'];
+            const weWrote = coordinator.writtenMcpForge;
             // Only restore/delete if the current value still matches what we wrote,
             // or if we don't have a record of what we wrote (legacy path — always restore).
             const safeToRestore =
               weWrote === undefined || JSON.stringify(current) === JSON.stringify(weWrote);
             if (safeToRestore) {
-              if (coordinator.previousMcpParallelCode !== undefined) {
-                content.mcpServers['parallel-code'] = coordinator.previousMcpParallelCode;
+              if (coordinator.previousMcpForge !== undefined) {
+                content.mcpServers['forge'] = coordinator.previousMcpForge;
               } else {
-                delete content.mcpServers['parallel-code'];
+                delete content.mcpServers['forge'];
               }
             }
           }

@@ -145,9 +145,7 @@ describe('chunkContainsAgentPrompt', () => {
     ],
     [
       'Gemini prompt after MCP startup completion scrollback',
-      ['Starting MCP servers (0/1): parallel-code', 'Starting MCP servers complete', '>'].join(
-        '\n',
-      ),
+      ['Starting MCP servers (0/1): forge', 'Starting MCP servers complete', '>'].join('\n'),
     ],
   ])('classifies ready agent fixture: %s', (_name, fixture) => {
     expect(getAgentPromptReadiness(fixture)).toMatchObject({ ready: true, reason: 'ready' });
@@ -166,7 +164,7 @@ describe('chunkContainsAgentPrompt', () => {
     ],
     [
       'Codex startup screen',
-      'Starting MCP servers (0/2): codex_apps, parallel-code\n›',
+      'Starting MCP servers (0/2): codex_apps, forge\n›',
       'startup_or_dialog',
     ],
     [
@@ -260,9 +258,9 @@ describe('chunkContainsAgentPrompt', () => {
   });
 
   it('does not treat Codex startup screens as ready', () => {
-    expect(
-      chunkContainsAgentPrompt('Starting MCP servers (0/2): codex_apps, parallel-code\n›'),
-    ).toBe(false);
+    expect(chunkContainsAgentPrompt('Starting MCP servers (0/2): codex_apps, forge\n›')).toBe(
+      false,
+    );
     expect(chunkContainsAgentPrompt('model: loading   /model to change\n›')).toBe(false);
   });
 

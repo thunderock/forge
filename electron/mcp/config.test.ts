@@ -13,44 +13,42 @@ describe('getMCPRemoteServerUrl', () => {
   });
 
   it('uses host.docker.internal on macOS Docker Desktop', () => {
-    expect(getMCPRemoteServerUrl(7777, 'parallel-code-container', 'darwin')).toBe(
+    expect(getMCPRemoteServerUrl(7777, 'forge-container', 'darwin')).toBe(
       'http://host.docker.internal:7777',
     );
   });
 
   it('uses localhost on Linux (--network host shares host loopback)', () => {
-    expect(getMCPRemoteServerUrl(7777, 'parallel-code-container', 'linux')).toBe(
-      'http://127.0.0.1:7777',
-    );
+    expect(getMCPRemoteServerUrl(7777, 'forge-container', 'linux')).toBe('http://127.0.0.1:7777');
   });
 });
 
 describe('getSubTaskMcpConfigPath', () => {
-  it('in Docker mode, places config in coordinator .parallel-code dir (the explicit volume)', () => {
-    const serverPath = '/worktree/.parallel-code/mcp-server.cjs';
+  it('in Docker mode, places config in coordinator .forge dir (the explicit volume)', () => {
+    const serverPath = '/worktree/.forge/mcp-server.cjs';
     expect(getSubTaskMcpConfigPath('my-container', serverPath, 'task-abc')).toBe(
-      '/worktree/.parallel-code/subtask-task-abc.json',
+      '/worktree/.forge/subtask-task-abc.json',
     );
   });
 
   it('in Docker mode, never places config in the sub-task worktree (not a volume mount)', () => {
-    const serverPath = '/coordinator-worktree/.parallel-code/mcp-server.cjs';
+    const serverPath = '/coordinator-worktree/.forge/mcp-server.cjs';
     const result = getSubTaskMcpConfigPath('my-container', serverPath, 'task-abc');
     expect(result).not.toContain('sub-task-worktree');
-    expect(result).toContain('.parallel-code');
+    expect(result).toContain('.forge');
   });
 
   it('in host mode, places config in the OS temp directory', () => {
-    const serverPath = '/usr/lib/parallel-code/mcp-server.cjs';
+    const serverPath = '/usr/lib/forge/mcp-server.cjs';
     expect(getSubTaskMcpConfigPath(null, serverPath, 'task-xyz', '/tmp')).toBe(
-      '/tmp/parallel-code-subtask-task-xyz.json',
+      '/tmp/forge-subtask-task-xyz.json',
     );
   });
 
   it('in host mode with no container, uses OS tmpdir default', () => {
-    const serverPath = '/usr/lib/parallel-code/mcp-server.cjs';
+    const serverPath = '/usr/lib/forge/mcp-server.cjs';
     const result = getSubTaskMcpConfigPath(undefined, serverPath, 'task-123');
-    expect(result).toBe(join(tmpdir(), 'parallel-code-subtask-task-123.json'));
+    expect(result).toBe(join(tmpdir(), 'forge-subtask-task-123.json'));
   });
 });
 
