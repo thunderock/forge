@@ -194,9 +194,7 @@ export async function saveState(): Promise<void> {
     inactiveColumnOpacity: store.inactiveColumnOpacity,
     editorCommand: store.editorCommand || undefined,
     dockerImage:
-      store.dockerImage !== 'thunderockforge/forge-agent:latest'
-        ? store.dockerImage
-        : undefined,
+      store.dockerImage !== 'thunderockforge/forge-agent:latest' ? store.dockerImage : undefined,
     askCodeProvider: store.askCodeProvider !== 'claude' ? store.askCodeProvider : undefined,
     customAgents: store.customAgents.length > 0 ? [...store.customAgents] : undefined,
     keybindingMigrationDismissed: store.keybindingMigrationDismissed || undefined,
