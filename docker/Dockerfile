@@ -6,7 +6,7 @@
 
 ARG UBUNTU=ubuntu:22.04
 
-# ===== builder: tools (lazygit, git-delta, starship, uv + Python 3.11, ruff/black/isort/mypy, AWS CLI v2) =====
+# ===== builder: tools (lazygit, git-delta, uv + Python 3.11, ruff/black/isort/mypy, AWS CLI v2) =====
 FROM ${UBUNTU} AS tools
 ENV DEBIAN_FRONTEND=noninteractive \
     UV_INSTALL_DIR=/opt/extra/bin \
@@ -31,8 +31,6 @@ RUN set -eux; \
     curl -fsSL "https://github.com/dandavison/delta/releases/download/${dver}/delta-${dver}-${dl}.tar.gz" -o /tmp/delta.tgz; \
     tar -C /tmp -xzf /tmp/delta.tgz; mv "/tmp/delta-${dver}-${dl}/delta" /opt/extra/bin/delta; \
     rm -rf /tmp/lazygit.tgz /tmp/delta.tgz "/tmp/delta-${dver}-${dl}"
-# starship
-RUN curl -fsSL https://starship.rs/install.sh | sh -s -- -y -b /opt/extra/bin
 # uv + Python 3.11 + linters
 RUN set -eux; \
     curl -LsSf https://astral.sh/uv/install.sh | sh; \
@@ -92,7 +90,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # Shells & utilities
     bash zsh jq ripgrep fd-find fzf tree unzip less bat \
     # Dev extras
-    tmux htop direnv cmake clang postgresql-client silversearcher-ag \
+    htop direnv cmake clang postgresql-client silversearcher-ag \
     # Process inspection
     procps \
     # Networking
@@ -152,13 +150,21 @@ RUN groupadd --gid 1000 agent \
 # Curated dotfiles (no secrets, no baked git identity) + vim-gitgutter
 COPY --chown=1000:1000 dotfiles/bashrc        /home/agent/.bashrc
 COPY --chown=1000:1000 dotfiles/gitconfig     /home/agent/.gitconfig
-COPY --chown=1000:1000 dotfiles/tmux.conf     /home/agent/.tmux.conf
 COPY --chown=1000:1000 dotfiles/vimrc         /home/agent/.vimrc
-COPY --chown=1000:1000 dotfiles/starship.toml /home/agent/.config/starship.toml
 RUN set -eux; \
     git clone --depth=1 https://github.com/airblade/vim-gitgutter \
       /home/agent/.vim/pack/plugins/start/vim-gitgutter; \
-    chown -R 1000:1000 /home/agent/.config /home/agent/.vim
+    chown -R 1000:1000 /home/agent/.vim
+
+# GSD (get-shit-done) — Claude Code workflow layer, baked into the agent skeleton.
+# Forge seeds /home/agent/.claude + .gsd into each task's per-agent $HOME at
+# container start (see electron/ipc/pty.ts). Config is secret-free.
+COPY --chown=1000:1000 dotfiles/gsd-defaults.json /home/agent/.gsd/defaults.json
+RUN set -eux; \
+    HOME=/home/agent npx -y get-shit-done-cc@latest --global --yes; \
+    rm -rf /home/agent/.npm; \
+    chown -R 1000:1000 /home/agent/.claude /home/agent/.gsd; \
+    chmod -R a+rX /home/agent/.claude /home/agent/.gsd
 
 ENV SHELL=/bin/bash
 WORKDIR /app

@@ -1,7 +1,6 @@
 # ~/.bashrc — personal agent sandbox. Curated from ashutosh_setup.
 # Secrets and Adobe-specific logic intentionally omitted.
 
-set -o emacs
 bind '"\e[A": previous-history' 2>/dev/null
 bind '"\e[B": next-history' 2>/dev/null
 bind '"\eOA": previous-history' 2>/dev/null
@@ -31,5 +30,3 @@ for _f in \
   [ -f "$_f" ] && source "$_f"
 done
 unset _f
-
-command -v starship >/dev/null 2>&1 && eval "$(starship init bash)"

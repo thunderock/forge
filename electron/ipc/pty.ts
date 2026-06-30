@@ -343,11 +343,11 @@ export function spawnAgent(
         `${DOCKER_CONTAINER_HOME}/agent-${args.agentId}`,
       ),
       image,
-      // Pre-create the per-agent HOME directory then exec the real command.
-      // $HOME is already set by the -e flag above; using it here avoids repeating the path.
+      // Seed the per-agent HOME from the baked skeleton (gsd config), then exec.
+      // cp -an is no-clobber so a shared-auth .claude bind mount keeps its credentials.
       'sh',
       '-c',
-      'mkdir -p "$HOME" && exec "$@"',
+      'mkdir -p "$HOME/.claude" "$HOME/.gsd"; cp -an /home/agent/.claude/. "$HOME/.claude/" 2>/dev/null || true; cp -an /home/agent/.gsd/. "$HOME/.gsd/" 2>/dev/null || true; exec "$@"',
       '--',
       command,
       ...args.args,
