@@ -18,19 +18,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates curl unzip \
     && rm -rf /var/lib/apt/lists/*
 RUN mkdir -p /opt/extra/bin
-# lazygit + git-delta (arch-aware GitHub releases)
+# lazygit + git-delta — pinned versions, downloaded directly from release assets.
+# Avoids the unauthenticated api.github.com/releases/latest endpoint whose
+# 60-req/hr/IP rate limit intermittently 403s CI runners. Bump versions here.
+ARG LAZYGIT_VERSION=0.62.2
+ARG DELTA_VERSION=0.19.2
 RUN set -eux; \
     arch="$(dpkg --print-architecture)"; \
     case "$arch" in amd64) lg=x86_64; dl=x86_64-unknown-linux-gnu ;; \
                     arm64) lg=arm64;  dl=aarch64-unknown-linux-gnu ;; \
                     *) echo "unsupported arch $arch"; exit 1 ;; esac; \
-    lgver="$(curl -fsSL https://api.github.com/repos/jesseduffield/lazygit/releases/latest | grep -Po '"tag_name": *"v\K[^"]*')"; \
-    curl -fsSL "https://github.com/jesseduffield/lazygit/releases/download/v${lgver}/lazygit_${lgver}_Linux_${lg}.tar.gz" -o /tmp/lazygit.tgz; \
+    curl --retry 3 --retry-delay 2 --retry-all-errors -fsSL \
+      "https://github.com/jesseduffield/lazygit/releases/download/v${LAZYGIT_VERSION}/lazygit_${LAZYGIT_VERSION}_Linux_${lg}.tar.gz" -o /tmp/lazygit.tgz; \
     tar -C /opt/extra/bin -xzf /tmp/lazygit.tgz lazygit; \
-    dver="$(curl -fsSL https://api.github.com/repos/dandavison/delta/releases/latest | grep -Po '"tag_name": *"\K[^"]*')"; \
-    curl -fsSL "https://github.com/dandavison/delta/releases/download/${dver}/delta-${dver}-${dl}.tar.gz" -o /tmp/delta.tgz; \
-    tar -C /tmp -xzf /tmp/delta.tgz; mv "/tmp/delta-${dver}-${dl}/delta" /opt/extra/bin/delta; \
-    rm -rf /tmp/lazygit.tgz /tmp/delta.tgz "/tmp/delta-${dver}-${dl}"
+    curl --retry 3 --retry-delay 2 --retry-all-errors -fsSL \
+      "https://github.com/dandavison/delta/releases/download/${DELTA_VERSION}/delta-${DELTA_VERSION}-${dl}.tar.gz" -o /tmp/delta.tgz; \
+    tar -C /tmp -xzf /tmp/delta.tgz; mv "/tmp/delta-${DELTA_VERSION}-${dl}/delta" /opt/extra/bin/delta; \
+    rm -rf /tmp/lazygit.tgz /tmp/delta.tgz "/tmp/delta-${DELTA_VERSION}-${dl}"
 # uv + Python 3.11 + linters
 RUN set -eux; \
     curl -LsSf https://astral.sh/uv/install.sh | sh; \
