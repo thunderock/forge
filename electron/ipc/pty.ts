@@ -8,6 +8,14 @@ import type { BrowserWindow } from 'electron';
 import { RingBuffer } from '../remote/ring-buffer.js';
 import { resolveUserShell } from '../user-shell.js';
 import { ensureClaudeSandboxFiles, ensureSandboxExcludes } from './git.js';
+import {
+  ensureDockerImageAvailable,
+  dockerImagePresentByTag,
+  dockerImagePresentSync,
+  pullDockerImage,
+  delay as abortableDelay,
+  PROJECT_IMAGE_PREFIX,
+} from './docker-pull.js';
 import { debug as logDebug } from '../log.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -27,6 +35,12 @@ interface PtySession {
 }
 
 const sessions = new Map<string, PtySession>();
+
+/** Agents whose Docker image pull is in flight (no live PTY session yet). */
+const pendingPulls = new Map<string, AbortController>();
+
+/** Images confirmed present locally this session — skip the per-spawn presence check. */
+const knownPresentImages = new Set<string>();
 
 function sendToChannel(win: BrowserWindow, channelId: string, msg: unknown): void {
   if (!win.isDestroyed()) {
@@ -199,6 +213,18 @@ export function spawnAgent(
   const command = args.command || resolveUserShell();
   const cwd = args.cwd || process.env.HOME || '/';
 
+  // A renderer reload while a Docker image pull is in flight has no live
+  // session to reattach to. Abort the stale pull (it resumes from cache next
+  // time) so its captured old channel goes silent, then fall through to a
+  // fresh spawn on the new channel.
+  if (args.attachExisting) {
+    const inflightPull = pendingPulls.get(args.agentId);
+    if (inflightPull) {
+      inflightPull.abort();
+      pendingPulls.delete(args.agentId);
+    }
+  }
+
   // Renderer reloads should reattach to still-running PTYs before validating
   // the launch command. The process already exists; a missing binary after
   // reload should not strand the live session on the old renderer channel.
@@ -357,147 +383,221 @@ export function spawnAgent(
     spawnArgs = args.args;
   }
 
-  logDebug('pty', `spawn command ${args.agentId}`, {
-    taskId: args.taskId,
-    command: spawnCommand,
-    args: redactedSpawnArgs(spawnCommand, spawnArgs),
-    cwd,
-    dockerMode: args.dockerMode === true,
-  });
-
-  const proc = pty.spawn(spawnCommand, spawnArgs, {
-    name: 'xterm-256color',
-    cols: args.cols,
-    rows: args.rows,
-    cwd: args.dockerMode ? undefined : cwd,
-    env: args.dockerMode ? filteredEnv : spawnEnv,
-  });
-
-  const session: PtySession = {
-    proc,
-    channelId,
-    taskId: args.taskId,
-    agentId: args.agentId,
-    isShell: args.isShell ?? false,
-    flushTimer: null,
-    subscribers: new Set(),
-    scrollback: new RingBuffer(),
-    containerName,
-  };
-  sessions.set(args.agentId, session);
-
-  // Batching strategy matching the Rust implementation
-  let batchChunks: Buffer[] = [];
-  let batchSize = 0;
-  let tailChunks: Buffer[] = [];
-  let tailSize = 0;
-
-  const send = (msg: unknown) => {
-    sendToChannel(win, session.channelId, msg);
-  };
-
-  // In Docker mode, write a diagnostic banner to the terminal so the user
-  // can see what command is being run (and debug when nothing else appears).
-  if (args.dockerMode) {
-    const image = args.dockerImage || DOCKER_DEFAULT_IMAGE;
-    const innerCmd = [command, ...args.args].join(' ');
-    const banner =
-      `\x1b[2m[docker] container: ${containerName}\r\n` +
-      `[docker] image: ${image}\r\n` +
-      `[docker] command: ${innerCmd}\r\n` +
-      `[docker] waiting for container to start…\x1b[0m\r\n\r\n`;
-    console.warn(`[docker] spawning container ${containerName} — image=${image} cmd=${innerCmd}`);
-    send({ type: 'Data', data: Buffer.from(banner, 'utf8').toString('base64') });
-  }
-
-  const flush = () => {
-    if (batchSize === 0) return;
-    const batch = Buffer.concat(batchChunks);
-    const encoded = batch.toString('base64');
-    send({ type: 'Data', data: encoded });
-    session.scrollback.write(batch);
-    for (const sub of session.subscribers) {
-      sub(encoded);
-    }
-    batchChunks = [];
-    batchSize = 0;
-    if (session.flushTimer) {
-      clearTimeout(session.flushTimer);
-      session.flushTimer = null;
-    }
-  };
-
-  proc.onData((data: string) => {
-    const chunk = Buffer.from(data, 'utf8');
-
-    // Maintain tail buffer for exit diagnostics
-    tailChunks.push(chunk);
-    tailSize += chunk.length;
-    if (tailSize > TAIL_CAP) {
-      const combined = Buffer.concat(tailChunks);
-      const trimmed = combined.subarray(combined.length - TAIL_CAP);
-      tailChunks = [trimmed];
-      tailSize = trimmed.length;
-    }
-
-    batchChunks.push(chunk);
-    batchSize += chunk.length;
-
-    // Flush large batches immediately
-    if (batchSize >= BATCH_MAX) {
-      flush();
-      return;
-    }
-
-    // Small read = likely interactive prompt, flush immediately
-    if (chunk.length < 1024) {
-      flush();
-      return;
-    }
-
-    // Otherwise schedule flush on timer
-    if (!session.flushTimer) {
-      session.flushTimer = setTimeout(flush, BATCH_INTERVAL);
-    }
-  });
-
-  proc.onExit(({ exitCode, signal }) => {
-    // If this session was replaced by a new spawn with the same agentId,
-    // skip cleanup — the new session owns the map entry now.
-    if (sessions.get(args.agentId) !== session) return;
-
-    if (containerName) {
-      console.warn(
-        `[docker] container ${containerName} exited — code=${exitCode} signal=${signal ?? 'none'}`,
-      );
-    }
-
-    // Flush any remaining buffered data
-    flush();
-
-    // Parse tail buffer into last N lines for exit diagnostics
-    const tailBuf = Buffer.concat(tailChunks);
-    const tailStr = tailBuf.toString('utf8');
-    const lines = tailStr
-      .split('\n')
-      .map((l) => l.replace(/\r$/, ''))
-      .filter((l) => l.length > 0)
-      .slice(-MAX_LINES);
-
-    send({
-      type: 'Exit',
-      data: {
-        exit_code: exitCode,
-        signal: signal !== undefined ? String(signal) : null,
-        last_output: lines,
-      },
+  const launch = () => {
+    logDebug('pty', `spawn command ${args.agentId}`, {
+      taskId: args.taskId,
+      command: spawnCommand,
+      args: redactedSpawnArgs(spawnCommand, spawnArgs),
+      cwd,
+      dockerMode: args.dockerMode === true,
     });
 
-    emitPtyEvent('exit', args.agentId, { exitCode, signal });
-    sessions.delete(args.agentId);
-  });
+    const proc = pty.spawn(spawnCommand, spawnArgs, {
+      name: 'xterm-256color',
+      cols: args.cols,
+      rows: args.rows,
+      cwd: args.dockerMode ? undefined : cwd,
+      env: args.dockerMode ? filteredEnv : spawnEnv,
+    });
 
-  emitPtyEvent('spawn', args.agentId);
+    const session: PtySession = {
+      proc,
+      channelId,
+      taskId: args.taskId,
+      agentId: args.agentId,
+      isShell: args.isShell ?? false,
+      flushTimer: null,
+      subscribers: new Set(),
+      scrollback: new RingBuffer(),
+      containerName,
+    };
+    sessions.set(args.agentId, session);
+
+    // Batching strategy matching the Rust implementation
+    let batchChunks: Buffer[] = [];
+    let batchSize = 0;
+    let tailChunks: Buffer[] = [];
+    let tailSize = 0;
+
+    const send = (msg: unknown) => {
+      sendToChannel(win, session.channelId, msg);
+    };
+
+    // In Docker mode, write a diagnostic banner to the terminal so the user
+    // can see what command is being run (and debug when nothing else appears).
+    if (args.dockerMode) {
+      const image = args.dockerImage || DOCKER_DEFAULT_IMAGE;
+      const innerCmd = [command, ...args.args].join(' ');
+      const banner =
+        `\x1b[2m[docker] container: ${containerName}\r\n` +
+        `[docker] image: ${image}\r\n` +
+        `[docker] command: ${innerCmd}\r\n` +
+        `[docker] waiting for container to start…\x1b[0m\r\n\r\n`;
+      console.warn(`[docker] spawning container ${containerName} — image=${image} cmd=${innerCmd}`);
+      send({ type: 'Data', data: Buffer.from(banner, 'utf8').toString('base64') });
+    }
+
+    const flush = () => {
+      if (batchSize === 0) return;
+      const batch = Buffer.concat(batchChunks);
+      const encoded = batch.toString('base64');
+      send({ type: 'Data', data: encoded });
+      session.scrollback.write(batch);
+      for (const sub of session.subscribers) {
+        sub(encoded);
+      }
+      batchChunks = [];
+      batchSize = 0;
+      if (session.flushTimer) {
+        clearTimeout(session.flushTimer);
+        session.flushTimer = null;
+      }
+    };
+
+    proc.onData((data: string) => {
+      const chunk = Buffer.from(data, 'utf8');
+
+      // Maintain tail buffer for exit diagnostics
+      tailChunks.push(chunk);
+      tailSize += chunk.length;
+      if (tailSize > TAIL_CAP) {
+        const combined = Buffer.concat(tailChunks);
+        const trimmed = combined.subarray(combined.length - TAIL_CAP);
+        tailChunks = [trimmed];
+        tailSize = trimmed.length;
+      }
+
+      batchChunks.push(chunk);
+      batchSize += chunk.length;
+
+      // Flush large batches immediately
+      if (batchSize >= BATCH_MAX) {
+        flush();
+        return;
+      }
+
+      // Small read = likely interactive prompt, flush immediately
+      if (chunk.length < 1024) {
+        flush();
+        return;
+      }
+
+      // Otherwise schedule flush on timer
+      if (!session.flushTimer) {
+        session.flushTimer = setTimeout(flush, BATCH_INTERVAL);
+      }
+    });
+
+    proc.onExit(({ exitCode, signal }) => {
+      // If this session was replaced by a new spawn with the same agentId,
+      // skip cleanup — the new session owns the map entry now.
+      if (sessions.get(args.agentId) !== session) return;
+
+      if (containerName) {
+        console.warn(
+          `[docker] container ${containerName} exited — code=${exitCode} signal=${signal ?? 'none'}`,
+        );
+      }
+
+      // Flush any remaining buffered data
+      flush();
+
+      // Parse tail buffer into last N lines for exit diagnostics
+      const tailBuf = Buffer.concat(tailChunks);
+      const tailStr = tailBuf.toString('utf8');
+      const lines = tailStr
+        .split('\n')
+        .map((l) => l.replace(/\r$/, ''))
+        .filter((l) => l.length > 0)
+        .slice(-MAX_LINES);
+
+      send({
+        type: 'Exit',
+        data: {
+          exit_code: exitCode,
+          signal: signal !== undefined ? String(signal) : null,
+          last_output: lines,
+        },
+      });
+
+      emitPtyEvent('exit', args.agentId, { exitCode, signal });
+      sessions.delete(args.agentId);
+    });
+
+    emitPtyEvent('spawn', args.agentId);
+  };
+
+  const resolvedImage = args.dockerImage || DOCKER_DEFAULT_IMAGE;
+
+  // Non-Docker tasks (and locally-built project images) spawn immediately.
+  // Registry images get a resilient pre-pull so a transient Docker Hub blip
+  // doesn't hard-fail the task with a cryptic `docker run` daemon error.
+  if (args.dockerMode && !resolvedImage.startsWith(PROJECT_IMAGE_PREFIX)) {
+    // Fast path: a cached image spawns synchronously (no async tick) — this is
+    // the common case and keeps task launch snappy.
+    if (knownPresentImages.has(resolvedImage) || dockerImagePresentSync(resolvedImage)) {
+      knownPresentImages.add(resolvedImage);
+      launch();
+      return;
+    }
+    const ac = new AbortController();
+    pendingPulls.set(args.agentId, ac);
+    const cleanup = () => {
+      if (pendingPulls.get(args.agentId) === ac) pendingPulls.delete(args.agentId);
+    };
+    const sendData = (text: string) =>
+      sendToChannel(win, channelId, {
+        type: 'Data',
+        data: Buffer.from(text, 'utf8').toString('base64'),
+      });
+    void (async () => {
+      try {
+        const res = await ensureDockerImageAvailable(resolvedImage, {
+          imagePresent: dockerImagePresentByTag,
+          pull: (img, signal) => pullDockerImage(img, sendData, signal),
+          delay: abortableDelay,
+          onStatus: (line) => sendData(`\x1b[2m[docker] ${line}\x1b[0m\r\n`),
+          signal: ac.signal,
+        });
+        // Killed or superseded by a reattach — another path owns the lifecycle.
+        if (ac.signal.aborted || (!res.ok && res.reason === 'cancelled')) {
+          cleanup();
+          return;
+        }
+        if (!res.ok) {
+          cleanup();
+          sendData(
+            `\r\n\x1b[31m[docker] Could not pull ${resolvedImage} after several attempts.\x1b[0m\r\n` +
+              `\x1b[2m[docker] Check your network / Docker Hub reachability, then retry the task.\x1b[0m\r\n`,
+          );
+          sendToChannel(win, channelId, {
+            type: 'Exit',
+            data: {
+              exit_code: 1,
+              signal: null,
+              last_output: [`Failed to pull Docker image ${resolvedImage}`],
+            },
+          });
+          emitPtyEvent('exit', args.agentId, { exitCode: 1, signal: undefined });
+          return;
+        }
+        knownPresentImages.add(resolvedImage);
+        launch();
+        cleanup();
+      } catch (err) {
+        cleanup();
+        sendData(`\r\n\x1b[31m[docker] Error preparing image: ${String(err)}\x1b[0m\r\n`);
+        sendToChannel(win, channelId, {
+          type: 'Exit',
+          data: { exit_code: 1, signal: null, last_output: [] },
+        });
+        emitPtyEvent('exit', args.agentId, { exitCode: 1, signal: undefined });
+      }
+    })();
+    return;
+  }
+
+  launch();
 }
 
 export function writeToAgent(agentId: string, data: string): void {
@@ -542,6 +642,14 @@ export function killAgent(agentId: string): void {
       stopDockerContainer(session.containerName);
     }
     session.proc.kill();
+    return;
+  }
+  // No live session — a Docker image pull may still be in flight; abort it so
+  // it doesn't launch a container for a task the user already killed.
+  const pendingPull = pendingPulls.get(agentId);
+  if (pendingPull) {
+    pendingPull.abort();
+    pendingPulls.delete(agentId);
   }
 }
 
@@ -550,6 +658,8 @@ export function countRunningAgents(): number {
 }
 
 export function killAllAgents(): void {
+  for (const ac of pendingPulls.values()) ac.abort();
+  pendingPulls.clear();
   for (const [, session] of sessions) {
     if (session.flushTimer) clearTimeout(session.flushTimer);
     session.subscribers.clear();

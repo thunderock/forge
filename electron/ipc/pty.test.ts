@@ -10,6 +10,12 @@ const { mockExecFileSync, mockExecFile, mockChildProcessSpawn, mockPtySpawn, moc
       if (command === 'which' && args?.[0] === 'nonexistent-binary-xyz') {
         throw new Error('not found');
       }
+      // Docker image-presence fast-path: report the image as cached locally so
+      // spawn stays synchronous (no pull) by default. Tests exercising the pull
+      // path tag their image with "needs-pull" to force a cache miss.
+      if (command === 'docker' && args?.[0] === 'image' && args?.[1] === 'ls') {
+        return args?.[3]?.includes('needs-pull') ? '' : 'abc123def456\n';
+      }
       return '';
     });
 
@@ -1225,5 +1231,94 @@ describe('buildDockerCredentialMounts — read-only auth dir', () => {
     // Must have warned about the failure (single string arg — the message itself)
     const warnMessages = warnSpy.mock.calls.map((c) => String(c[0]));
     expect(warnMessages.some((m) => /\[docker-auth\].*Could not/.test(m))).toBe(true);
+  });
+});
+
+describe('spawnAgent docker mode — image pull resilience', () => {
+  const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+  // A docker pull child whose stdout/stderr/close handlers we can drive.
+  function fakePullChild(closeHandlers: ((code: number) => void)[]) {
+    return {
+      stdout: { on: vi.fn() },
+      stderr: { on: vi.fn() },
+      on: vi.fn((event: string, cb: (code: number) => void) => {
+        if (event === 'close') closeHandlers.push(cb);
+      }),
+    };
+  }
+
+  it('pulls a missing image first, then launches the container', async () => {
+    const image = 'registry.test/needs-pull-ok:latest';
+    // Async presence check (and fallback) report the image absent.
+    mockExecFile.mockImplementation((_cmd: string, _args: string[], opts: unknown, cb: unknown) => {
+      const done = (typeof opts === 'function' ? opts : cb) as (e: unknown, out: string) => void;
+      done?.(null, '');
+    });
+    const closeHandlers: ((code: number) => void)[] = [];
+    mockChildProcessSpawn.mockImplementation(() => fakePullChild(closeHandlers));
+
+    spawnAgent(createMockWindow(), buildSpawnArgs({ dockerImage: image, agentId: nextAgentId() }));
+
+    await flush();
+    // A pull was started and the container has NOT launched yet.
+    expect(mockChildProcessSpawn).toHaveBeenCalledWith(
+      'docker',
+      ['pull', image],
+      expect.anything(),
+    );
+    expect(mockPtySpawn).not.toHaveBeenCalled();
+
+    closeHandlers[0]?.(0); // pull succeeds
+    await flush();
+    expect(mockPtySpawn).toHaveBeenCalled(); // container launched after the pull
+  });
+
+  it('reports a friendly error (not a raw daemon dump) when the pull keeps failing', async () => {
+    vi.useFakeTimers();
+    try {
+      const image = 'registry.test/needs-pull-fail:latest';
+      mockExecFile.mockImplementation(
+        (_cmd: string, _args: string[], opts: unknown, cb: unknown) => {
+          const done = (typeof opts === 'function' ? opts : cb) as (
+            e: unknown,
+            out: string,
+          ) => void;
+          done?.(null, ''); // never present
+        },
+      );
+      const closeHandlers: ((code: number) => void)[] = [];
+      mockChildProcessSpawn.mockImplementation(() => fakePullChild(closeHandlers));
+
+      const win = createMockWindow();
+      spawnAgent(
+        win,
+        buildSpawnArgs({
+          dockerImage: image,
+          agentId: nextAgentId(),
+          onOutput: { __CHANNEL_ID__: 'ch-pull-fail' },
+        }),
+      );
+
+      // Drive three failing pull attempts through their backoff windows.
+      for (let i = 0; i < 3; i += 1) {
+        await vi.advanceTimersByTimeAsync(0);
+        expect(closeHandlers.length).toBe(i + 1);
+        closeHandlers[i](1);
+        await vi.advanceTimersByTimeAsync(5000);
+      }
+      await vi.advanceTimersByTimeAsync(0);
+
+      const calls = vi.mocked(win.webContents.send).mock.calls as Array<
+        [string, { type?: string; data?: { exit_code?: number } }]
+      >;
+      // Never launched a container, and surfaced a clean Exit instead of hanging.
+      expect(mockPtySpawn).not.toHaveBeenCalled();
+      const exit = calls.find(([, msg]) => msg?.type === 'Exit');
+      expect(exit).toBeTruthy();
+      expect(exit?.[1].data?.exit_code).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
