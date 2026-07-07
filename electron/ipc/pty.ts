@@ -400,7 +400,7 @@ export function spawnAgent(
       // and continues (an empty skel dir must still let the agent run).
       'sh',
       '-c',
-      'mkdir -p "$HOME/.claude" "$HOME/.gsd" || { echo "[forge] FATAL: HOME not writable ($HOME)" >&2; exit 1; }; cp -an /opt/forge-skel/.claude/. "$HOME/.claude/" || echo "[forge] WARN: gsd .claude seed failed" >&2; cp -an /opt/forge-skel/.gsd/. "$HOME/.gsd/" || echo "[forge] WARN: gsd .gsd seed failed" >&2; exec "$@"',
+      'mkdir -p "$HOME/.claude" "$HOME/.gsd" "$HOME/.codex" || { echo "[forge] FATAL: HOME not writable ($HOME)" >&2; exit 1; }; cp -an /opt/forge-skel/.claude/. "$HOME/.claude/" || echo "[forge] WARN: gsd .claude seed failed" >&2; cp -an /opt/forge-skel/.gsd/. "$HOME/.gsd/" || echo "[forge] WARN: gsd .gsd seed failed" >&2; cp -an /opt/forge-skel/.codex/. "$HOME/.codex/" || echo "[forge] WARN: gsd .codex seed failed" >&2; exec "$@"',
       '--',
       command,
       ...args.args,
@@ -908,7 +908,7 @@ function ensureGsdSkeleton(image: string): string | null {
         image,
         'sh',
         '-c',
-        `cp -a /home/agent/.claude /home/agent/.gsd /out/ 2>/dev/null || true; chown -R ${uid}:${gid} /out 2>/dev/null || true`,
+        `cp -a /home/agent/.claude /home/agent/.gsd /home/agent/.codex /out/ 2>/dev/null || true; chown -R ${uid}:${gid} /out 2>/dev/null || true`,
       ],
       { timeout: 60_000, stdio: 'ignore' },
     );
