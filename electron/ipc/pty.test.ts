@@ -90,7 +90,9 @@ vi.mock('../log.js', () => ({
 }));
 
 import {
+  agentHomeDir,
   buildDockerImage,
+  cleanupAgentHome,
   DOCKER_CONTAINER_HOME,
   dockerImageExists,
   hashDockerfile,
@@ -200,6 +202,11 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.spyOn(console, 'warn').mockImplementation(() => {});
   tempPaths = [];
+  // The docker spawn path now creates a real per-agent HOME dir under
+  // $HOME/.forge/agent-homes. Point HOME at a disposable temp dir (registered
+  // in tempPaths) so those writes never touch the real home and get cleaned in
+  // afterEach. Tests needing specific HOME contents re-stub with makeTempHome.
+  vi.stubEnv('HOME', makeTempHome([]));
 });
 
 afterEach(() => {
@@ -213,8 +220,8 @@ afterEach(() => {
 });
 
 describe('DOCKER_CONTAINER_HOME', () => {
-  it('uses a home directory writable by arbitrary host-mapped docker users', () => {
-    expect(DOCKER_CONTAINER_HOME).toBe('/tmp');
+  it('is a fixed, user-owned writable HOME off /tmp (bind-mounted per agent)', () => {
+    expect(DOCKER_CONTAINER_HOME).toBe('/home/forge');
   });
 });
 
@@ -245,15 +252,78 @@ describe('spawnAgent docker mode', () => {
     expect(volumeFlags).toContain(`${cwd}:${cwd}`);
   });
 
-  it('injects a per-agent HOME under /tmp into docker run args', () => {
-    vi.stubEnv('HOME', '/Users/tester');
+  it('points HOME at the fixed container HOME path (not a per-agent /tmp path)', () => {
+    const home = makeTempHome([]);
+    vi.stubEnv('HOME', home);
 
     const agentId = nextAgentId();
     spawnAgent(createMockWindow(), buildSpawnArgs({ agentId }));
 
     const { command, args } = getLastSpawnCall();
     expect(command).toBe('docker');
-    expect(getFlagValues(args, '-e')).toContain(`HOME=${DOCKER_CONTAINER_HOME}/agent-${agentId}`);
+    expect(getFlagValues(args, '-e')).toContain(`HOME=${DOCKER_CONTAINER_HOME}`);
+  });
+
+  it('bind-mounts a user-owned host dir to /home/forge for the agent HOME', () => {
+    const home = makeTempHome([]);
+    vi.stubEnv('HOME', home);
+
+    const agentId = nextAgentId();
+    spawnAgent(createMockWindow(), buildSpawnArgs({ agentId }));
+
+    const hostHome = agentHomeDir(agentId);
+    expect(hostHome).toBe(`${home}/.forge/agent-homes/${agentId}`);
+    const volumeFlags = getFlagValues(getLastSpawnCall().args, '-v');
+    expect(volumeFlags).toContain(`${hostHome}:${DOCKER_CONTAINER_HOME}`);
+    // Assert WRITABILITY intent host-side: the dir exists and is user-owned
+    // (0700). We do NOT assert the container `stat` uid — Colima bind mounts
+    // report root even when writable.
+    expect(fs.existsSync(hostHome)).toBe(true);
+    expect(fs.statSync(hostHome).mode & 0o700).toBe(0o700);
+  });
+
+  it('gives distinct agentIds distinct, non-colliding host HOMEs', () => {
+    const home = makeTempHome([]);
+    vi.stubEnv('HOME', home);
+
+    const agentA = nextAgentId();
+    const agentB = nextAgentId();
+
+    spawnAgent(createMockWindow(), buildSpawnArgs({ agentId: agentA }));
+    const homeMountA = getFlagValues(getLastSpawnCall().args, '-v').find((m) =>
+      m.endsWith(`:${DOCKER_CONTAINER_HOME}`),
+    );
+
+    spawnAgent(createMockWindow(), buildSpawnArgs({ agentId: agentB }));
+    const homeMountB = getFlagValues(getLastSpawnCall().args, '-v').find((m) =>
+      m.endsWith(`:${DOCKER_CONTAINER_HOME}`),
+    );
+
+    expect(homeMountA).toBe(`${agentHomeDir(agentA)}:${DOCKER_CONTAINER_HOME}`);
+    expect(homeMountB).toBe(`${agentHomeDir(agentB)}:${DOCKER_CONTAINER_HOME}`);
+    expect(homeMountA).not.toBe(homeMountB);
+    expect(fs.existsSync(agentHomeDir(agentA))).toBe(true);
+    expect(fs.existsSync(agentHomeDir(agentB))).toBe(true);
+  });
+
+  it('never places the container HOME under /tmp', () => {
+    const home = makeTempHome([]);
+    vi.stubEnv('HOME', home);
+
+    spawnAgent(createMockWindow(), buildSpawnArgs({ agentId: nextAgentId() }));
+    const { args } = getLastSpawnCall();
+
+    // Container HOME env must not be under /tmp (codex refuses /tmp homes).
+    for (const env of getFlagValues(args, '-e').filter((v) => v.startsWith('HOME='))) {
+      expect(env.slice('HOME='.length).startsWith('/tmp')).toBe(false);
+    }
+    // No bind-mount container target may be under /tmp either. (We check the
+    // container side; the host source can legitimately be a temp dir on Linux.)
+    for (const mount of getFlagValues(args, '-v')) {
+      const withoutRo = mount.replace(/:ro$/, '');
+      const target = withoutRo.slice(withoutRo.indexOf(':') + 1);
+      expect(target.startsWith('/tmp')).toBe(false);
+    }
   });
 
   it('seeds baked gsd config into the per-agent HOME at container start', () => {
@@ -265,7 +335,7 @@ describe('spawnAgent docker mode', () => {
   });
 
   it('does not forward host or renderer HOME as a generic docker env flag', () => {
-    const hostHome = '/Users/host-home';
+    const hostHome = makeTempHome([]);
     const rendererHome = '/Users/renderer-home';
     vi.stubEnv('HOME', hostHome);
 
@@ -284,7 +354,7 @@ describe('spawnAgent docker mode', () => {
     const envFlags = getFlagValues(getLastSpawnCall().args, '-e');
     expect(envFlags).toContain('API_KEY=secret');
     expect(envFlags.filter((value) => value.startsWith('HOME='))).toEqual([
-      `HOME=${DOCKER_CONTAINER_HOME}/agent-${agentId}`,
+      `HOME=${DOCKER_CONTAINER_HOME}`,
     ]);
     expect(envFlags).not.toContain(`HOME=${hostHome}`);
     expect(envFlags).not.toContain(`HOME=${rendererHome}`);
@@ -345,14 +415,14 @@ describe('spawnAgent docker mode', () => {
     expect(ctx.args).toEqual(['-c', '<redacted>']);
   });
 
-  it('redirects credential mounts under per-agent /tmp/agent-<id> inside the container', () => {
+  it('nests credential mounts under the fixed container HOME (/home/forge)', () => {
     const home = makeTempHome(['.ssh/', '.gitconfig', '.config/gh/']);
     vi.stubEnv('HOME', home);
 
     const agentId = nextAgentId();
     spawnAgent(createMockWindow(), buildSpawnArgs({ agentId }));
 
-    const containerHome = `${DOCKER_CONTAINER_HOME}/agent-${agentId}`;
+    const containerHome = DOCKER_CONTAINER_HOME;
     const volumeFlags = getFlagValues(getLastSpawnCall().args, '-v');
     expect(volumeFlags).toContain(`${home}/.ssh:${containerHome}/.ssh:ro`);
     expect(volumeFlags).toContain(`${home}/.gitconfig:${containerHome}/.gitconfig:ro`);
@@ -379,7 +449,7 @@ describe('spawnAgent docker mode', () => {
           buildSpawnArgs({ agentId, command, shareDockerAgentAuth: true }),
         );
 
-        const containerHome = `${DOCKER_CONTAINER_HOME}/agent-${agentId}`;
+        const containerHome = DOCKER_CONTAINER_HOME;
         const volumeFlags = getFlagValues(getLastSpawnCall().args, '-v');
         const expectedHostDir = `${home}/.forge/agent-auth/${command}/${relDir}`;
         expect(volumeFlags).toContain(`${expectedHostDir}:${containerHome}/${relDir}`);
@@ -409,7 +479,7 @@ describe('spawnAgent docker mode', () => {
         buildSpawnArgs({ agentId, command: 'claude', shareDockerAgentAuth: true }),
       );
 
-      const containerHome = `${DOCKER_CONTAINER_HOME}/agent-${agentId}`;
+      const containerHome = DOCKER_CONTAINER_HOME;
       const volumeFlags = getFlagValues(getLastSpawnCall().args, '-v');
       const expectedHostFile = `${home}/.forge/agent-auth/claude/.claude.json`;
       expect(volumeFlags).toContain(`${expectedHostFile}:${containerHome}/.claude.json`);
@@ -982,7 +1052,7 @@ describe('spawnAgent docker mode — same-path bind mounts', () => {
     // Same-path mounts for workspace paths guarantee that absolute paths in MCP config /
     // Claude trust config are valid both on the host and inside the container. Any
     // remapped workspace path would break MCP server invocations and .mcp.json references.
-    // (Credential mounts intentionally redirect host ~/.ssh → /tmp/.ssh inside container.)
+    // (Credential mounts intentionally nest host ~/.ssh → /home/forge/.ssh in the container.)
     const home = makeTempHome([]);
     vi.stubEnv('HOME', home);
 
@@ -996,15 +1066,44 @@ describe('spawnAgent docker mode — same-path bind mounts', () => {
     );
 
     const volumeFlags = getFlagValues(getLastSpawnCall().args, '-v');
-    // All mounts should be same-path (no credential mounts with redirected paths)
+    // Workspace mounts must be same-path. The per-agent HOME bind mount (→
+    // /home/forge) and any skeleton mount (→ /opt/*, added by a later plan) are
+    // intentionally NOT same-path — isolation there is via the unique host
+    // source dir — so exclude them.
     for (const mount of volumeFlags) {
       // Strip trailing :ro if present
       const withoutRo = mount.replace(/:ro$/, '');
       const colonIdx = withoutRo.indexOf(':');
       const hostPath = withoutRo.slice(0, colonIdx);
       const containerPath = withoutRo.slice(colonIdx + 1);
+      if (
+        containerPath === '/home/forge' ||
+        containerPath.startsWith('/home/forge/') ||
+        containerPath.startsWith('/opt/')
+      ) {
+        continue;
+      }
       expect(hostPath).toBe(containerPath);
     }
+  });
+});
+
+describe('cleanupAgentHome — per-agent HOME lifecycle', () => {
+  it('removes the agent HOME dir and is a no-op on a missing dir', () => {
+    const home = makeTempHome([]);
+    vi.stubEnv('HOME', home);
+
+    const agentId = nextAgentId();
+    const dir = agentHomeDir(agentId);
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(dir, 'config'), 'data');
+    expect(fs.existsSync(dir)).toBe(true);
+
+    cleanupAgentHome(agentId);
+    expect(fs.existsSync(dir)).toBe(false);
+
+    // Calling again on a now-missing dir must not throw.
+    expect(() => cleanupAgentHome(agentId)).not.toThrow();
   });
 });
 
