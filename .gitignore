@@ -14,6 +14,9 @@ update-test/
 .DS_Store
 docs/
 
+# GSD planning artifacts — kept local (commit_docs=false)
+.planning/
+
 # Sandbox bind-mount artifacts from user home (not project files).
 # Root-anchored so legitimate nested files with these names are still tracked.
 /.bash_profile
