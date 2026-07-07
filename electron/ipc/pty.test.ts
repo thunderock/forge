@@ -113,6 +113,7 @@ import {
   spawnAgent,
   validateCommand,
 } from './pty.js';
+import { FORGE_SKEL_MOUNT, GSD_SEED_ENTRYPOINT } from './docker-gsd-seed.js';
 
 let tempPaths: string[] = [];
 let agentCounter = 0;
@@ -886,6 +887,16 @@ describe('spawnAgent docker mode — gsd skeleton staging (Design B)', () => {
     const volumeFlags = getFlagValues(getLastSpawnCall().args, '-v');
     expect(volumeFlags.some((v) => v.endsWith(':/opt/forge-skel:ro'))).toBe(true);
     expect(volumeFlags).toContain(`${home}/.forge/gsd-skeleton/abc123def456:/opt/forge-skel:ro`);
+  });
+
+  it('builds the docker argv from the SHARED seed constants (anti-drift, RESEARCH Pitfall 5)', () => {
+    spawnAgent(createMockWindow(), buildSpawnArgs({ agentId: nextAgentId() }));
+    const args = getLastSpawnCall().args;
+    // Production uses the exported GSD_SEED_ENTRYPOINT verbatim (full-string equality),
+    // so the Plan 03-02 check — which imports the same constant — cannot drift from spawnAgent.
+    expect(args).toContain(GSD_SEED_ENTRYPOINT);
+    // And the skel mount is built from FORGE_SKEL_MOUNT (not a hardcoded '/opt/forge-skel').
+    expect(getFlagValues(args, '-v').some((v) => v.endsWith(`:${FORGE_SKEL_MOUNT}:ro`))).toBe(true);
   });
 
   // ── Deciding test (RESEARCH "Deciding test") — NON-BLOCKING, CI / networked ──
