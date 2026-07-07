@@ -343,6 +343,10 @@ describe('spawnAgent docker mode', () => {
     // image's unreadable 0750 /home/agent (Design B).
     expect(bootstrap).toContain('cp -an /opt/forge-skel/.claude/.');
     expect(bootstrap).toContain('cp -an /opt/forge-skel/.gsd/.');
+    // CDX-01/CDX-02: .codex is seeded alongside .claude/.gsd. The mkdir is
+    // idempotent — no collision with codex's runtime state_5.sqlite.
+    expect(bootstrap).toContain('"$HOME/.codex"');
+    expect(bootstrap).toContain('cp -an /opt/forge-skel/.codex/.');
     expect(bootstrap).not.toContain('/home/agent');
     // DOCK-04: failures surface, they are not swallowed.
     expect(bootstrap).not.toContain('2>/dev/null');
@@ -359,6 +363,7 @@ describe('spawnAgent docker mode', () => {
     // A cp miss WARNs (non-fatal) — an empty skel dir must still let the agent run.
     expect(bootstrap).toContain('gsd .claude seed failed');
     expect(bootstrap).toContain('gsd .gsd seed failed');
+    expect(bootstrap).toContain('gsd .codex seed failed');
     // No error-swallowing anywhere in the seed.
     expect(bootstrap).not.toContain('|| true');
     expect(bootstrap).not.toContain('2>/dev/null');
@@ -845,6 +850,11 @@ describe('spawnAgent docker mode — gsd skeleton staging (Design B)', () => {
     expect(getFlagValues(stagingArgs, '-v')).toContain(
       `${home}/.forge/gsd-skeleton/abc123def456:/out`,
     );
+    // Edit 2: the extract's cp -a list now includes .codex (the sh -c command is
+    // the last staging arg) so the baked codex-gsd reaches /opt/forge-skel.
+    expect(stagingArgs.some((s) => typeof s === 'string' && s.includes('/home/agent/.codex'))).toBe(
+      true,
+    );
   });
 
   it('caches staging per image-id: the root container runs at most once per image per session', () => {
@@ -891,6 +901,31 @@ describe('spawnAgent docker mode — gsd skeleton staging (Design B)', () => {
   // `--user 501:20` seed into a /home/forge HOME, assert ~/.gsd/defaults.json and
   // the gsd .claude command files exist in the seeded HOME (a GSD-01/02 proxy —
   // no interactive claude auth needed for the file-presence check).
+
+  // ── CDX deciding tests (RESEARCH "Verification") — NON-BLOCKING, CI / networked ──
+  // The seeding ARGV above is unit-verified here; the LIVE image content (CDX-02/03)
+  // needs the REBUILT image, which the no-egress Colima VM cannot build/pull. Run these
+  // on a networked machine / in CI (the docker-image.yml verify job automates CDX-02/03).
+  //
+  // CDX-01 mechanics — runnable NOW against the EXISTING image (codex already installed;
+  // no rebuild). Proves the writable, off-/tmp HOME + creatable .codex (the failure modes
+  // CDX-01 names — os error 13, temp-dir refusal — are startup/pre-auth):
+  //   docker run --rm --user 501:20 -e HOME=/home/forge \
+  //     -v "$HOME/.forge/agent-homes/cdx-probe:/home/forge" \
+  //     thunderockforge/forge-agent:latest \
+  //     sh -c 'set -e; codex --version; mkdir -p "$HOME/.codex"; : > "$HOME/.codex/state_probe"; echo CDX01_HOME_OK'
+  //
+  // CDX-02 / CDX-03 (file-presence) — host `docker load` of the release tarball, once the
+  // rebuilt image ships (analogous to Phase 1's cat .gsd/defaults.json):
+  //   docker run --rm --user 1000:1000 thunderockforge/forge-agent:latest sh -c \
+  //     'ls ~/.codex/prompts | grep -c gsd; grep -c "\[agents.gsd-" ~/.codex/config.toml; ls ~/.codex'
+  //   Expect >=20 prompt files, >=18 agent registrations; `ls ~/.codex` answers Open Q1.
+  //
+  // CDX-03 LIVE invocability — needs auth + rebuilt image, and codex custom prompts are
+  // DEPRECATED with a post-0.117.0 /prompts: disappearance regression (image ships 0.142.x;
+  // RESEARCH Pitfall 3). File-presence above is only a PROXY. In an authed codex session in
+  // the container, confirm /prompts:gsd-* surface (e.g. /prompts:gsd-help). Non-deprecated
+  // fallback if /prompts: is gone: the baked ~/.codex/skills/gsd-* path.
 });
 
 describe('spawnAgent session reattach', () => {
