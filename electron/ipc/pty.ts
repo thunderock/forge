@@ -327,7 +327,7 @@ export function spawnAgent(
     // as the run-user so HOME stays writable under --user; unique per agentId so
     // concurrent agents never collide (DOCK-05). Bind-mounted to the fixed
     // DOCKER_CONTAINER_HOME below.
-    const hostHome = path.join(process.env.HOME ?? '', '.forge', 'agent-homes', args.agentId);
+    const hostHome = agentHomeDir(args.agentId);
     try {
       fs.mkdirSync(hostHome, { recursive: true, mode: 0o700 });
     } catch {
@@ -705,6 +705,8 @@ export function killAllAgents(): void {
       }
     }
     session.proc.kill();
+    // Best-effort quit-time GC of this live agent's persistent host HOME.
+    cleanupAgentHome(session.agentId);
   }
   // Let onExit handlers clean up sessions individually
 }
@@ -766,6 +768,31 @@ export function getAgentCols(agentId: string): number {
  * keeps every credential mount at a stable, same-across-agents location.
  */
 export const DOCKER_CONTAINER_HOME = '/home/forge';
+
+/**
+ * Host directory that backs a single agent's container HOME.
+ *
+ * Created by spawnAgent as the run-user and bind-mounted to
+ * DOCKER_CONTAINER_HOME. Lives under ~/.forge (inside the Colima-shared /Users
+ * tree) and is keyed on the stable agentId so reattach/respawn reuse it. Single
+ * source of the path convention so the spawn and cleanup paths never diverge.
+ */
+export function agentHomeDir(agentId: string): string {
+  return path.join(process.env.HOME ?? '', '.forge', 'agent-homes', agentId);
+}
+
+/**
+ * Remove an agent's persistent host HOME dir. Best-effort: a missing dir is
+ * fine and any error is swallowed so cleanup never blocks task deletion/quit.
+ * Not called on container exit — reattach relies on the HOME surviving.
+ */
+export function cleanupAgentHome(agentId: string): void {
+  try {
+    fs.rmSync(agentHomeDir(agentId), { recursive: true, force: true });
+  } catch {
+    // Ignore: dir may not exist or may have already been removed.
+  }
+}
 
 /**
  * Env vars that are desktop/host-specific and must NOT be forwarded into the
