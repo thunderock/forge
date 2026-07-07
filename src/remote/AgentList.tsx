@@ -4,6 +4,7 @@ import type { RemoteAgent } from '../../electron/remote/protocol';
 
 interface AgentListProps {
   onSelect: (agentId: string, taskName: string) => void;
+  onNewTask: () => void;
 }
 
 export function AgentList(props: AgentListProps) {
@@ -31,23 +32,45 @@ export function AgentList(props: AgentListProps) {
         }}
       >
         <span style={{ 'font-size': '18px', 'font-weight': '600', color: '#d7e4f0' }}>Forge</span>
-        <div style={{ display: 'flex', 'align-items': 'center', gap: '8px' }}>
-          <div
+        <div style={{ display: 'flex', 'align-items': 'center', gap: '12px' }}>
+          <div style={{ display: 'flex', 'align-items': 'center', gap: '8px' }}>
+            <div
+              style={{
+                width: '8px',
+                height: '8px',
+                'border-radius': '50%',
+                background:
+                  status() === 'connected'
+                    ? '#2fd198'
+                    : status() === 'connecting'
+                      ? '#ffc569'
+                      : '#ff5f73',
+              }}
+            />
+            <span style={{ 'font-size': '14px', color: '#678197' }}>
+              {running()}/{total()}
+            </span>
+          </div>
+          <button
+            onClick={() => props.onNewTask()}
+            aria-label="New task"
             style={{
-              width: '8px',
-              height: '8px',
-              'border-radius': '50%',
-              background:
-                status() === 'connected'
-                  ? '#2fd198'
-                  : status() === 'connecting'
-                    ? '#ffc569'
-                    : '#ff5f73',
+              display: 'flex',
+              'align-items': 'center',
+              gap: '4px',
+              padding: '6px 12px',
+              background: '#173042',
+              border: '1px solid #2ec8ff55',
+              'border-radius': '8px',
+              color: '#2ec8ff',
+              'font-size': '14px',
+              'font-weight': '600',
+              cursor: 'pointer',
+              'touch-action': 'manipulation',
             }}
-          />
-          <span style={{ 'font-size': '14px', color: '#678197' }}>
-            {running()}/{total()}
-          </span>
+          >
+            + New
+          </button>
         </div>
       </div>
 
@@ -113,7 +136,7 @@ export function AgentList(props: AgentListProps) {
             href="https://github.com/thunderock/forge/issues"
             target="_blank"
             rel="noopener noreferrer"
-            style={{ color: '#ff6a2c' }}
+            style={{ color: '#2ec8ff' }}
           >
             Report bugs
           </a>

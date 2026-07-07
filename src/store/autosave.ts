@@ -39,6 +39,7 @@ export function persistedSnapshot(): string {
     coordinatorNotificationDelayMs: store.coordinatorNotificationDelayMs,
     coordinatorModeEnabled: store.coordinatorModeEnabled,
     coordinatorControlHintDismissed: store.coordinatorControlHintDismissed,
+    autoStartRemoteAccess: store.autoStartRemoteAccess,
     shareDockerAgentAuth: store.shareDockerAgentAuth,
     appearanceMode: store.appearanceMode,
     lightThemePreset: store.lightThemePreset,

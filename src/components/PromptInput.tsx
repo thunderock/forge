@@ -131,8 +131,10 @@ export function PromptInput(props: PromptInputProps) {
       setTimeout(() => {
         if (textareaRef) {
           const domDisabled = textareaRef.disabled;
-          // Match the actual disabled expression: question dialogs still own terminal input.
-          const expected = questionActive();
+          // The textarea is intentionally never hard-disabled (see the textarea
+          // below): typing stays available even while a question is active so
+          // the box can't latch permanently uneditable.
+          const expected = false;
           if (domDisabled !== expected) {
             logWarn('ctrl', 'textarea disabled mismatch — DOM vs expected', {
               domDisabled,
@@ -864,7 +866,12 @@ export function PromptInput(props: PromptInputProps) {
           }}
           rows={3}
           value={text()}
-          disabled={questionActive()}
+          // Intentionally NOT disabled while a question is active: typing is
+          // harmless (nothing leaves the box until handleSend, which still
+          // guards on questionActive()).  Hard-disabling here could latch the
+          // box permanently uneditable if question-detection ever sticks true —
+          // the dimmed style + placeholder below still signal "answer in
+          // terminal", and the send button/Enter remain blocked.
           onInput={(e) => {
             const val = e.currentTarget.value;
             setText(val);

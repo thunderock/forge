@@ -275,6 +275,7 @@ export interface PersistedState {
   defaultStepsEnabled?: boolean;
   defaultSkipPermissions?: boolean;
   defaultPropagateSkipPermissions?: boolean;
+  autoStartRemoteAccess?: boolean;
 }
 
 export interface MCPStatus {
@@ -360,6 +361,8 @@ export interface AppStore {
   newTaskPrefillPrompt: { prompt: string; projectId: string | null } | null;
   missingProjectIds: Record<string, true>;
   remoteAccess: RemoteAccess;
+  /** Persisted: start the remote (Connect Phone) server automatically on launch. */
+  autoStartRemoteAccess: boolean;
   showArena: boolean;
   keybindingPreset: string;
   /** Per-preset user overrides. Outer key = preset ID, inner = binding ID → override. */

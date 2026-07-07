@@ -3,7 +3,13 @@
 import { Show, createSignal, createEffect, onCleanup, createMemo, untrack } from 'solid-js';
 import { Dialog } from './Dialog';
 import { store } from '../store/core';
-import { startRemoteAccess, stopRemoteAccess, refreshRemoteStatus } from '../store/remote';
+import {
+  startRemoteAccess,
+  stopRemoteAccess,
+  refreshRemoteStatus,
+  setAutoStartRemoteAccess,
+  generatePairingPin,
+} from '../store/remote';
 import { theme } from '../lib/theme';
 import type { RemoteAccess } from '../store/types';
 
@@ -42,13 +48,32 @@ export function ConnectPhoneModal(props: ConnectPhoneModalProps) {
   const [error, setError] = createSignal<string | null>(null);
   const [copied, setCopied] = createSignal(false);
   const [mode, setMode] = createSignal<NetworkMode>('wifi');
+  const [pairingPin, setPairingPin] = createSignal<string | null>(null);
+  const [pairingError, setPairingError] = createSignal<string | null>(null);
+  const [showRisks, setShowRisks] = createSignal(false);
   let stopPolling: (() => void) | undefined;
   let copiedTimer: ReturnType<typeof setTimeout> | undefined;
+  let pairingTimer: ReturnType<typeof setTimeout> | undefined;
   let qrRequestId = 0;
   onCleanup(() => {
     if (copiedTimer !== undefined) clearTimeout(copiedTimer);
+    if (pairingTimer !== undefined) clearTimeout(pairingTimer);
     qrRequestId++;
   });
+
+  // Clear the displayed PIN once it expires so a stale code isn't left on screen.
+  async function handleGeneratePin() {
+    setPairingError(null);
+    try {
+      const { pin, expiresAt } = await generatePairingPin();
+      setPairingPin(pin);
+      if (pairingTimer !== undefined) clearTimeout(pairingTimer);
+      pairingTimer = setTimeout(() => setPairingPin(null), Math.max(0, expiresAt - Date.now()));
+    } catch (err) {
+      setPairingPin(null);
+      setPairingError(err instanceof Error ? err.message : 'Could not generate a code');
+    }
+  }
 
   const activeUrl = createMemo(() => connectionUrlForMode(store.remoteAccess, mode()));
 
@@ -142,6 +167,10 @@ export function ConnectPhoneModal(props: ConnectPhoneModalProps) {
 
   async function handleDisconnect() {
     stopPolling?.();
+    // The server's pairing state resets on stop; drop any PIN still on screen
+    // so it can't be entered against the new (empty) state.
+    setPairingPin(null);
+    if (pairingTimer !== undefined) clearTimeout(pairingTimer);
     const result = await stopRemoteAccess();
     if (!result.stopped) {
       if (result.reason === 'coordinator_active') {
@@ -394,6 +423,158 @@ export function ConnectPhoneModal(props: ConnectPhoneModalProps) {
             </span>
           </div>
         </Show>
+
+        {/* Auto-start on launch */}
+        <label
+          style={{
+            display: 'flex',
+            'align-items': 'center',
+            gap: '8px',
+            cursor: 'pointer',
+            'font-size': '13px',
+            color: theme.fgMuted,
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={store.autoStartRemoteAccess}
+            onChange={(e) => setAutoStartRemoteAccess(e.currentTarget.checked)}
+            style={{ 'accent-color': theme.accent, cursor: 'pointer' }}
+          />
+          Start automatically on launch
+        </label>
+
+        {/* Pair a device to create tasks */}
+        <div
+          style={{
+            width: '100%',
+            'border-top': `1px solid ${theme.border}`,
+            'padding-top': '16px',
+            display: 'flex',
+            'flex-direction': 'column',
+            'align-items': 'center',
+            gap: '8px',
+          }}
+        >
+          <Show
+            when={pairingPin()}
+            fallback={
+              <>
+                <button
+                  onClick={handleGeneratePin}
+                  style={{
+                    padding: '7px 16px',
+                    background: theme.bgInput,
+                    border: `1px solid ${theme.border}`,
+                    'border-radius': '8px',
+                    color: theme.fg,
+                    cursor: 'pointer',
+                    'font-size': '13px',
+                    'font-weight': '500',
+                  }}
+                >
+                  Pair a device to create tasks
+                </button>
+                <Show when={pairingError()}>
+                  <span style={{ 'font-size': '12px', color: theme.error }}>{pairingError()}</span>
+                </Show>
+              </>
+            }
+          >
+            {(pin) => (
+              <>
+                <span style={{ 'font-size': '12px', color: theme.fgMuted }}>
+                  Enter this code on your phone (valid 5 min):
+                </span>
+                <span
+                  style={{
+                    'font-size': '30px',
+                    'font-weight': '700',
+                    'letter-spacing': '6px',
+                    'font-family': 'monospace',
+                    color: theme.accent,
+                  }}
+                >
+                  {pin()}
+                </span>
+                <button
+                  onClick={handleGeneratePin}
+                  style={{
+                    padding: '4px 10px',
+                    background: 'transparent',
+                    border: 'none',
+                    color: theme.fgSubtle,
+                    cursor: 'pointer',
+                    'font-size': '12px',
+                  }}
+                >
+                  Generate a new code
+                </button>
+              </>
+            )}
+          </Show>
+        </div>
+
+        {/* Risks — collapsible, honest disclosure of what connecting exposes */}
+        <div style={{ width: '100%' }}>
+          <button
+            onClick={() => setShowRisks((v) => !v)}
+            aria-expanded={showRisks()}
+            style={{
+              display: 'flex',
+              'align-items': 'center',
+              gap: '6px',
+              width: '100%',
+              padding: '4px 0',
+              background: 'transparent',
+              border: 'none',
+              color: theme.fgMuted,
+              cursor: 'pointer',
+              'font-size': '13px',
+            }}
+          >
+            <span
+              style={{
+                display: 'inline-block',
+                transform: showRisks() ? 'rotate(90deg)' : 'none',
+                transition: 'transform 0.15s ease',
+                'font-size': '10px',
+              }}
+            >
+              ▶
+            </span>
+            Risks
+          </button>
+          <Show when={showRisks()}>
+            <ul
+              style={{
+                margin: '6px 0 0',
+                padding: '0 0 0 18px',
+                display: 'flex',
+                'flex-direction': 'column',
+                gap: '6px',
+                'font-size': '12px',
+                'line-height': '1.5',
+                color: theme.fgMuted,
+                'text-align': 'left',
+              }}
+            >
+              <li>
+                Anyone on your network with the link can view your agent terminals and type into
+                running agents.
+              </li>
+              <li>
+                The Wi-Fi connection is unencrypted. Prefer Tailscale, or only connect on a network
+                you trust.
+              </li>
+              <li>
+                A paired phone can create new tasks, which run code on this computer, until you
+                disconnect.
+              </li>
+              <li>Disconnecting stops the server and revokes every connected and paired device.</li>
+            </ul>
+          </Show>
+        </div>
 
         {/* Disconnect — always available when server is running */}
         <button

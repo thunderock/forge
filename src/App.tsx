@@ -85,6 +85,7 @@ import { ArenaOverlay } from './arena/ArenaOverlay';
 import { startDesktopNotificationWatcher } from './store/desktopNotifications';
 import { startPrChecksSubscription } from './store/pr-checks';
 import { startUpdateSubscription } from './store/updates';
+import { startRemoteTaskHandlers } from './store/remoteTaskHandler';
 
 const MIN_WINDOW_DIMENSION = 100;
 
@@ -527,6 +528,7 @@ function App() {
     const stopNotificationWatcher = startDesktopNotificationWatcher(windowFocused);
     const stopPrChecksSubscription = startPrChecksSubscription();
     const stopUpdateSubscription = startUpdateSubscription();
+    const stopRemoteTaskHandlers = startRemoteTaskHandlers();
 
     // Listen for plan content pushed from backend plan watcher
     const offPlanContent = window.electron.ipcRenderer.on(IPC.PlanContent, (data: unknown) => {
@@ -541,7 +543,7 @@ function App() {
     const offStepsContent = window.electron.ipcRenderer.on(IPC.StepsContent, (data: unknown) => {
       if (!data || typeof data !== 'object') return;
       const msg = data as { taskId: string; steps: unknown[] | null };
-      console.warn('[steps.recv]', msg.taskId, 'len=', msg.steps?.length ?? 'null');
+      log.debug('steps', 'recv', { taskId: msg.taskId, len: msg.steps?.length ?? null });
       if (msg.taskId && store.tasks[msg.taskId]) {
         setStepsContent(msg.taskId, msg.steps);
       }
@@ -720,6 +722,7 @@ function App() {
       stopNotificationWatcher();
       stopPrChecksSubscription();
       stopUpdateSubscription();
+      stopRemoteTaskHandlers();
       offPlanContent();
       offStepsContent();
       unlistenFocusChanged?.();

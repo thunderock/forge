@@ -12,6 +12,7 @@ vi.mock('../lib/ipc', () => ({
 
 import { loadState, resolveIncomingPanelUserSize, saveState } from './persistence';
 import { setStore, store } from './core';
+import { IPC } from '../../electron/ipc/channels';
 
 function agentDef(overrides: Partial<AgentDef> = {}): AgentDef {
   return {
@@ -78,6 +79,7 @@ beforeEach(() => {
   setStore('availableAgents', []);
   setStore('customAgents', []);
   setStore('coordinatorControlHintDismissed', false);
+  setStore('autoStartRemoteAccess', false);
 });
 
 describe('resolveIncomingPanelUserSize', () => {
@@ -464,6 +466,74 @@ describe('coordinator control hint persistence', () => {
     await loadState();
 
     expect(store.coordinatorControlHintDismissed).toBe(false);
+  });
+});
+
+describe('auto-start remote access persistence', () => {
+  it('does not persist autoStartRemoteAccess=false', async () => {
+    setStore('autoStartRemoteAccess', false);
+    mockInvoke.mockResolvedValueOnce(undefined);
+
+    await saveState();
+
+    const saved = JSON.parse(mockInvoke.mock.calls[0][1].json);
+    expect(saved.autoStartRemoteAccess).toBeUndefined();
+  });
+
+  it('persists autoStartRemoteAccess=true', async () => {
+    setStore('autoStartRemoteAccess', true);
+    mockInvoke.mockResolvedValueOnce(undefined);
+
+    await saveState();
+
+    const saved = JSON.parse(mockInvoke.mock.calls[0][1].json);
+    expect(saved.autoStartRemoteAccess).toBe(true);
+  });
+
+  it('restores the flag and auto-starts the server on load', async () => {
+    mockInvoke.mockImplementation((channel: string) => {
+      if (channel === IPC.LoadAppState) {
+        return Promise.resolve(
+          JSON.stringify({
+            projects: [],
+            taskOrder: [],
+            collapsedTaskOrder: [],
+            tasks: {},
+            autoStartRemoteAccess: true,
+          }),
+        );
+      }
+      if (channel === IPC.StartRemoteServer) {
+        return Promise.resolve({
+          url: 'http://x/?token=t',
+          wifiUrl: null,
+          tailscaleUrl: null,
+          port: 7777,
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    await loadState();
+
+    expect(store.autoStartRemoteAccess).toBe(true);
+    expect(mockInvoke.mock.calls.some((c) => c[0] === IPC.StartRemoteServer)).toBe(true);
+  });
+
+  it('does not auto-start the server when the flag is absent', async () => {
+    mockInvoke.mockImplementation((channel: string) => {
+      if (channel === IPC.LoadAppState) {
+        return Promise.resolve(
+          JSON.stringify({ projects: [], taskOrder: [], collapsedTaskOrder: [], tasks: {} }),
+        );
+      }
+      return Promise.resolve(undefined);
+    });
+
+    await loadState();
+
+    expect(store.autoStartRemoteAccess).toBe(false);
+    expect(mockInvoke.mock.calls.some((c) => c[0] === IPC.StartRemoteServer)).toBe(false);
   });
 });
 

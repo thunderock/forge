@@ -1,4 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { expectDefined, type MockStoreHarness } from './test-helpers';
 
 type StagedNotification = {
   batchId: string;
@@ -17,42 +18,29 @@ type MockTask = {
 };
 
 let mockTasks: Record<string, MockTask> = {};
+const core = vi.hoisted(() => ({
+  harness: undefined as MockStoreHarness<{ tasks: Record<string, MockTask> }> | undefined,
+}));
 const ipcHandlers = new Map<string, (data: unknown) => void>();
 const activeHandlerCounts = new Map<string, number>();
 
-// Must be a function declaration (hoisted) so vi.mock factories can reference it.
-function applySetStore(...args: unknown[]): void {
-  if (args.length === 1 && typeof args[0] === 'function') {
-    // produce(fn) pattern: solid-js/store is mocked so produce returns fn directly,
-    // and setStore receives fn as its only arg. Call it with a plain object that
-    // mirrors the store shape so mutations land on mockTasks.
-    (args[0] as (s: { tasks: Record<string, MockTask> }) => void)({ tasks: mockTasks });
-    return;
-  }
-  // Path-based pattern: setStore('tasks', taskId, 'stagedNotification', value)
-  const value = args[args.length - 1];
-  let target: Record<string, unknown> = { tasks: mockTasks };
-  for (let i = 0; i < args.length - 2; i++) {
-    target = target[args[i] as string] as Record<string, unknown>;
-  }
-  target[args[args.length - 2] as string] = value;
-}
+vi.mock('solid-js/store', async () => {
+  const { mockSolidStoreProduce } = await import('./test-helpers');
+  return mockSolidStoreProduce();
+});
 
-vi.mock('solid-js/store', () => ({
-  // produce(fn) → fn, so setStore(produce(fn)) becomes setStore(fn)
-  produce: (fn: (s: unknown) => void) => fn,
-}));
-
-vi.mock('./core', () => ({
-  store: new Proxy({} as Record<string, unknown>, {
-    get(_target, prop) {
-      if (prop === 'tasks') return mockTasks;
-      return undefined;
+vi.mock('./core', async () => {
+  const { createMockStoreHarness } = await import('./test-helpers');
+  core.harness = createMockStoreHarness({
+    get tasks() {
+      return mockTasks;
     },
-  }),
-  setStore: vi.fn((...args: unknown[]) => applySetStore(...args)),
-  cleanupPanelEntries: vi.fn(),
-}));
+    set tasks(next) {
+      mockTasks = next;
+    },
+  });
+  return core.harness.moduleMock({ cleanupPanelEntries: vi.fn() });
+});
 
 vi.mock('../lib/ipc', () => ({ invoke: vi.fn() }));
 vi.mock('../../electron/ipc/channels', () => ({
@@ -134,6 +122,8 @@ function setTask(id: string, overrides: Partial<MockTask> = {}): void {
 }
 
 beforeEach(() => {
+  const harness = expectDefined(core.harness, 'mock store harness');
+  harness.reset(harness.state());
   mockTasks = {};
 });
 

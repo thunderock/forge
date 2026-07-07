@@ -1,15 +1,26 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { IPC } from '../../electron/ipc/channels';
+import { expectDefined, type MockStoreHarness } from './test-helpers';
 
 // Hoisted so these refs are available both in vi.mock() factories and in test bodies.
-const { mockInvoke, mockIsAgentBracketedPasteEnabled, mockSaveState, mockSetStore } = vi.hoisted(
-  () => ({
-    mockInvoke: vi.fn(),
-    mockIsAgentBracketedPasteEnabled: vi.fn(),
-    mockSaveState: vi.fn(),
-    mockSetStore: vi.fn(),
-  }),
-);
+const { mockInvoke, mockIsAgentBracketedPasteEnabled, mockSaveState } = vi.hoisted(() => ({
+  mockInvoke: vi.fn(),
+  mockIsAgentBracketedPasteEnabled: vi.fn(),
+  mockSaveState: vi.fn(),
+}));
+const core = vi.hoisted(() => ({
+  harness: undefined as
+    | MockStoreHarness<{
+        tasks: Record<string, MockTask>;
+        agents: Record<string, unknown>;
+        taskOrder: string[];
+        collapsedTaskOrder: string[];
+        projects: { id: string; path: string }[];
+        availableAgents: unknown[];
+        defaultStepsEnabled: boolean;
+      }>
+    | undefined,
+}));
 
 // ─── Coordinator test infrastructure ─────────────────────────────────────────
 
@@ -28,66 +39,56 @@ let mockCollapsedTaskOrder: string[] = [];
 let mockProjects: { id: string; path: string }[] = [];
 const ipcHandlers = new Map<string, (data: unknown) => void>();
 
-function applySetStore(...args: unknown[]): void {
-  if (args.length === 1 && typeof args[0] === 'function') {
-    (
-      args[0] as (s: {
-        tasks: Record<string, MockTask>;
-        agents: Record<string, unknown>;
-        taskOrder: string[];
-        collapsedTaskOrder: string[];
-      }) => void
-    )({
-      tasks: mockTasks,
-      agents: mockAgents,
-      taskOrder: mockTaskOrder,
-      collapsedTaskOrder: mockCollapsedTaskOrder,
-    });
-    return;
-  }
-  // Path-based: setStore('tasks', taskId, 'field', value)
-  const value = args[args.length - 1];
-  let target: Record<string, unknown> = {
-    tasks: mockTasks,
-    agents: mockAgents,
-    taskOrder: mockTaskOrder,
-  };
-  for (let i = 0; i < args.length - 2; i++) {
-    const next = target[args[i] as string] as Record<string, unknown> | undefined;
-    if (next === undefined || next === null) return;
-    target = next;
-  }
-  target[args[args.length - 2] as string] = value;
-}
-
-// Wire up mockSetStore to apply mutations so coordinator tests can read back state.
-// Re-applied in sendPrompt's beforeEach after vi.clearAllMocks().
-mockSetStore.mockImplementation((...args: unknown[]) => applySetStore(...args));
-
 // ─── Mocks ───────────────────────────────────────────────────────────────────
 
 vi.mock('../lib/ipc', () => ({ Channel: vi.fn(), invoke: mockInvoke }));
 
 let mockDefaultStepsEnabled = false;
 
-vi.mock('./core', () => ({
-  store: new Proxy({} as Record<string, unknown>, {
-    get(_target, prop) {
-      if (prop === 'tasks') return mockTasks;
-      if (prop === 'agents') return mockAgents;
-      if (prop === 'taskOrder') return mockTaskOrder;
-      if (prop === 'collapsedTaskOrder') return mockCollapsedTaskOrder;
-      if (prop === 'availableAgents') return [];
-      if (prop === 'projects') return mockProjects;
-      if (prop === 'defaultStepsEnabled') return mockDefaultStepsEnabled;
-      return undefined;
+vi.mock('./core', async () => {
+  const { createMockStoreHarness } = await import('./test-helpers');
+  core.harness = createMockStoreHarness({
+    get tasks() {
+      return mockTasks;
     },
-  }),
-  setStore: mockSetStore,
-  cleanupPanelEntries: vi.fn(),
-}));
+    set tasks(next) {
+      mockTasks = next;
+    },
+    get agents() {
+      return mockAgents;
+    },
+    set agents(next) {
+      mockAgents = next;
+    },
+    get taskOrder() {
+      return mockTaskOrder;
+    },
+    set taskOrder(next) {
+      mockTaskOrder = next;
+    },
+    get collapsedTaskOrder() {
+      return mockCollapsedTaskOrder;
+    },
+    set collapsedTaskOrder(next) {
+      mockCollapsedTaskOrder = next;
+    },
+    get projects() {
+      return mockProjects;
+    },
+    set projects(next) {
+      mockProjects = next;
+    },
+    availableAgents: [],
+    get defaultStepsEnabled() {
+      return mockDefaultStepsEnabled;
+    },
+    set defaultStepsEnabled(next) {
+      mockDefaultStepsEnabled = next;
+    },
+  });
+  return core.harness.moduleMock({ cleanupPanelEntries: vi.fn() });
+});
 
-vi.mock('../lib/ipc', () => ({ Channel: vi.fn(), invoke: mockInvoke }));
 vi.mock('./persistence', () => ({ saveState: mockSaveState }));
 vi.mock('./focus', () => ({ setTaskFocusedPanel: vi.fn() }));
 vi.mock('./projects', () => ({
@@ -156,6 +157,7 @@ import { recordMergedLines, recordTaskMerged } from './completion';
 import { markAgentSpawned, rescheduleTaskStatusPolling } from './taskStatus';
 import { saveState } from './persistence';
 import { getProjectBranchPrefix, getProjectPath, isProjectMissing } from './projects';
+const mockSetStore = expectDefined(core.harness, 'mock store harness').setStore;
 
 // ─── Coordinator listener setup ───────────────────────────────────────────────
 
@@ -167,7 +169,8 @@ if (!taskStateSyncHandler) throw new Error('mcp_task_state_sync handler not regi
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockSetStore.mockImplementation((...args: unknown[]) => applySetStore(...args));
+  const harness = expectDefined(core.harness, 'mock store harness');
+  harness.reset(harness.state());
   mockTasks = {};
   mockAgents = {};
   mockTaskOrder = [];
@@ -423,7 +426,8 @@ describe('terminalInputPendingFromQuestion — real typing survives self-resolvi
   beforeEach(() => {
     vi.clearAllMocks();
     vi.useFakeTimers();
-    mockSetStore.mockImplementation((...args: unknown[]) => applySetStore(...args));
+    const harness = expectDefined(core.harness, 'mock store harness');
+    harness.reset(harness.state());
     mockTasks['sub-task-1'] = {
       agentIds: ['agent-sub-1'],
       shellAgentIds: [],
@@ -542,7 +546,8 @@ describe('hasActiveCoordinator condition — coordinator task removal', () => {
 describe('MCP startup status transitions', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockSetStore.mockImplementation((...args: unknown[]) => applySetStore(...args));
+    const harness = expectDefined(core.harness, 'mock store harness');
+    harness.reset(harness.state());
     mockInvoke.mockResolvedValue(undefined);
     mockProjects = [{ id: 'proj-1', path: '/repo' }];
   });
@@ -744,7 +749,8 @@ describe('MCP startup status transitions', () => {
 describe('createTask coordinator base branch prompt', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockSetStore.mockImplementation((...args: unknown[]) => applySetStore(...args));
+    const harness = expectDefined(core.harness, 'mock store harness');
+    harness.reset(harness.state());
     mockTasks = {};
     mockAgents = {};
     mockTaskOrder = [];
@@ -817,7 +823,8 @@ describe('createTask does not mutate defaultStepsEnabled', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mockSetStore.mockImplementation((...args: unknown[]) => applySetStore(...args));
+    const harness = expectDefined(core.harness, 'mock store harness');
+    harness.reset(harness.state());
     mockTasks = {};
     mockAgents = {};
     mockTaskOrder = [];
@@ -865,8 +872,8 @@ function writePayloads(): string[] {
 describe('sendPrompt', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    // Re-apply after clearAllMocks() so coordinator store mutations still work.
-    mockSetStore.mockImplementation((...args: unknown[]) => applySetStore(...args));
+    const harness = expectDefined(core.harness, 'mock store harness');
+    harness.reset(harness.state());
     mockInvoke.mockResolvedValue(undefined);
     mockIsAgentBracketedPasteEnabled.mockReturnValue(false);
     mockAgents = { 'agent-1': { status: 'running' } };
@@ -919,7 +926,8 @@ if (!cleanupFailedHandler) throw new Error('mcp_task_cleanup_failed handler not 
 describe('MCP_TaskCleanupFailed IPC handler', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockSetStore.mockImplementation((...args: unknown[]) => applySetStore(...args));
+    const harness = expectDefined(core.harness, 'mock store harness');
+    harness.reset(harness.state());
     mockTasks = {
       'task-1': {
         agentIds: ['agent-1'],
@@ -960,7 +968,8 @@ describe('MCP_TaskCleanupFailed IPC handler', () => {
 describe('closeTask — IPC cleanup ordering', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockSetStore.mockImplementation((...args: unknown[]) => applySetStore(...args));
+    const harness = expectDefined(core.harness, 'mock store harness');
+    harness.reset(harness.state());
     mockInvoke.mockResolvedValue(undefined);
   });
 
@@ -1078,7 +1087,8 @@ describe('closeTask — IPC cleanup ordering', () => {
 describe('recordTaskMerged counts merges with cleanup, not closures', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockSetStore.mockImplementation((...args: unknown[]) => applySetStore(...args));
+    const harness = expectDefined(core.harness, 'mock store harness');
+    harness.reset(harness.state());
     mockInvoke.mockResolvedValue(undefined);
     vi.mocked(getProjectPath).mockReturnValue('/repo');
   });
@@ -1146,7 +1156,8 @@ describe('recordTaskMerged counts merges with cleanup, not closures', () => {
 
 describe('MCP_TaskStateSync listener', () => {
   beforeEach(() => {
-    mockSetStore.mockImplementation((...args: unknown[]) => applySetStore(...args));
+    const harness = expectDefined(core.harness, 'mock store harness');
+    harness.reset(harness.state());
     mockTasks['task-1'] = {
       agentIds: [],
       shellAgentIds: [],

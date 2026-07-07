@@ -13,6 +13,7 @@ update-test/
 .claude
 .DS_Store
 docs/
+openspec/
 
 # GSD planning artifacts — kept local (commit_docs=false)
 .planning/

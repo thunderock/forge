@@ -1,230 +1,49 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import os from 'os';
 import { join, dirname } from 'path';
-import { getChangedFiles, getAllFileDiffs, getDiffBaseSha, mergeTask } from '../ipc/git.js';
 import {
   NOT_READY_AGENT_FRAME_FIXTURES,
   READY_AGENT_FRAME_FIXTURES,
 } from './agent-frame-fixtures.js';
 import { handleMCPToolCall } from './server.js';
 import type { MCPClient } from './client.js';
+import {
+  setupCoordinatorHarness,
+  mockExecFile,
+  mockReadFileSync,
+  mockExistsSync,
+  mockUnlinkSync,
+  mockFsReadFile,
+  mockFsAccess,
+  mockAtomicWriteFileSync,
+  mockAtomicWriteFile,
+  mockNotifyRenderer,
+  mockLogInfo,
+  mockSpawnAgent,
+  mockWriteToAgent,
+  mockSubscribeToAgent,
+  mockGetAgentScrollback,
+  mockGetChangedFiles,
+  mockGetAllFileDiffs,
+  mockGetDiffBaseSha,
+  mockGitMergeTask,
+  mockCreateBackendTask,
+  mockWin,
+  getExitHandler,
+  getSpawnHandler,
+  getOutputCb,
+  getAgentId,
+  encodeAgentOutput as encode,
+  encodeAgentBytes as encodeBytes,
+  emitWorkThenIdle,
+} from './coordinator-test-harness.js';
 
-// --- fs / child_process mocks (must come before dynamic import) ---
-const mockExecFile = vi.fn(
-  (
-    _cmd: string,
-    _args: string[],
-    _opts: unknown,
-    cb: (err: Error | null, stdout: string, stderr: string) => void,
-  ) => {
-    cb(null, '', '');
-  },
-);
-
-vi.mock('child_process', () => ({
-  execFile: mockExecFile,
-}));
-
-const mockWriteFileSync = vi.fn();
-const mockReadFileSync = vi.fn(() => '# existing\n');
-const mockExistsSync = vi.fn(() => false);
-const mockUnlinkSync = vi.fn();
-const mockMkdirSync = vi.fn();
-
-vi.mock('fs', () => ({
-  writeFileSync: mockWriteFileSync,
-  readFileSync: mockReadFileSync,
-  existsSync: mockExistsSync,
-  unlinkSync: mockUnlinkSync,
-  mkdirSync: mockMkdirSync,
-}));
-
-// fs/promises mocks — mirror the sync mocks above
-const mockFsWriteFile = vi.fn().mockResolvedValue(undefined);
-const mockFsReadFile = vi.fn().mockResolvedValue('# existing\n');
-const mockFsAccess = vi
-  .fn()
-  .mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
-const mockFsUnlink = vi.fn().mockResolvedValue(undefined);
-const mockFsMkdir = vi.fn().mockResolvedValue(undefined);
-
-vi.mock('fs/promises', () => ({
-  writeFile: mockFsWriteFile,
-  readFile: mockFsReadFile,
-  access: mockFsAccess,
-  unlink: mockFsUnlink,
-  mkdir: mockFsMkdir,
-}));
-
-// --- other mocks ---
-const mockNotifyRenderer = vi.fn();
-const mockLogInfo = vi.fn();
-const mockOnPtyEvent = vi.fn();
-const mockSpawnAgent = vi.fn();
-const mockWriteToAgent = vi.fn();
-const mockSubscribeToAgent = vi.fn();
-const mockGetAgentScrollback = vi.fn<() => string | null>(() => null);
-const mockCreateBackendTask = vi.fn().mockResolvedValue({
-  id: 'task-1',
-  branch_name: 'task/test',
-  worktree_path: '/tmp/test',
-});
-
-const mockAtomicWriteFileSync = vi.fn();
-const mockAtomicWriteFile = vi.fn().mockResolvedValue(undefined);
-
-vi.mock('./atomic.js', () => ({
-  atomicWriteFileSync: mockAtomicWriteFileSync,
-  atomicWriteFile: mockAtomicWriteFile,
-}));
-
-vi.mock('./prompt-detect.js', () => ({
-  stripAnsi: (s: string) =>
-    s.replace(
-      // eslint-disable-next-line no-control-regex
-      /[\u001b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nq-uy=><~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?/g,
-      '',
-    ),
-  AGENT_READY_TAIL_CHARS: 1000,
-  getAgentPromptReadiness: (s: string) => {
-    const tail = s.slice(-1000);
-    if (
-      /\bDo\s+you\s+trust\b|\bPress\s+enter\s+to\s+continue\b|\bBooting\s+MCP\s+server\b|\bStarting\s+MCP\s+servers?\b/i.test(
-        tail,
-      )
-    ) {
-      return { ready: false, reason: 'startup_or_dialog', tail };
-    }
-    if (
-      /\bq*Working\s*\(|\bbackground\s+terminal\s+running\b|\besc\s+to\s+interrupt\b|\/stop\s+to\s+close\b/i.test(
-        tail,
-      )
-    ) {
-      return { ready: false, reason: 'busy', tail };
-    }
-    const ready = tail
-      .slice(-1000)
-      .split(/\r\n?|\n/)
-      .some((line) =>
-        /(?:^|\s)[❯›]\s*$|^\s*--\s*INSERT\s*--\s*$|^\s*>\s*(?:Type your message|$)/i.test(
-          line.trim(),
-        ),
-      );
-    return { ready, reason: ready ? 'ready' : 'no_prompt', tail };
-  },
-  chunkContainsAgentPrompt: (s: string) => {
-    const tail = s.slice(-1000);
-    if (
-      /\bDo\s+you\s+trust\b|\bPress\s+enter\s+to\s+continue\b|\bBooting\s+MCP\s+server\b|\bStarting\s+MCP\s+servers?\b/i.test(
-        tail,
-      )
-    ) {
-      return false;
-    }
-    if (
-      /\bq*Working\s*\(|\bbackground\s+terminal\s+running\b|\besc\s+to\s+interrupt\b|\/stop\s+to\s+close\b/i.test(
-        tail,
-      )
-    ) {
-      return false;
-    }
-    return tail
-      .split(/\r\n?|\n/)
-      .some((line) =>
-        /(?:^|\s)[❯›]\s*$|^\s*--\s*INSERT\s*--\s*$|^\s*>\s*(?:Type your message|$)/i.test(
-          line.trim(),
-        ),
-      );
-  },
-}));
-
-vi.mock('../ipc/pty.js', () => ({
-  spawnAgent: mockSpawnAgent,
-  writeToAgent: mockWriteToAgent,
-  killAgent: vi.fn(),
-  subscribeToAgent: mockSubscribeToAgent,
-  unsubscribeFromAgent: vi.fn(),
-  getAgentScrollback: mockGetAgentScrollback,
-  onPtyEvent: mockOnPtyEvent,
-}));
-
-vi.mock('../ipc/git.js', () => ({
-  getChangedFiles: vi.fn().mockResolvedValue([]),
-  getAllFileDiffs: vi.fn().mockResolvedValue(''),
-  getDiffBaseSha: vi.fn().mockResolvedValue('abc123sha'),
-  mergeTask: vi.fn(),
-}));
-
-vi.mock('../ipc/tasks.js', () => ({
-  createTask: mockCreateBackendTask,
-  deleteTask: vi.fn().mockResolvedValue(undefined),
-}));
-
-vi.mock('../ipc/channels.js', () => ({
-  IPC: {
-    MCP_TaskCreated: 'mcp_task_created',
-    MCP_TaskClosed: 'mcp_task_closed',
-    MCP_TaskCleanupFailed: 'mcp_task_cleanup_failed',
-    MCP_TaskStateSync: 'mcp_task_state_sync',
-    MCP_CoordinatorNotificationStaged: 'mcp_coordinator_notification_staged',
-    MCP_CoordinatorNotificationCleared: 'mcp_coordinator_notification_cleared',
-    MCP_CoordinatorOrphanedNotification: 'mcp_coordinator_orphaned_notification',
-    MCP_CoordinatorDeregistered: 'mcp_coordinator_deregistered',
-    MCP_CoordinatorNotificationAck: 'mcp_coordinator_notification_ack',
-  },
-}));
-
-vi.mock('../log.js', () => ({
-  info: mockLogInfo,
-  warn: vi.fn(),
-}));
-
-// Import after mocks
-const { Coordinator } = await import('./coordinator.js');
+const { Coordinator } = await setupCoordinatorHarness();
 const { removePreambleBlock } = await import('./preamble.js');
-
-// --- helpers ---
-function getExitHandler(): (agentId: string, data: unknown) => void {
-  const call = mockOnPtyEvent.mock.calls.find((c) => c[0] === 'exit');
-  if (!call) throw new Error('exit handler not registered');
-  return call[1] as (agentId: string, data: unknown) => void;
-}
-
-function getSpawnHandler(): (agentId: string) => void {
-  const call = mockOnPtyEvent.mock.calls.find((c) => c[0] === 'spawn');
-  if (!call) throw new Error('spawn handler not registered');
-  return call[1] as (agentId: string) => void;
-}
-
-function getOutputCb(): (encoded: string) => void {
-  const call = mockSubscribeToAgent.mock.calls[0];
-  if (!call) throw new Error('subscribeToAgent not called');
-  return call[1] as (encoded: string) => void;
-}
-
-function getAgentId(): string {
-  const call = mockSubscribeToAgent.mock.calls[0];
-  if (!call) throw new Error('subscribeToAgent not called');
-  return call[0] as string;
-}
-
-function encode(s: string): string {
-  return Buffer.from(s).toString('base64');
-}
-
-function encodeBytes(bytes: Buffer): string {
-  return bytes.toString('base64');
-}
-
-function emitWorkThenIdle(outputCb: (encoded: string) => void): void {
-  outputCb(encode('Working...\n'));
-  outputCb(encode('Done ❯ '));
-}
-
-const mockWin = {
-  isDestroyed: () => false,
-  webContents: { send: mockNotifyRenderer },
-} as unknown as import('electron').BrowserWindow;
+const getChangedFiles = mockGetChangedFiles;
+const getAllFileDiffs = mockGetAllFileDiffs;
+const getDiffBaseSha = mockGetDiffBaseSha;
+const mergeTask = mockGitMergeTask;
 
 // ─── registerCoordinator idempotency and restore path ────────────────────────
 

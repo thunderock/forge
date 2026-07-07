@@ -70,6 +70,7 @@ export const [store, setStore] = createStore<AppStore>({
     tailscaleUrl: null,
     connectedClients: 0,
   },
+  autoStartRemoteAccess: false,
   showArena: false,
   keybindingPreset: 'default',
   keybindingOverridesByPreset: {},

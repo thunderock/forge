@@ -2,6 +2,7 @@ import { produce } from 'solid-js/store';
 import { invoke } from '../lib/ipc';
 import { IPC } from '../../electron/ipc/channels';
 import { store, setStore } from './core';
+import { startRemoteAccess } from './remote';
 import { effectiveAgentId } from './agent-select';
 import { randomPastelColor } from './projects';
 import { markAgentSpawned } from './taskStatus';
@@ -217,6 +218,7 @@ export async function saveState(): Promise<void> {
     defaultStepsEnabled: store.defaultStepsEnabled || undefined,
     defaultSkipPermissions: store.defaultSkipPermissions || undefined,
     defaultPropagateSkipPermissions: store.defaultPropagateSkipPermissions || undefined,
+    autoStartRemoteAccess: store.autoStartRemoteAccess || undefined,
   };
 
   for (const taskId of store.taskOrder) {
@@ -384,6 +386,7 @@ interface LegacyPersistedState {
   defaultStepsEnabled?: unknown;
   defaultSkipPermissions?: unknown;
   defaultPropagateSkipPermissions?: unknown;
+  autoStartRemoteAccess?: unknown;
 }
 
 export async function loadState(): Promise<void> {
@@ -586,6 +589,8 @@ export async function loadState(): Promise<void> {
             : raw.showSteps === true;
       s.defaultSkipPermissions = raw.defaultSkipPermissions === true;
       s.defaultPropagateSkipPermissions = raw.defaultPropagateSkipPermissions === true;
+
+      s.autoStartRemoteAccess = raw.autoStartRemoteAccess === true;
 
       const rawDockerImage = raw.dockerImage;
       s.dockerImage =
@@ -856,5 +861,12 @@ export async function loadState(): Promise<void> {
     invoke(IPC.SetCoordinatorModeEnabled, { enabled: true }).catch((e) =>
       console.warn('Failed to notify backend of coordinator mode:', e),
     );
+  }
+
+  // Auto-start the remote (Connect Phone) server so a phone can connect without
+  // opening the modal first. Best-effort — a failure (e.g. coordinator active)
+  // must not block app startup.
+  if (store.autoStartRemoteAccess) {
+    startRemoteAccess().catch((e) => console.warn('Failed to auto-start remote access:', e));
   }
 }
