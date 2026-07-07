@@ -391,11 +391,16 @@ export function spawnAgent(
         DOCKER_CONTAINER_HOME,
       ),
       image,
-      // Seed the per-agent HOME from the baked skeleton (gsd config), then exec.
-      // cp -an is no-clobber so a shared-auth .claude bind mount keeps its credentials.
+      // Seed the per-agent HOME from the read-only gsd skeleton staged at
+      // /opt/forge-skel (Design B — the image's own /home/agent is 0750/uid-1000
+      // and unreadable by the run-user). cp -an is no-clobber so a shared-auth
+      // .claude bind mount keeps its credentials, and the seed runs IN-CONTAINER
+      // after mounts so that mount is not shadowed (RESEARCH Pitfall 3). Failures
+      // SURFACE (DOCK-04): an unwritable HOME is FATAL (exit 1); a cp miss WARNs
+      // and continues (an empty skel dir must still let the agent run).
       'sh',
       '-c',
-      'mkdir -p "$HOME/.claude" "$HOME/.gsd"; cp -an /home/agent/.claude/. "$HOME/.claude/" 2>/dev/null || true; cp -an /home/agent/.gsd/. "$HOME/.gsd/" 2>/dev/null || true; exec "$@"',
+      'mkdir -p "$HOME/.claude" "$HOME/.gsd" || { echo "[forge] FATAL: HOME not writable ($HOME)" >&2; exit 1; }; cp -an /opt/forge-skel/.claude/. "$HOME/.claude/" || echo "[forge] WARN: gsd .claude seed failed" >&2; cp -an /opt/forge-skel/.gsd/. "$HOME/.gsd/" || echo "[forge] WARN: gsd .gsd seed failed" >&2; exec "$@"',
       '--',
       command,
       ...args.args,
