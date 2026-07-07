@@ -10,12 +10,21 @@ const { mockExecFileSync, mockExecFile, mockChildProcessSpawn, mockPtySpawn, moc
       if (command === 'which' && args?.[0] === 'nonexistent-binary-xyz') {
         throw new Error('not found');
       }
-      // Docker image-presence fast-path: report the image as cached locally so
-      // spawn stays synchronous (no pull) by default. Tests exercising the pull
-      // path tag their image with "needs-pull" to force a cache miss.
+      // Docker image-presence fast-path + image-id resolution (the gsd skeleton
+      // staging cache is keyed by image-id). Report the image as cached locally so
+      // spawn stays synchronous (no pull) by default; tests exercising the pull
+      // path tag their image with "needs-pull" to force a cache miss. Return a
+      // DISTINCT id per reference so distinct tags stage into distinct per-image-id
+      // skeleton dirs; the default test image keeps the historical abc123def456 id.
       if (command === 'docker' && args?.[0] === 'image' && args?.[1] === 'ls') {
-        return args?.[3]?.includes('needs-pull') ? '' : 'abc123def456\n';
+        const ref = args?.[3] ?? '';
+        if (ref.includes('needs-pull')) return '';
+        if (ref === 'reference=forge-agent:test') return 'abc123def456\n';
+        return `id-${ref.replace('reference=', '').replace(/[^a-zA-Z0-9]/g, '-')}\n`;
       }
+      // `docker run --user 0:0 … -v <skelDir>:/out` = the Design B gsd skeleton
+      // staging one-shot. Returns empty (no throw) so it is a no-op; tests assert
+      // the invocation + the per-image-id skel dir it targets.
       return '';
     });
 
@@ -330,8 +339,29 @@ describe('spawnAgent docker mode', () => {
     spawnAgent(createMockWindow(), buildSpawnArgs({ agentId: nextAgentId() }));
     const bootstrap = getLastSpawnCall().args.find((a) => a.includes('exec "$@"'));
     expect(bootstrap).toBeDefined();
-    expect(bootstrap).toContain('cp -an /home/agent/.claude/.');
-    expect(bootstrap).toContain('cp -an /home/agent/.gsd/.');
+    // Seed source is the readable staging mount (/opt/forge-skel), NOT the
+    // image's unreadable 0750 /home/agent (Design B).
+    expect(bootstrap).toContain('cp -an /opt/forge-skel/.claude/.');
+    expect(bootstrap).toContain('cp -an /opt/forge-skel/.gsd/.');
+    expect(bootstrap).not.toContain('/home/agent');
+    // DOCK-04: failures surface, they are not swallowed.
+    expect(bootstrap).not.toContain('2>/dev/null');
+    expect(bootstrap).toContain('exit 1'); // the FATAL HOME-not-writable canary
+    expect(bootstrap).toContain('exec "$@"');
+  });
+
+  it('surfaces seed failures instead of swallowing them (DOCK-04)', () => {
+    spawnAgent(createMockWindow(), buildSpawnArgs({ agentId: nextAgentId() }));
+    const bootstrap = getLastSpawnCall().args.find((a) => a.includes('exec "$@"'));
+    expect(bootstrap).toBeDefined();
+    // mkdir is FATAL (exit 1) if HOME is unwritable — the DOCK-01 canary.
+    expect(bootstrap).toContain('HOME not writable');
+    // A cp miss WARNs (non-fatal) — an empty skel dir must still let the agent run.
+    expect(bootstrap).toContain('gsd .claude seed failed');
+    expect(bootstrap).toContain('gsd .gsd seed failed');
+    // No error-swallowing anywhere in the seed.
+    expect(bootstrap).not.toContain('|| true');
+    expect(bootstrap).not.toContain('2>/dev/null');
   });
 
   it('does not forward host or renderer HOME as a generic docker env flag', () => {
@@ -779,6 +809,90 @@ describe('spawnAgent docker mode', () => {
   });
 });
 
+describe('spawnAgent docker mode — gsd skeleton staging (Design B)', () => {
+  // Count the Design B root staging one-shots (docker run --user 0:0 … -v …:/out)
+  // recorded on the sync exec mock, optionally filtered to a skel-dir substring.
+  function stagingCalls(skelDirContains?: string): string[][] {
+    const out: string[][] = [];
+    for (const call of mockExecFileSync.mock.calls) {
+      const cmd = call[0];
+      const a = call[1];
+      if (cmd !== 'docker') continue;
+      if (!Array.isArray(a)) continue;
+      if (a[0] !== 'run') continue;
+      if (!a.includes('--user') || !a.includes('0:0')) continue;
+      const outMount = getFlagValues(a, '-v').find((v) => v.endsWith(':/out'));
+      if (!outMount) continue;
+      if (skelDirContains && !outMount.includes(skelDirContains)) continue;
+      out.push(a);
+    }
+    return out;
+  }
+
+  it('stages the baked skeleton via a --user 0:0 root container into ~/.forge/gsd-skeleton/<imageId>', () => {
+    const home = makeTempHome([]);
+    vi.stubEnv('HOME', home);
+
+    spawnAgent(createMockWindow(), buildSpawnArgs({ agentId: nextAgentId() }));
+
+    const calls = stagingCalls();
+    expect(calls.length).toBeGreaterThanOrEqual(1);
+    const stagingArgs = calls[calls.length - 1];
+    // Root extract (root traverses the image's 0750 /home/agent) into a
+    // user-owned host dir keyed by the resolved image-id (abc123def456 per the mock).
+    expect(stagingArgs).toContain('--user');
+    expect(stagingArgs).toContain('0:0');
+    expect(getFlagValues(stagingArgs, '-v')).toContain(
+      `${home}/.forge/gsd-skeleton/abc123def456:/out`,
+    );
+  });
+
+  it('caches staging per image-id: the root container runs at most once per image per session', () => {
+    const home = makeTempHome([]);
+    vi.stubEnv('HOME', home);
+
+    // Same image twice → staged exactly once (the in-session map guard).
+    spawnAgent(createMockWindow(), buildSpawnArgs({ agentId: nextAgentId() }));
+    spawnAgent(createMockWindow(), buildSpawnArgs({ agentId: nextAgentId() }));
+    expect(stagingCalls(`${home}/.forge/gsd-skeleton/abc123def456:/out`).length).toBe(1);
+
+    // A DIFFERENT image resolves to a different id → its own staging one-shot.
+    spawnAgent(
+      createMockWindow(),
+      buildSpawnArgs({ agentId: nextAgentId(), dockerImage: 'forge-agent:other' }),
+    );
+    const otherStaging = stagingCalls().filter((a) =>
+      getFlagValues(a, '-v').some((v) => v.includes('gsd-skeleton/id-forge-agent-other')),
+    );
+    expect(otherStaging.length).toBe(1);
+  });
+
+  it('mounts the staged skeleton read-only at /opt/forge-skel on the agent container', () => {
+    const home = makeTempHome([]);
+    vi.stubEnv('HOME', home);
+
+    spawnAgent(createMockWindow(), buildSpawnArgs({ agentId: nextAgentId() }));
+
+    const volumeFlags = getFlagValues(getLastSpawnCall().args, '-v');
+    expect(volumeFlags.some((v) => v.endsWith(':/opt/forge-skel:ro'))).toBe(true);
+    expect(volumeFlags).toContain(`${home}/.forge/gsd-skeleton/abc123def456:/opt/forge-skel:ro`);
+  });
+
+  // ── Deciding test (RESEARCH "Deciding test") — NON-BLOCKING, CI / networked ──
+  // The no-egress Colima VM cannot pull the PUBLISHED image, so GSD-01/GSD-02 LIVE
+  // content is verified on a networked machine / in CI, NOT here. Run verbatim:
+  //
+  //   docker run --rm --user 501:20 thunderockforge/forge-agent:latest \
+  //     sh -c 'cat /home/agent/.gsd/defaults.json'
+  //
+  // "Permission denied" → RESEARCH Root Cause 3 confirmed on the real image →
+  // Design B (the staging above) is required. Prints JSON → the traversal fix is
+  // a harmless no-op. Positive end-to-end (networked/CI): after a staged
+  // `--user 501:20` seed into a /home/forge HOME, assert ~/.gsd/defaults.json and
+  // the gsd .claude command files exist in the seeded HOME (a GSD-01/02 proxy —
+  // no interactive claude auth needed for the file-presence check).
+});
+
 describe('spawnAgent session reattach', () => {
   it('reuses an existing PTY session and moves live output to the new channel', () => {
     const win = createMockWindow();
@@ -1067,9 +1181,10 @@ describe('spawnAgent docker mode — same-path bind mounts', () => {
 
     const volumeFlags = getFlagValues(getLastSpawnCall().args, '-v');
     // Workspace mounts must be same-path. The per-agent HOME bind mount (→
-    // /home/forge) and any skeleton mount (→ /opt/*, added by a later plan) are
-    // intentionally NOT same-path — isolation there is via the unique host
-    // source dir — so exclude them.
+    // /home/forge) and the gsd skeleton mount (→ /opt/forge-skel, staged in
+    // Plan 01-02) are intentionally NOT same-path — isolation there is via the
+    // unique host source dir — so exclude them (the /opt/* rule below covers the
+    // skel mount).
     for (const mount of volumeFlags) {
       // Strip trailing :ro if present
       const withoutRo = mount.replace(/:ro$/, '');
