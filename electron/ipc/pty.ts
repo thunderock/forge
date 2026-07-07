@@ -323,6 +323,16 @@ export function spawnAgent(
   if (args.dockerMode) {
     const name = containerName as string;
     const image = args.dockerImage || DOCKER_DEFAULT_IMAGE;
+    // Per-agent, user-owned host dir that backs the container HOME. Created here
+    // as the run-user so HOME stays writable under --user; unique per agentId so
+    // concurrent agents never collide (DOCK-05). Bind-mounted to the fixed
+    // DOCKER_CONTAINER_HOME below.
+    const hostHome = path.join(process.env.HOME ?? '', '.forge', 'agent-homes', args.agentId);
+    try {
+      fs.mkdirSync(hostHome, { recursive: true, mode: 0o700 });
+    } catch {
+      console.warn(`[docker] Could not create agent HOME dir ${hostHome}`);
+    }
     spawnCommand = 'docker';
     spawnArgs = [
       'run',
@@ -360,15 +370,18 @@ export function spawnAgent(
       cwd,
       // Forward env vars the agent needs (API keys, git config, etc.)
       ...buildDockerEnvFlags(spawnEnv),
-      // Per-agent writable HOME so concurrent sub-tasks don't collide on config files.
+      // Per-agent writable HOME: bind-mount the user-owned host dir onto the
+      // fixed container path and point HOME at it (see DOCKER_CONTAINER_HOME).
+      '-v',
+      `${hostHome}:${DOCKER_CONTAINER_HOME}`,
       '-e',
-      `HOME=${DOCKER_CONTAINER_HOME}/agent-${args.agentId}`,
-      // Mount SSH and git config read-only for git operations
+      `HOME=${DOCKER_CONTAINER_HOME}`,
+      // Mount SSH and git config read-only for git operations, nested under HOME
       ...buildDockerCredentialMounts(
         args.command,
         args.shareDockerAgentAuth === true,
         cwd,
-        `${DOCKER_CONTAINER_HOME}/agent-${args.agentId}`,
+        DOCKER_CONTAINER_HOME,
       ),
       image,
       // Seed the per-agent HOME from the baked skeleton (gsd config), then exec.
@@ -738,15 +751,21 @@ export function getAgentCols(agentId: string): number {
 // --- Docker mode helpers ---
 
 /**
- * Writable HOME inside the Docker container.
+ * Fixed container path for every agent's writable HOME.
  *
  * Docker tasks run as the host user's uid/gid so files created in the mounted
  * project worktree stay owned by the host user. On macOS that is often 501:20,
- * which cannot write to the image-owned /home/agent directory. Using /tmp keeps
- * HOME writable for arbitrary host-mapped users and avoids agents hanging
- * during startup while trying to initialize config under an unwritable home.
+ * which cannot write to the image-owned /home/agent directory — and codex
+ * refuses a HOME under /tmp. So instead of /tmp we bind-mount a per-agent host
+ * dir the run-user created (see spawnAgent) onto this fixed path, keeping HOME
+ * writable under --user.
+ *
+ * The path is FIXED (shared across agents), not per-agent: each container has
+ * its own mount namespace, so isolation comes from the unique host SOURCE dir,
+ * not the container path. A fixed path also avoids leaking host FS layout and
+ * keeps every credential mount at a stable, same-across-agents location.
  */
-export const DOCKER_CONTAINER_HOME = '/tmp';
+export const DOCKER_CONTAINER_HOME = '/home/forge';
 
 /**
  * Env vars that are desktop/host-specific and must NOT be forwarded into the
@@ -762,7 +781,8 @@ const DOCKER_ENV_BLOCK_LIST = new Set([
   'PATH',
   // Host HOME points to a non-writable directory inside the container when we
   // run as the host user's uid/gid. Agents need a writable HOME for config
-  // files, so Docker mode sets HOME to DOCKER_CONTAINER_HOME explicitly.
+  // files, so Docker mode sets HOME to DOCKER_CONTAINER_HOME — a bind-mounted,
+  // user-owned host dir — explicitly.
   'HOME',
   // Display / desktop session
   'DISPLAY',
