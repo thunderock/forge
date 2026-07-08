@@ -55,7 +55,7 @@ const image = process.env.FORGE_AGENT_IMAGE ?? 'thunderockforge/forge-agent:late
 // (echoed last) proves the seed ran to completion, not a partial set -e abort.
 const ASSERTION_BLOCK = [
   'set -e',
-  'ls "$HOME"/.claude/commands/gsd/*.md >/dev/null', // Claude /gsd-* proxy
+  'ls -d "$HOME"/.claude/skills/gsd-* >/dev/null', // Claude /gsd-* proxy (gsd-cc installs skills, not commands/gsd)
   'test -f "$HOME/.gsd/defaults.json"', // ~/.gsd/defaults.json (VER-01)
   'test "$(ls "$HOME"/.codex/prompts/gsd-*.md | wc -l)" -ge 20', // codex /prompts:gsd-* proxy
   'grep -q "\\[agents.gsd-" "$HOME/.codex/config.toml"', // codex agent registrations
@@ -73,7 +73,7 @@ const BAKED_ASSERTION_BLOCK = [
   'test -f ~/.codex/prompts/gsd-plan-phase.md',
   'grep -q "\\[agents.gsd-" ~/.codex/config.toml',
   'ls -d ~/.codex/agents ~/.codex/skills >/dev/null',
-  'ls ~/.claude/commands/gsd/*.md >/dev/null',
+  'ls -d ~/.claude/skills/gsd-* >/dev/null', // Claude /gsd-* proxy (skills, not commands/gsd)
   'echo GSD_BAKE_OK',
 ].join('\n');
 

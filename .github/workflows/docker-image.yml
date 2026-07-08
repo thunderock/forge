@@ -57,10 +57,14 @@ jobs:
             # CDX-02: agent registrations + baked dirs
             grep -q "\[agents.gsd-" ~/.codex/config.toml
             ls -d ~/.codex/agents ~/.codex/skills
-            # Claude non-regression (Pitfall 4): the Claude gsd layer survived the codex bake
-            ls ~/.claude/commands/gsd/*.md >/dev/null
-            # Informational only (RESEARCH Open Q1 — do NOT hard-require .codex/get-shit-done):
-            ls ~/.codex
+            # Claude non-regression (Pitfall 4): the Claude gsd layer survived the codex bake.
+            # gsd-cc installs Claude gsd as skills (~/.claude/skills/gsd-*) + the engine
+            # (~/.claude/get-shit-done), NOT ~/.claude/commands/gsd — that path does not exist
+            # for this gsd version, so the old glob was a false failure.
+            ls -d ~/.claude/skills/gsd-* >/dev/null
+            test -d ~/.claude/get-shit-done
+            # Informational only (RESEARCH Open Q1; also surfaces the real ~/.claude layout):
+            ls ~/.codex ~/.claude || true
           '
       # ---- the LOAD-BEARING gate: the real runtime seed into the run-user HOME ----
       # The baked block above reads /home/agent (the false-pass that shipped the bug).
