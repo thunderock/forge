@@ -1,6 +1,6 @@
 {
   "name": "forge",
-  "version": "1.11.0",
+  "version": "1.12.0",
   "description": "",
   "author": {
     "name": "thunderock",
@@ -28,6 +28,7 @@
     "format:check": "prettier --check .",
     "test": "vitest run",
     "test:coordinator-pty": "RUN_COORDINATOR_PTY_TEST=1 vitest run electron/mcp/coordinator-real-pty.integration.test.ts",
+    "test:gsd-docker": "RUN_GSD_DOCKER_TEST=1 vitest run electron/ipc/gsd-seeding.integration.test.ts",
     "test:coverage": "vitest run --coverage",
     "check:coordinator-log": "node scripts/check-coordinator-run.mjs",
     "check": "npm run compile && npm run typecheck && npm run lint && npm run format:check",

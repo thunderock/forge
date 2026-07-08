@@ -170,6 +170,18 @@ RUN set -eux; \
     chown -R 1000:1000 /home/agent/.claude /home/agent/.gsd; \
     chmod -R a+rX /home/agent/.claude /home/agent/.gsd
 
+# GSD Codex layer — bake gsd-codex-cli AFTER the Claude bake (above) so codex
+# ships with /prompts:gsd-* + [agents.gsd-*] and does not clobber Claude's newer
+# engine (RESEARCH Pitfall 4). Seeded into each task's per-agent $HOME/.codex at
+# container start (see electron/ipc/pty.ts). Pre-seed a secret-free config.toml
+# first so the installer's registrations have an append target (RESEARCH Pitfall 2).
+COPY --chown=1000:1000 dotfiles/codex-config.toml /home/agent/.codex/config.toml
+RUN set -eux; \
+    HOME=/home/agent npx --yes gsd-codex-cli@1.20.13 --global; \
+    rm -rf /home/agent/.npm; \
+    chown -R 1000:1000 /home/agent/.codex /home/agent/.claude; \
+    chmod -R a+rX /home/agent/.codex
+
 ENV SHELL=/bin/bash
 WORKDIR /app
 CMD ["bash"]

@@ -1,8 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { expectDefined, type MockStoreHarness } from './test-helpers';
 
-const { mockSetStore, mockMarkAgentSpawned } = vi.hoisted(() => ({
-  mockSetStore: vi.fn(),
+const { mockMarkAgentSpawned } = vi.hoisted(() => ({
   mockMarkAgentSpawned: vi.fn(),
+}));
+const core = vi.hoisted(() => ({
+  harness: undefined as MockStoreHarness<{ agents: Record<string, AgentLike> }> | undefined,
 }));
 
 let mockAgents: Record<string, AgentLike> = {};
@@ -31,21 +34,18 @@ interface AgentDefLike {
   description: string;
 }
 
-function applySetStore(...args: unknown[]): void {
-  if (args.length === 1 && typeof args[0] === 'function') {
-    (args[0] as (s: { agents: Record<string, AgentLike> }) => void)({ agents: mockAgents });
-  }
-}
-
-vi.mock('./core', () => ({
-  store: new Proxy({} as Record<string, unknown>, {
-    get(_target, prop) {
-      if (prop === 'agents') return mockAgents;
-      return undefined;
+vi.mock('./core', async () => {
+  const { createMockStoreHarness } = await import('./test-helpers');
+  core.harness = createMockStoreHarness({
+    get agents() {
+      return mockAgents;
     },
-  }),
-  setStore: mockSetStore,
-}));
+    set agents(next) {
+      mockAgents = next;
+    },
+  });
+  return core.harness.moduleMock();
+});
 
 vi.mock('./taskStatus', () => ({
   markAgentSpawned: mockMarkAgentSpawned,
@@ -87,7 +87,8 @@ function exitedAgent(overrides: Partial<AgentLike> = {}): AgentLike {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockSetStore.mockImplementation((...args: unknown[]) => applySetStore(...args));
+  const harness = expectDefined(core.harness, 'mock store harness');
+  harness.reset(harness.state());
   mockAgents = { 'agent-1': exitedAgent() };
 });
 

@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto';
 import { createWorktree, removeWorktree } from './git.js';
-import { killAgent, notifyAgentListChanged } from './pty.js';
+import { cleanupAgentHome, killAgent, notifyAgentListChanged } from './pty.js';
 import { stopPlanWatcher } from './plans.js';
 import { stopStepsWatcher } from './steps.js';
 
@@ -64,6 +64,13 @@ export async function deleteTask(opts: DeleteTaskOpts): Promise<void> {
       killAgent(agentId);
     } catch {
       /* already dead */
+    }
+    // Task deletion is the per-agent HOME's end-of-life (it survives container
+    // exit/respawn until here). Remove it; never let a miss block deletion.
+    try {
+      cleanupAgentHome(agentId);
+    } catch {
+      /* dir already gone */
     }
   }
   await removeWorktree(opts.projectRoot, opts.branchName, opts.deleteBranch);

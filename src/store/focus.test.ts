@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { expectDefined, type MockStoreHarness } from './test-helpers';
 
 type MockStore = {
   activeTaskId: string | null;
@@ -34,36 +35,19 @@ type MockTask = {
 };
 
 let mockStore: MockStore;
-
-function setStorePath(...args: unknown[]): void {
-  const value = args[args.length - 1];
-  let target: Record<string, unknown> = mockStore as unknown as Record<string, unknown>;
-  for (let i = 0; i < args.length - 2; i++) {
-    const key = args[i] as string;
-    const next = target[key] as Record<string, unknown> | undefined;
-    if (!next || typeof next !== 'object') {
-      target[key] = {};
-    }
-    target = target[key] as Record<string, unknown>;
-  }
-  target[args[args.length - 2] as string] = value;
-}
+const core = vi.hoisted(() => ({
+  harness: undefined as MockStoreHarness<MockStore> | undefined,
+}));
 
 vi.mock('solid-js', () => ({
   batch: (fn: () => void) => fn(),
 }));
 
-vi.mock('./core', () => ({
-  store: new Proxy(
-    {},
-    {
-      get(_target, prop) {
-        return mockStore[prop as keyof MockStore];
-      },
-    },
-  ),
-  setStore: vi.fn((...args: unknown[]) => setStorePath(...args)),
-}));
+vi.mock('./core', async () => {
+  const { createMockStoreHarness } = await import('./test-helpers');
+  core.harness = createMockStoreHarness<MockStore>({} as MockStore);
+  return core.harness.moduleMock();
+});
 
 vi.mock('./navigation', () => ({
   setActiveTask: vi.fn((id: string) => {
@@ -103,7 +87,8 @@ function setTask(id: string, overrides: Record<string, unknown> = {}): void {
 }
 
 beforeEach(() => {
-  mockStore = {
+  const harness = expectDefined(core.harness, 'mock store harness');
+  mockStore = harness.reset({
     activeTaskId: 'task-1',
     activeAgentId: 'agent-1',
     tasks: {},
@@ -122,7 +107,7 @@ beforeEach(() => {
     showPromptInput: true,
     sidebarVisible: true,
     taskSplitMode: {},
-  };
+  });
 
   vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => {
     cb(0);

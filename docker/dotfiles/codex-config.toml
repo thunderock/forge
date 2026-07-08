@@ -1,0 +1,5 @@
+# GSD Codex configuration — pre-seeded base.
+# The gsd-codex-cli installer appends its [agents.gsd-*] sections below this
+# (RESEARCH Pitfall 2: guarantees registrations land whether the installer
+# creates or merges). Codex later appends [projects.*] trust entries at runtime.
+# Secret-free — no auth lives here.

@@ -13,6 +13,10 @@ update-test/
 .claude
 .DS_Store
 docs/
+openspec/
+
+# GSD planning artifacts — kept local (commit_docs=false)
+.planning/
 
 # Sandbox bind-mount artifacts from user home (not project files).
 # Root-anchored so legitimate nested files with these names are still tracked.

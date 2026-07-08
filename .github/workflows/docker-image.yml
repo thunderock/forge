@@ -13,10 +13,18 @@ on:
     branches: [main]
     paths:
       - 'docker/**'
+      - 'electron/ipc/pty.ts'
+      - 'electron/ipc/docker-gsd-seed.ts'
+      - 'electron/ipc/gsd-seeding.integration.test.ts'
+      - 'package.json'
       - '.github/workflows/docker-image.yml'
   pull_request:
     paths:
       - 'docker/**'
+      - 'electron/ipc/pty.ts'
+      - 'electron/ipc/docker-gsd-seed.ts'
+      - 'electron/ipc/gsd-seeding.integration.test.ts'
+      - 'package.json'
       - '.github/workflows/docker-image.yml'
   workflow_dispatch:
 
@@ -24,19 +32,52 @@ env:
   IMAGE: docker.io/thunderockforge/forge-agent
 
 jobs:
-  # ---- PR verification: prove the image builds, don't push ----
+  # ---- PR verification: build, load, and prove the codex+claude gsd bake ----
   verify:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
-      - name: Build (amd64, no push)
+      - name: Build (amd64, load for verification)
         uses: docker/build-push-action@v6
         with:
           context: ./docker
           platforms: linux/amd64
           push: false
+          load: true
+          tags: forge-agent:ci
+      - name: Verify gsd bake — codex (CDX-02/CDX-03) + Claude non-regression (Pitfall 4)
+        run: |
+          docker run --rm --user 1000:1000 forge-agent:ci sh -c '
+            set -e
+            # CDX-03 (file-presence proxy): top-level gsd prompts → /prompts:gsd-*
+            test "$(ls ~/.codex/prompts/gsd-*.md | wc -l)" -ge 20
+            test -f ~/.codex/prompts/gsd-plan-phase.md
+            # CDX-02: agent registrations + baked dirs
+            grep -q "\[agents.gsd-" ~/.codex/config.toml
+            ls -d ~/.codex/agents ~/.codex/skills
+            # Claude non-regression (Pitfall 4): the Claude gsd layer survived the codex bake.
+            # gsd-cc installs Claude gsd as skills (~/.claude/skills/gsd-*) + the engine
+            # (~/.claude/get-shit-done), NOT ~/.claude/commands/gsd — that path does not exist
+            # for this gsd version, so the old glob was a false failure.
+            ls -d ~/.claude/skills/gsd-* >/dev/null
+            test -d ~/.claude/get-shit-done
+            # Informational only (RESEARCH Open Q1; also surfaces the real ~/.claude layout):
+            ls ~/.codex ~/.claude || true
+          '
+      # ---- the LOAD-BEARING gate: the real runtime seed into the run-user HOME ----
+      # The baked block above reads /home/agent (the false-pass that shipped the bug).
+      # This runs the REAL ensureGsdSkeleton staging + GSD_SEED_ENTRYPOINT as the
+      # runner's non-1000 uid (1001) with HOME=/home/forge and asserts the SEEDED HOME
+      # for BOTH agents. forge-agent:ci is already in the daemon (load:true) — no pull.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Verify runtime gsd seeding — both agents (VER-01/VER-02)
+        run: FORGE_AGENT_IMAGE=forge-agent:ci npm run test:gsd-docker
 
   # ---- main / manual: build each arch on its native runner, push by digest ----
   build:

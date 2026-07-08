@@ -19,6 +19,17 @@ import {
   PROJECT_IMAGE_PREFIX,
 } from './docker-pull.js';
 import { debug as logDebug } from '../log.js';
+import {
+  DOCKER_CONTAINER_HOME,
+  FORGE_SKEL_MOUNT,
+  GSD_SEED_ENTRYPOINT,
+  ensureGsdSkeleton,
+} from './docker-gsd-seed.js';
+
+// Re-exported so the existing './pty.js' import surface is preserved (pty.test.ts
+// and spawnAgent's consumers). Its canonical definition now lives in
+// docker-gsd-seed.ts — the shared, dependency-light seed source of truth.
+export { DOCKER_CONTAINER_HOME };
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -323,6 +334,16 @@ export function spawnAgent(
   if (args.dockerMode) {
     const name = containerName as string;
     const image = args.dockerImage || DOCKER_DEFAULT_IMAGE;
+    // Per-agent, user-owned host dir that backs the container HOME. Created here
+    // as the run-user so HOME stays writable under --user; unique per agentId so
+    // concurrent agents never collide (DOCK-05). Bind-mounted to the fixed
+    // DOCKER_CONTAINER_HOME below.
+    const hostHome = agentHomeDir(args.agentId);
+    try {
+      fs.mkdirSync(hostHome, { recursive: true, mode: 0o700 });
+    } catch {
+      console.warn(`[docker] Could not create agent HOME dir ${hostHome}`);
+    }
     spawnCommand = 'docker';
     spawnArgs = [
       'run',
@@ -360,22 +381,30 @@ export function spawnAgent(
       cwd,
       // Forward env vars the agent needs (API keys, git config, etc.)
       ...buildDockerEnvFlags(spawnEnv),
-      // Per-agent writable HOME so concurrent sub-tasks don't collide on config files.
+      // Per-agent writable HOME: bind-mount the user-owned host dir onto the
+      // fixed container path and point HOME at it (see DOCKER_CONTAINER_HOME).
+      '-v',
+      `${hostHome}:${DOCKER_CONTAINER_HOME}`,
       '-e',
-      `HOME=${DOCKER_CONTAINER_HOME}/agent-${args.agentId}`,
-      // Mount SSH and git config read-only for git operations
+      `HOME=${DOCKER_CONTAINER_HOME}`,
+      // Mount SSH and git config read-only for git operations, nested under HOME
       ...buildDockerCredentialMounts(
         args.command,
         args.shareDockerAgentAuth === true,
         cwd,
-        `${DOCKER_CONTAINER_HOME}/agent-${args.agentId}`,
+        DOCKER_CONTAINER_HOME,
       ),
       image,
-      // Seed the per-agent HOME from the baked skeleton (gsd config), then exec.
-      // cp -an is no-clobber so a shared-auth .claude bind mount keeps its credentials.
+      // Seed the per-agent HOME from the read-only gsd skeleton staged at
+      // /opt/forge-skel (Design B — the image's own /home/agent is 0750/uid-1000
+      // and unreadable by the run-user). cp -an is no-clobber so a shared-auth
+      // .claude bind mount keeps its credentials, and the seed runs IN-CONTAINER
+      // after mounts so that mount is not shadowed (RESEARCH Pitfall 3). Failures
+      // SURFACE (DOCK-04): an unwritable HOME is FATAL (exit 1); a cp miss WARNs
+      // and continues (an empty skel dir must still let the agent run).
       'sh',
       '-c',
-      'mkdir -p "$HOME/.claude" "$HOME/.gsd"; cp -an /home/agent/.claude/. "$HOME/.claude/" 2>/dev/null || true; cp -an /home/agent/.gsd/. "$HOME/.gsd/" 2>/dev/null || true; exec "$@"',
+      GSD_SEED_ENTRYPOINT,
       '--',
       command,
       ...args.args,
@@ -385,16 +414,40 @@ export function spawnAgent(
     spawnArgs = args.args;
   }
 
+  const resolvedImage = args.dockerImage || DOCKER_DEFAULT_IMAGE;
+
   const launch = () => {
+    // Design B gsd seed: stage the baked skeleton once per image-id and mount it
+    // read-only at /opt/forge-skel for the entrypoint to cp -an into HOME. Done
+    // here (not at argv-build time) because the image is guaranteed present by the
+    // time launch() runs — the fast-path cache, post-pull, and fallback all funnel
+    // through launch(), so this single insertion covers every spawn path.
+    let finalArgs = spawnArgs;
+    if (args.dockerMode) {
+      const skelDir = ensureGsdSkeleton(resolvedImage);
+      if (skelDir) {
+        // Insert the read-only skeleton mount before the image positional so
+        // docker parses it as a flag (a `-v` after the image is command args).
+        const imageIdx = spawnArgs.indexOf(resolvedImage);
+        const insertAt = imageIdx >= 0 ? imageIdx : spawnArgs.length;
+        finalArgs = [
+          ...spawnArgs.slice(0, insertAt),
+          '-v',
+          `${skelDir}:${FORGE_SKEL_MOUNT}:ro`,
+          ...spawnArgs.slice(insertAt),
+        ];
+      }
+    }
+
     logDebug('pty', `spawn command ${args.agentId}`, {
       taskId: args.taskId,
       command: spawnCommand,
-      args: redactedSpawnArgs(spawnCommand, spawnArgs),
+      args: redactedSpawnArgs(spawnCommand, finalArgs),
       cwd,
       dockerMode: args.dockerMode === true,
     });
 
-    const proc = pty.spawn(spawnCommand, spawnArgs, {
+    const proc = pty.spawn(spawnCommand, finalArgs, {
       name: 'xterm-256color',
       cols: args.cols,
       rows: args.rows,
@@ -528,8 +581,6 @@ export function spawnAgent(
 
     emitPtyEvent('spawn', args.agentId);
   };
-
-  const resolvedImage = args.dockerImage || DOCKER_DEFAULT_IMAGE;
 
   // Non-Docker tasks (and locally-built project images) spawn immediately.
   // Registry images get a resilient pre-pull so a transient Docker Hub blip
@@ -692,6 +743,8 @@ export function killAllAgents(): void {
       }
     }
     session.proc.kill();
+    // Best-effort quit-time GC of this live agent's persistent host HOME.
+    cleanupAgentHome(session.agentId);
   }
   // Let onExit handlers clean up sessions individually
 }
@@ -738,15 +791,29 @@ export function getAgentCols(agentId: string): number {
 // --- Docker mode helpers ---
 
 /**
- * Writable HOME inside the Docker container.
+ * Host directory that backs a single agent's container HOME.
  *
- * Docker tasks run as the host user's uid/gid so files created in the mounted
- * project worktree stay owned by the host user. On macOS that is often 501:20,
- * which cannot write to the image-owned /home/agent directory. Using /tmp keeps
- * HOME writable for arbitrary host-mapped users and avoids agents hanging
- * during startup while trying to initialize config under an unwritable home.
+ * Created by spawnAgent as the run-user and bind-mounted to
+ * DOCKER_CONTAINER_HOME. Lives under ~/.forge (inside the Colima-shared /Users
+ * tree) and is keyed on the stable agentId so reattach/respawn reuse it. Single
+ * source of the path convention so the spawn and cleanup paths never diverge.
  */
-export const DOCKER_CONTAINER_HOME = '/tmp';
+export function agentHomeDir(agentId: string): string {
+  return path.join(process.env.HOME ?? '', '.forge', 'agent-homes', agentId);
+}
+
+/**
+ * Remove an agent's persistent host HOME dir. Best-effort: a missing dir is
+ * fine and any error is swallowed so cleanup never blocks task deletion/quit.
+ * Not called on container exit — reattach relies on the HOME surviving.
+ */
+export function cleanupAgentHome(agentId: string): void {
+  try {
+    fs.rmSync(agentHomeDir(agentId), { recursive: true, force: true });
+  } catch {
+    // Ignore: dir may not exist or may have already been removed.
+  }
+}
 
 /**
  * Env vars that are desktop/host-specific and must NOT be forwarded into the
@@ -762,7 +829,8 @@ const DOCKER_ENV_BLOCK_LIST = new Set([
   'PATH',
   // Host HOME points to a non-writable directory inside the container when we
   // run as the host user's uid/gid. Agents need a writable HOME for config
-  // files, so Docker mode sets HOME to DOCKER_CONTAINER_HOME explicitly.
+  // files, so Docker mode sets HOME to DOCKER_CONTAINER_HOME — a bind-mounted,
+  // user-owned host dir — explicitly.
   'HOME',
   // Display / desktop session
   'DISPLAY',

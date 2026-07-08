@@ -97,6 +97,11 @@ export enum IPC {
   StartRemoteServer = 'start_remote_server',
   StopRemoteServer = 'stop_remote_server',
   GetRemoteStatus = 'get_remote_status',
+  GeneratePairingPin = 'generate_pairing_pin',
+  // Mobile task creation (main ↔ renderer round-trip for paired phones)
+  Remote_GetProjectsRequest = 'remote_get_projects_request',
+  Remote_CreateTaskRequest = 'remote_create_task_request',
+  Remote_RendererReply = 'remote_renderer_reply',
 
   // Plan
   PlanContent = 'plan_content',

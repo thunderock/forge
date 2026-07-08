@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { expectDefined, type MockStoreHarness } from './test-helpers';
 
 type MockStore = {
   activeTaskId: string | null;
@@ -15,26 +16,15 @@ type MockStore = {
 };
 
 let mockStore: MockStore;
-
-vi.mock('./core', () => ({
-  store: new Proxy(
-    {},
-    {
-      get(_target, prop) {
-        return mockStore[prop as keyof MockStore];
-      },
-    },
-  ),
-  setStore: vi.fn((...args: unknown[]) => {
-    const value = args[args.length - 1];
-    let target: Record<string, unknown> = mockStore as unknown as Record<string, unknown>;
-    for (let i = 0; i < args.length - 2; i++) {
-      const key = args[i] as string;
-      target = target[key] as Record<string, unknown>;
-    }
-    target[args[args.length - 2] as string] = value;
-  }),
+const core = vi.hoisted(() => ({
+  harness: undefined as MockStoreHarness<MockStore> | undefined,
 }));
+
+vi.mock('./core', async () => {
+  const { createMockStoreHarness } = await import('./test-helpers');
+  core.harness = createMockStoreHarness<MockStore>({} as MockStore);
+  return core.harness.moduleMock();
+});
 
 vi.mock('./focus', () => ({}));
 vi.mock('./notification', () => ({ showNotification: vi.fn() }));
@@ -44,7 +34,8 @@ vi.mock('./tasks', () => ({ reorderTask: vi.fn() }));
 import { jumpToTask } from './navigation';
 
 beforeEach(() => {
-  mockStore = {
+  const harness = expectDefined(core.harness, 'mock store harness');
+  mockStore = harness.reset({
     activeTaskId: null,
     activeAgentId: null,
     tasks: {
@@ -60,7 +51,7 @@ beforeEach(() => {
     sidebarFocused: false,
     sidebarFocusedProjectId: null,
     sidebarFocusedTaskId: null,
-  };
+  });
 });
 
 afterEach(() => {

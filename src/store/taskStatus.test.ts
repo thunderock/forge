@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { expectDefined, type MockStoreHarness } from './test-helpers';
 
 // Mock the SolidJS store before importing the module under test.
 let mockAutoTrustFolders = false;
@@ -6,22 +7,53 @@ let mockActiveTaskId: string | null = null;
 let mockTasks: Record<string, unknown> = {};
 let mockAgents: Record<string, unknown> = {};
 let mockTaskGitStatus: Record<string, unknown> = {};
-vi.mock('./core', () => ({
-  store: new Proxy(
-    {},
-    {
-      get(_target, prop) {
-        if (prop === 'autoTrustFolders') return mockAutoTrustFolders;
-        if (prop === 'activeTaskId') return mockActiveTaskId;
-        if (prop === 'tasks') return mockTasks;
-        if (prop === 'agents') return mockAgents;
-        if (prop === 'taskGitStatus') return mockTaskGitStatus;
-        return undefined;
-      },
-    },
-  ),
-  setStore: vi.fn(),
+const core = vi.hoisted(() => ({
+  harness: undefined as
+    | MockStoreHarness<{
+        autoTrustFolders: boolean;
+        activeTaskId: string | null;
+        tasks: Record<string, unknown>;
+        agents: Record<string, unknown>;
+        taskGitStatus: Record<string, unknown>;
+      }>
+    | undefined,
 }));
+vi.mock('./core', async () => {
+  const { createMockStoreHarness } = await import('./test-helpers');
+  core.harness = createMockStoreHarness({
+    get autoTrustFolders() {
+      return mockAutoTrustFolders;
+    },
+    set autoTrustFolders(next) {
+      mockAutoTrustFolders = next;
+    },
+    get activeTaskId() {
+      return mockActiveTaskId;
+    },
+    set activeTaskId(next) {
+      mockActiveTaskId = next;
+    },
+    get tasks() {
+      return mockTasks;
+    },
+    set tasks(next) {
+      mockTasks = next;
+    },
+    get agents() {
+      return mockAgents;
+    },
+    set agents(next) {
+      mockAgents = next;
+    },
+    get taskGitStatus() {
+      return mockTaskGitStatus;
+    },
+    set taskGitStatus(next) {
+      mockTaskGitStatus = next;
+    },
+  });
+  return core.harness.moduleMock();
+});
 
 // Mock IPC so tryAutoTrust's invoke call doesn't hit Electron.
 vi.mock('../lib/ipc', () => ({
@@ -89,6 +121,8 @@ function setMockAgent(agentId: string, overrides: Record<string, unknown> = {}):
 
 beforeEach(() => {
   vi.useFakeTimers();
+  const harness = expectDefined(core.harness, 'mock store harness');
+  harness.reset(harness.state());
   vi.mocked(invoke).mockClear();
   vi.mocked(setStore).mockClear();
   mockAutoTrustFolders = false;
@@ -411,6 +445,48 @@ describe('looksLikeQuestion', () => {
 
   it('returns false for normal output without questions', () => {
     expect(looksLikeQuestion('Building project...\nCompiling files...')).toBe(false);
+  });
+
+  it('clears once the agent returns to its main prompt in a \\r-separated TUI frame', () => {
+    // Regression for the permanently-uneditable prompt box.  Claude/Codex redraw
+    // with lone \r between lines, which this function's \r?\n line-split does NOT
+    // break — so stale question prose and the bare ❯ collapse into a single line
+    // and the bare-❯ suppression misses it.  Pre-fix this returned true and, once
+    // the agent went idle, latched the textarea disabled forever.  The shared
+    // readiness detector splits on lone \r and recognises the ❯, so it clears.
+    const idleFrame = [
+      'Would you like me to continue with the refactor?',
+      '❯',
+      'opus · /Users/x/proj · ctx:24k/200k',
+    ].join('\r');
+    expect(looksLikeQuestion(idleFrame)).toBe(false);
+  });
+
+  it('clears when a deep status footer pushes the bare ❯ past the last-8-line window', () => {
+    // The legacy bare-❯ suppression only scans the last 8 non-empty lines; a
+    // multi-line footer below the prompt hid the ❯ from it.  chunkContainsAgentPrompt
+    // scans the last ~1000 chars, so it still finds the prompt and clears.
+    const idleFrame = [
+      'Do you want to refactor the auth module?',
+      '❯',
+      'status line 1',
+      'status line 2',
+      'status line 3',
+      'status line 4',
+      'status line 5',
+      'status line 6',
+      'status line 7',
+      'status line 8',
+    ].join('\n');
+    expect(looksLikeQuestion(idleFrame)).toBe(false);
+  });
+
+  it('still detects a live selection dialog even though it renders a ❯ cursor', () => {
+    // Safety guard: the ❯ in a live selection is followed by option text
+    // ("❯ 1. Yes"), so it is NOT the bare main prompt.  chunkContainsAgentPrompt
+    // returns not-ready and the question must stay detected (box stays guarded).
+    const liveDialog = ['Do you want to proceed?', '❯ 1. Yes', '  2. No'].join('\n');
+    expect(looksLikeQuestion(liveDialog)).toBe(true);
   });
 });
 
@@ -801,6 +877,28 @@ describe('task attention state', () => {
 
     expect(getTaskAttentionState('task-1')).toBe('review');
     expect(taskNeedsAttention('task-1')).toBe(true);
+  });
+
+  it('clears question state once the agent redraws its main prompt (idle self-heal)', () => {
+    mockActiveTaskId = 'task-1';
+    setMockTask('task-1', { agentIds: ['agent-1'] });
+    setMockAgent('agent-1', { status: 'running' });
+
+    // Agent asks conversationally — question detected, prompt box would disable.
+    markAgentOutput(
+      'agent-1',
+      new TextEncoder().encode('Would you like me to continue?'),
+      'task-1',
+    );
+    expect(isAgentAskingQuestion('agent-1')).toBe(true);
+
+    // Agent redraws its bare ❯ prompt (the question text still lingers in the
+    // 16KB tail buffer).  The trailing analysis must un-latch the flag rather
+    // than leaving it stuck true once the agent goes idle.
+    vi.advanceTimersByTime(300);
+    markAgentOutput('agent-1', new TextEncoder().encode('\r❯\ropus · /x · ctx:1k/200k'), 'task-1');
+
+    expect(isAgentAskingQuestion('agent-1')).toBe(false);
   });
 });
 

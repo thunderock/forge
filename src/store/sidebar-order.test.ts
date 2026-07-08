@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { expectDefined, type MockStoreHarness } from './test-helpers';
 
 type MockTask = {
   projectId?: string;
@@ -6,19 +7,28 @@ type MockTask = {
   coordinatedBy?: string;
   collapsed?: boolean;
 };
+type MockStore = {
+  tasks: Record<string, MockTask>;
+  taskOrder: string[];
+  collapsedTaskOrder: string[];
+  projects: Array<{ id: string }>;
+};
 
-const { mockStore } = vi.hoisted(() => ({
-  mockStore: {
-    tasks: {} as Record<string, MockTask>,
-    taskOrder: [] as string[],
-    collapsedTaskOrder: [] as string[],
-    projects: [] as Array<{ id: string }>,
-  },
+const core = vi.hoisted(() => ({
+  harness: undefined as MockStoreHarness<MockStore> | undefined,
 }));
+let mockStore: MockStore;
 
-vi.mock('./core', () => ({
-  store: mockStore,
-}));
+vi.mock('./core', async () => {
+  const { createMockStoreHarness } = await import('./test-helpers');
+  core.harness = createMockStoreHarness<MockStore>({
+    tasks: {},
+    taskOrder: [],
+    collapsedTaskOrder: [],
+    projects: [],
+  });
+  return core.harness.moduleMock();
+});
 
 import {
   computeGroupedTasks,
@@ -27,10 +37,13 @@ import {
 } from './sidebar-order';
 
 beforeEach(() => {
-  mockStore.tasks = {};
-  mockStore.taskOrder = [];
-  mockStore.collapsedTaskOrder = [];
-  mockStore.projects = [];
+  const harness = expectDefined(core.harness, 'mock store harness');
+  mockStore = harness.reset({
+    tasks: {},
+    taskOrder: [],
+    collapsedTaskOrder: [],
+    projects: [],
+  });
 });
 
 describe('sidebar coordinator ordering', () => {

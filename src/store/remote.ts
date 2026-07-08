@@ -14,7 +14,26 @@ interface ServerResult {
 // that arrive after stop are discarded instead of overwriting the store.
 let stopGeneration = 0;
 
-export async function startRemoteAccess(port?: number): Promise<ServerResult> {
+/** Persisted toggle: whether to auto-start the remote server on app launch. */
+export function setAutoStartRemoteAccess(enabled: boolean): void {
+  setStore('autoStartRemoteAccess', enabled);
+}
+
+// Dedupe concurrent starts. With auto-start on launch, the persisted-state
+// trigger can race the Connect Phone modal's open effect: both pass the
+// backend's `if (remoteServer)` guard while it's still null, and the second
+// listen() fails with EADDRINUSE. Sharing one in-flight promise prevents that.
+let startInflight: Promise<ServerResult> | null = null;
+
+export function startRemoteAccess(port?: number): Promise<ServerResult> {
+  if (startInflight) return startInflight;
+  startInflight = startRemoteAccessImpl(port).finally(() => {
+    startInflight = null;
+  });
+  return startInflight;
+}
+
+async function startRemoteAccessImpl(port?: number): Promise<ServerResult> {
   const result = await invoke<ServerResult>(IPC.StartRemoteServer, port ? { port } : {});
   if (result.unavailableReason) {
     throw new Error(
@@ -48,6 +67,14 @@ export async function stopRemoteAccess(): Promise<{ stopped: boolean; reason?: s
     });
   }
   return result;
+}
+
+/**
+ * Mint a short-lived pairing PIN shown on the desktop. A phone enters it to
+ * elevate its read-only connection to one that can create tasks.
+ */
+export function generatePairingPin(): Promise<{ pin: string; expiresAt: number }> {
+  return invoke<{ pin: string; expiresAt: number }>(IPC.GeneratePairingPin);
 }
 
 export async function refreshRemoteStatus(): Promise<void> {

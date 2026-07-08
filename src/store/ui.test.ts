@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { expectDefined, type MockStoreHarness } from './test-helpers';
 
 type MockStore = {
   activeTaskId: string | null;
@@ -11,6 +12,9 @@ type MockStore = {
 };
 
 let mockStore: MockStore;
+const core = vi.hoisted(() => ({
+  harness: undefined as MockStoreHarness<MockStore> | undefined,
+}));
 const mocks = vi.hoisted(() => ({
   setActiveTask: vi.fn((id: string) => {
     mockStore.activeTaskId = id;
@@ -20,50 +24,22 @@ const mocks = vi.hoisted(() => ({
   }),
 }));
 
-function setStorePath(...args: unknown[]): void {
-  const value = args[args.length - 1];
-  let target: Record<string, unknown> = mockStore as unknown as Record<string, unknown>;
-  for (let i = 0; i < args.length - 2; i++) {
-    const key = args[i] as string;
-    const next = target[key] as Record<string, unknown> | undefined;
-    if (!next || typeof next !== 'object') {
-      target[key] = {};
-    }
-    target = target[key] as Record<string, unknown>;
-  }
-  target[args[args.length - 2] as string] = value;
-}
-
 vi.mock('solid-js', () => ({
   batch: (fn: () => void) => fn(),
 }));
 
 // Real Solid produce uses Proxy mutation tracking; for the mock, a thin
 // pass-through is enough because our store slices are plain objects.
-vi.mock('solid-js/store', () => ({
-  produce: (fn: (draft: unknown) => void) => fn,
-}));
+vi.mock('solid-js/store', async () => {
+  const { mockSolidStoreProduce } = await import('./test-helpers');
+  return mockSolidStoreProduce();
+});
 
-vi.mock('./core', () => ({
-  store: new Proxy(
-    {},
-    {
-      get(_target, prop) {
-        return mockStore[prop as keyof MockStore];
-      },
-    },
-  ),
-  setStore: vi.fn((...args: unknown[]) => {
-    // Produce-style: setStore('key', produceFn) — run the producer on the slice.
-    if (args.length === 2 && typeof args[1] === 'function') {
-      const key = args[0] as keyof MockStore;
-      const producer = args[1] as (draft: unknown) => void;
-      producer(mockStore[key]);
-      return;
-    }
-    setStorePath(...args);
-  }),
-}));
+vi.mock('./core', async () => {
+  const { createMockStoreHarness } = await import('./test-helpers');
+  core.harness = createMockStoreHarness<MockStore>({} as MockStore);
+  return core.harness.moduleMock();
+});
 
 vi.mock('./navigation', () => ({
   setActiveTask: mocks.setActiveTask,
@@ -90,7 +66,8 @@ import {
 } from './ui';
 
 beforeEach(() => {
-  mockStore = {
+  const harness = expectDefined(core.harness, 'mock store harness');
+  mockStore = harness.reset({
     activeTaskId: 'task-1',
     focusMode: false,
     tasks: {
@@ -101,7 +78,7 @@ beforeEach(() => {
     panelUserSize: {},
     projectsCollapsed: false,
     sidebarFocusedProjectId: null,
-  };
+  });
 
   vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => {
     cb(0);

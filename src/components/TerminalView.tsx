@@ -1142,14 +1142,23 @@ export function TerminalView(props: TerminalViewProps) {
   const mcpError = () => store.tasks[props.taskId]?.mcpStartupError;
   const mcpStatus = () => store.tasks[props.taskId]?.mcpStartupStatus;
 
-  // Only agent terminals reserve the bookmark gutter. Shell terminals (in-task
-  // shells and standalone full-size panels) opt out so they fill the pane with
-  // no left inset.
-  const showBookmarks = () => props.bookmarksEnabled !== false;
+  // Reserve the bookmark gutter only when bookmarks are enabled AND the terminal
+  // is on the normal buffer. Shell terminals (in-task shells and standalone
+  // full-size panels) opt out via the prop. Agent terminals opt in, but a
+  // full-screen TUI (e.g. Claude Code) switches to the alternate buffer, which
+  // has no scrollback to anchor a marker to — so we drop the inset there and give
+  // the pane its full width back instead of stranding an empty 24px strip.
+  // Driven by overviewTick (bumped on alt<->normal switches); the memo only
+  // re-renders the layout on a real buffer flip, not on every streaming frame.
+  const reserveGutter = createMemo(() => {
+    if (props.bookmarksEnabled === false) return false;
+    overviewTick();
+    return !term || term.buffer.active.type === 'normal';
+  });
 
   return (
     <div style={{ position: 'relative', width: '100%', height: '100%' }}>
-      <Show when={showBookmarks()}>
+      <Show when={reserveGutter()}>
         <TerminalBookmarkGutter
           width={BOOKMARK_GUTTER_WIDTH}
           bookmarks={bookmarks()}
@@ -1170,9 +1179,9 @@ export function TerminalView(props: TerminalViewProps) {
       <div
         ref={containerRef}
         style={{
-          width: showBookmarks() ? `calc(100% - ${BOOKMARK_GUTTER_WIDTH}px)` : '100%',
+          width: reserveGutter() ? `calc(100% - ${BOOKMARK_GUTTER_WIDTH}px)` : '100%',
           height: '100%',
-          'margin-left': showBookmarks() ? `${BOOKMARK_GUTTER_WIDTH}px` : '0',
+          'margin-left': reserveGutter() ? `${BOOKMARK_GUTTER_WIDTH}px` : '0',
           overflow: 'hidden',
           padding: '4px 0 0 4px',
           contain: 'strict',

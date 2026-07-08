@@ -179,7 +179,12 @@ export {
   updateTerminalName,
   syncTerminalCounter,
 } from './terminals';
-export { startRemoteAccess, stopRemoteAccess, refreshRemoteStatus } from './remote';
+export {
+  startRemoteAccess,
+  stopRemoteAccess,
+  refreshRemoteStatus,
+  setAutoStartRemoteAccess,
+} from './remote';
 export {
   updateStatus,
   startUpdateSubscription,

@@ -1,158 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import {
+  setupCoordinatorHarness,
+  resetCoordinatorMocks,
+  mockNextTask,
+  registerDefaultCoordinator,
+  getOutputCb,
+  encodeAgentOutput as encode,
+  mockGitMergeTask,
+  mockNotifyRenderer,
+} from './coordinator-test-harness.js';
 
-// --- fs / child_process mocks (must come before dynamic import) ---
-const mockExecFile = vi.fn(
-  (_cmd: unknown, _args: unknown, _opts: unknown, cb: (...a: unknown[]) => void) => {
-    cb(null, '', '');
-    return { on: vi.fn() };
-  },
-);
-
-vi.mock('child_process', () => ({
-  execFile: mockExecFile,
-  promisify: vi.fn(
-    (fn: unknown) =>
-      (...args: unknown[]) =>
-        new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
-          (fn as (...a: unknown[]) => void)(
-            ...args,
-            (err: unknown, stdout: string, stderr: string) => {
-              if (err) reject(err);
-              else resolve({ stdout, stderr });
-            },
-          );
-        }),
-  ),
-}));
-
-const mockWriteFileSync = vi.fn();
-const mockReadFileSync = vi.fn(() => '# existing\n');
-const mockExistsSync = vi.fn(() => false);
-const mockUnlinkSync = vi.fn();
-const mockMkdirSync = vi.fn();
-
-vi.mock('fs', () => ({
-  writeFileSync: mockWriteFileSync,
-  readFileSync: mockReadFileSync,
-  existsSync: mockExistsSync,
-  unlinkSync: mockUnlinkSync,
-  mkdirSync: mockMkdirSync,
-}));
-
-// createTask writes an agent preamble via fs/promises + atomic.js; mock both so the
-// smoke tests stay hermetic (otherwise they perform real I/O against worktree_path).
-const mockFsMkdir = vi.fn().mockResolvedValue(undefined);
-const mockFsAccess = vi
-  .fn()
-  .mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
-const mockFsReadFile = vi.fn().mockResolvedValue('{}');
-const mockFsWriteFile = vi.fn().mockResolvedValue(undefined);
-const mockFsUnlink = vi.fn().mockResolvedValue(undefined);
-
-vi.mock('fs/promises', () => ({
-  readFile: mockFsReadFile,
-  writeFile: mockFsWriteFile,
-  unlink: mockFsUnlink,
-  access: mockFsAccess,
-  mkdir: mockFsMkdir,
-}));
-
-vi.mock('./atomic.js', () => ({
-  atomicWriteFile: vi.fn().mockResolvedValue(undefined),
-  atomicWriteFileSync: vi.fn(),
-}));
-
-// --- other mocks ---
-const mockNotifyRenderer = vi.fn();
-const mockOnPtyEvent = vi.fn();
-const mockSpawnAgent = vi.fn();
-const mockSubscribeToAgent = vi.fn();
-const mockGetAgentScrollback = vi.fn(() => null);
-const mockGitMergeTask = vi.fn().mockResolvedValue({
-  main_branch: 'main',
-  lines_added: 10,
-  lines_removed: 5,
-});
-const mockCreateBackendTask = vi.fn().mockResolvedValue({
-  id: 'task-1',
-  branch_name: 'task/test',
-  worktree_path: '/tmp/test',
-});
-
-vi.mock('./prompt-detect.js', () => ({
-  stripAnsi: (s: string) => s,
-  AGENT_READY_TAIL_CHARS: 1000,
-  chunkContainsAgentPrompt: (s: string) =>
-    s
-      .slice(-1000)
-      .split(/\r?\n/)
-      .some((line) => /(?:^|\s)❯\s*$/.test(line.trim())),
-}));
-
-vi.mock('../ipc/pty.js', () => ({
-  spawnAgent: mockSpawnAgent,
-  writeToAgent: vi.fn(),
-  killAgent: vi.fn(),
-  subscribeToAgent: mockSubscribeToAgent,
-  unsubscribeFromAgent: vi.fn(),
-  getAgentScrollback: mockGetAgentScrollback,
-  onPtyEvent: mockOnPtyEvent,
-}));
-
-vi.mock('../ipc/git.js', () => ({
-  getChangedFiles: vi.fn().mockResolvedValue([]),
-  getAllFileDiffs: vi.fn().mockResolvedValue(''),
-  mergeTask: mockGitMergeTask,
-}));
-
-vi.mock('../ipc/tasks.js', () => ({
-  createTask: mockCreateBackendTask,
-  deleteTask: vi.fn().mockResolvedValue(undefined),
-}));
-
-vi.mock('../ipc/channels.js', () => ({
-  IPC: {
-    MCP_TaskCreated: 'mcp_task_created',
-    MCP_TaskClosed: 'mcp_task_closed',
-    MCP_TaskStateSync: 'mcp_task_state_sync',
-    MCP_CoordinatorNotificationStaged: 'mcp_coordinator_notification_staged',
-    MCP_CoordinatorNotificationCleared: 'mcp_coordinator_notification_cleared',
-    MCP_CoordinatorOrphanedNotification: 'mcp_coordinator_orphaned_notification',
-    MCP_CoordinatorDeregistered: 'mcp_coordinator_deregistered',
-    MCP_CoordinatorNotificationAck: 'mcp_coordinator_notification_ack',
-  },
-}));
-
-// Import after mocks
-const { Coordinator } = await import('./coordinator.js');
-
-// --- helpers ---
-function _getExitHandler(): (agentId: string, data: unknown) => void {
-  const call = mockOnPtyEvent.mock.calls.find((c) => c[0] === 'exit');
-  if (!call) throw new Error('exit handler not registered');
-  return call[1] as (agentId: string, data: unknown) => void;
-}
-
-function getOutputCb(): (encoded: string) => void {
-  const call = mockSubscribeToAgent.mock.calls[0];
-  if (!call) throw new Error('subscribeToAgent not called');
-  return call[1] as (encoded: string) => void;
-}
-
-function _getAgentId(): string {
-  const call = mockSubscribeToAgent.mock.calls[0];
-  if (!call) throw new Error('subscribeToAgent not called');
-  return call[0] as string;
-}
-
-function encode(s: string): string {
-  return Buffer.from(s).toString('base64');
-}
-
-const mockWin = {
-  isDestroyed: () => false,
-  webContents: { send: mockNotifyRenderer },
-} as unknown as import('electron').BrowserWindow;
+const { Coordinator } = await setupCoordinatorHarness();
 
 // ─── end-to-end tool sequence smoke ──────────────────────────────────────────
 
@@ -160,16 +18,9 @@ describe('Coordinator — end-to-end tool sequence smoke', () => {
   let coordinator: InstanceType<typeof Coordinator>;
 
   beforeEach(() => {
-    vi.clearAllMocks();
-    mockExistsSync.mockReturnValue(false);
-    mockCreateBackendTask.mockResolvedValue({
-      id: 'task-1',
-      branch_name: 'task/test',
-      worktree_path: '/tmp/test',
-    });
-    coordinator = new Coordinator();
-    coordinator.setWindow(mockWin);
-    coordinator.setDefaultProject('proj-1', '/tmp/project');
+    resetCoordinatorMocks();
+    mockNextTask();
+    coordinator = registerDefaultCoordinator(new Coordinator());
   });
 
   it('Test 1: full lifecycle — create → wait_for_idle → signal_done → wait_for_signal_done → close', async () => {
