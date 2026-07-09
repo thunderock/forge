@@ -133,6 +133,7 @@ vi.stubGlobal('window', {
 
 import {
   createTask,
+  createFanoutTasks,
   initMCPListeners,
   setTaskControl,
   collapseTask,
@@ -805,6 +806,83 @@ describe('createTask coordinator base branch prompt', () => {
       IPC.MCP_CoordinatorRegistered,
       expect.objectContaining({ coordinatorBranch: 'task/coordinator-work' }),
     );
+  });
+});
+
+describe('createFanoutTasks', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    const harness = expectDefined(core.harness, 'mock store harness');
+    harness.reset(harness.state());
+    mockTasks = {};
+    mockAgents = {};
+    mockTaskOrder = [];
+    vi.mocked(getProjectPath).mockReturnValue('/repo');
+    vi.mocked(getProjectBranchPrefix).mockReturnValue('task');
+    vi.mocked(isProjectMissing).mockReturnValue(false);
+    let n = 0;
+    mockInvoke.mockImplementation((channel: string) => {
+      if (channel === IPC.CreateTask) {
+        n += 1;
+        return Promise.resolve({
+          id: `t-${n}`,
+          branch_name: `task/x-${n}`,
+          worktree_path: `/repo/.worktrees/x-${n}`,
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+  });
+
+  const base = {
+    projectId: 'proj-1',
+    gitIsolation: 'worktree' as const,
+    baseBranch: 'main',
+    initialPrompt: 'hi',
+  };
+  const agent = (id: string, command: string) => ({
+    id,
+    name: id,
+    command,
+    args: [],
+    resume_args: [],
+    skip_permissions_args: [],
+    description: id,
+  });
+  const defOf = (taskId: string) => {
+    const t = mockTasks[taskId] as { agentIds: string[] };
+    return (mockAgents[t.agentIds[0]] as { def: { model?: string; reasoningEffort?: string } }).def;
+  };
+
+  it('creates one sibling task per agent, each carrying its AgentDef + model', async () => {
+    const ids = await createFanoutTasks(base, [
+      { agentDef: { ...agent('claude-code', 'claude'), model: 'opus' }, name: 'Feat · Claude' },
+      {
+        agentDef: { ...agent('codex', 'codex'), model: 'gpt-5.4', reasoningEffort: 'high' },
+        name: 'Feat · Codex',
+      },
+      { agentDef: agent('opencode', 'opencode'), name: 'Feat · OpenCode' },
+    ]);
+
+    expect(ids).toEqual(['t-1', 't-2', 't-3']);
+    const createCalls = mockInvoke.mock.calls.filter((c) => c[0] === IPC.CreateTask);
+    expect(createCalls).toHaveLength(3);
+    expect(createCalls.map((c) => (c[1] as { name: string }).name)).toEqual([
+      'Feat · Claude',
+      'Feat · Codex',
+      'Feat · OpenCode',
+    ]);
+    expect(defOf('t-1').model).toBe('opus');
+    expect(defOf('t-2')).toMatchObject({ model: 'gpt-5.4', reasoningEffort: 'high' });
+    expect(defOf('t-3').model).toBeUndefined();
+  });
+
+  it('single agent = one task, no regression', async () => {
+    const ids = await createFanoutTasks(base, [
+      { agentDef: agent('claude-code', 'claude'), name: 'Solo' },
+    ]);
+    expect(ids).toEqual(['t-1']);
+    expect(mockInvoke.mock.calls.filter((c) => c[0] === IPC.CreateTask)).toHaveLength(1);
   });
 });
 

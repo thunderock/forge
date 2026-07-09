@@ -146,6 +146,37 @@ export interface CreateTaskOptions {
   maxConcurrentTasks?: number;
 }
 
+/** One entry per agent to fan out: its AgentDef copy (with Phase-5 model) + resolved task name + per-agent skip-perms. */
+export interface FanoutAgent {
+  agentDef: AgentDef;
+  name: string;
+  skipPermissions?: boolean;
+}
+
+/**
+ * Launch N sibling tasks (one per agent), each in its own worktree/branch via the
+ * normal `createTask` pipeline (research Option B). Created SEQUENTIALLY — parallel
+ * `git worktree add` races the repo index lock (06-RESEARCH Pitfall 1). Returns the
+ * created task ids in order. A single-element list is byte-for-byte today's flow.
+ */
+export async function createFanoutTasks(
+  baseOpts: Omit<CreateTaskOptions, 'agentDef' | 'name' | 'skipPermissions'>,
+  agents: FanoutAgent[],
+): Promise<string[]> {
+  const ids: string[] = [];
+  for (const a of agents) {
+    ids.push(
+      await createTask({
+        ...baseOpts,
+        name: a.name,
+        agentDef: a.agentDef,
+        skipPermissions: a.skipPermissions,
+      }),
+    );
+  }
+  return ids;
+}
+
 export async function createTask(opts: CreateTaskOptions): Promise<string> {
   const {
     name,
