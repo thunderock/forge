@@ -1,5 +1,7 @@
 import { execFile } from 'child_process';
 import { promisify } from 'util';
+import { promises as fs } from 'fs';
+import os from 'os';
 import path from 'path';
 
 const execFileAsync = promisify(execFile);
@@ -123,4 +125,66 @@ export async function listOpenCodeModels(): Promise<string[]> {
   } catch {
     return [];
   }
+}
+
+// --- Agent skill discovery (autocomplete for the New Task "Skill" field) ---
+
+const SKILL_NAME_RE = /^[a-z0-9][a-z0-9._-]*$/i;
+
+/** Config dirs where installed claude/codex skills + commands live on the host. */
+export function defaultSkillDirs(): string[] {
+  const home = os.homedir();
+  return [
+    path.join(home, '.claude', 'commands'),
+    path.join(home, '.claude', 'skills'),
+    path.join(home, '.codex', 'skills'),
+  ];
+}
+
+/** Dedupe + sort skill names from raw dir entries. Strips a `.md` suffix (command files)
+ *  and drops anything that isn't a plausible skill name. */
+export function mergeSkillNames(entries: string[]): string[] {
+  const names = new Set<string>();
+  for (const raw of entries) {
+    const name = raw.replace(/\.md$/i, '').trim();
+    if (name && SKILL_NAME_RE.test(name)) names.add(name);
+  }
+  return [...names].sort();
+}
+
+/** Read + merge skill names from the given dirs. Missing dirs are skipped; never throws. */
+export async function readSkillNames(dirs: string[]): Promise<string[]> {
+  const all: string[] = [];
+  for (const dir of dirs) {
+    try {
+      const entries = await fs.readdir(dir, { withFileTypes: true });
+      for (const e of entries) all.push(e.name);
+    } catch {
+      /* dir absent / unreadable — skip (discovery is best-effort) */
+    }
+  }
+  return mergeSkillNames(all);
+}
+
+let cachedSkills: string[] | null = null;
+let skillsCacheTime = 0;
+const AGENT_SKILLS_TTL = 5 * 60_000;
+
+/** Test-only: clear the module-level cache so cases don't leak into each other. */
+export function resetAgentSkillsCacheForTests(): void {
+  cachedSkills = null;
+  skillsCacheTime = 0;
+}
+
+/**
+ * Discover installed skill names across the host's claude/codex config dirs, for the New
+ * Task Skill-field autocomplete. TTL-cached; best-effort (returns whatever it finds, never
+ * throws). NOT authoritative — the field accepts free text and the agent validates.
+ */
+export async function listAgentSkills(): Promise<string[]> {
+  const now = Date.now();
+  if (cachedSkills && now - skillsCacheTime < AGENT_SKILLS_TTL) return cachedSkills;
+  cachedSkills = await readSkillNames(defaultSkillDirs());
+  skillsCacheTime = now;
+  return cachedSkills;
 }

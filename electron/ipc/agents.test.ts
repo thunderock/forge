@@ -17,6 +17,9 @@ vi.mock('child_process', () => {
   return { execFile: mockExecFile };
 });
 
+import { promises as fs } from 'fs';
+import os from 'os';
+import path from 'path';
 import { execFile } from 'child_process';
 import {
   DEFAULT_AGENTS,
@@ -24,6 +27,8 @@ import {
   listOpenCodeModels,
   parseOpenCodeModels,
   resetOpenCodeModelsCacheForTests,
+  mergeSkillNames,
+  readSkillNames,
 } from './agents.js';
 
 describe('getSkipPermissionsArgs', () => {
@@ -87,5 +92,35 @@ describe('listOpenCodeModels (MDL-04)', () => {
     }) as unknown as typeof execFile);
 
     expect(await listOpenCodeModels()).toEqual([]);
+  });
+});
+
+describe('mergeSkillNames', () => {
+  it('dedupes across sources, strips .md, filters junk, and sorts', () => {
+    expect(
+      mergeSkillNames(['gsd-quick.md', 'gsd-quick', 'find-skills', 'dataviz', '.git', '', '  ']),
+    ).toEqual(['dataviz', 'find-skills', 'gsd-quick']);
+  });
+});
+
+describe('readSkillNames', () => {
+  it('unions skill names across dirs and skips absent ones', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'forge-skills-'));
+    const claudeCmds = path.join(root, 'claude', 'commands');
+    const codexSkills = path.join(root, 'codex', 'skills');
+    await fs.mkdir(claudeCmds, { recursive: true });
+    await fs.mkdir(codexSkills, { recursive: true });
+    await fs.writeFile(path.join(claudeCmds, 'gsd-quick.md'), '');
+    await fs.mkdir(path.join(codexSkills, 'gsd-quick')); // same skill, codex side
+    await fs.mkdir(path.join(codexSkills, 'gsd-plan-phase'));
+
+    const names = await readSkillNames([
+      claudeCmds,
+      codexSkills,
+      path.join(root, 'does', 'not', 'exist'),
+    ]);
+    expect(names).toEqual(['gsd-plan-phase', 'gsd-quick']);
+
+    await fs.rm(root, { recursive: true, force: true });
   });
 });
