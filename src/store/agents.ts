@@ -3,7 +3,7 @@ import { invoke } from '../lib/ipc';
 import { IPC } from '../../electron/ipc/channels';
 import { store, setStore } from './core';
 import type { AgentDef } from '../ipc/types';
-import type { Agent } from './types';
+import type { Agent, ModelSelection } from './types';
 import { refreshTaskStatus, clearAgentActivity, markAgentSpawned } from './taskStatus';
 import { saveState } from './persistence';
 
@@ -79,6 +79,28 @@ export async function closeAgentInTask(taskId: string, agentId: string): Promise
   );
 
   refreshTaskStatus(taskId);
+  void saveState();
+}
+
+/**
+ * Remember (globally, per agent id) the last model choice for prefill next time
+ * (MDL-05). A host-default choice (no model + no effort) removes the entry so the
+ * next task falls back to host default.
+ */
+export function setLastModelSelection(agentId: string, sel: ModelSelection): void {
+  const hasChoice = Boolean(sel.model?.trim() || sel.reasoningEffort?.trim());
+  setStore(
+    produce((s) => {
+      if (hasChoice) {
+        s.lastModelSelectionByAgentId[agentId] = {
+          ...(sel.model?.trim() ? { model: sel.model.trim() } : {}),
+          ...(sel.reasoningEffort?.trim() ? { reasoningEffort: sel.reasoningEffort.trim() } : {}),
+        };
+      } else {
+        delete s.lastModelSelectionByAgentId[agentId];
+      }
+    }),
+  );
   void saveState();
 }
 

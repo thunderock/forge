@@ -24,6 +24,7 @@ export {
   switchAgent,
   addCustomAgent,
   removeCustomAgent,
+  setLastModelSelection,
 } from './agents';
 export {
   createTask,
