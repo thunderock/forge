@@ -1,0 +1,83 @@
+name: Build (on demand)
+
+# Build installable artifacts for ANY branch/tag/SHA without a release/tag.
+# Run it from the Actions tab → "Build (on demand)" → Run workflow.
+#   • Leave "ref" blank to build the branch you pick in the "Use workflow from" dropdown.
+#   • OR type a branch/tag/SHA in "ref" to build that (handy for branches that don't
+#     have this workflow file yet — the definition always comes from the default branch).
+# Download links: open the finished run → the macOS .dmg and Linux .deb/.AppImage are
+# attached as artifacts at the bottom of the run summary page.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Branch, tag, or SHA to build (blank = the branch selected above)'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    name: macOS (.dmg, unsigned)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+
+      # Unsigned universal build — mirrors release.yml (no Apple cert/notarization).
+      - name: Build (unsigned) — no publish
+        env:
+          NODE_OPTIONS: '--max-old-space-size=4096'
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: npm run build -- --universal -c.mac.notarize=false --publish never
+
+      - name: Upload macOS installer(s)
+        uses: actions/upload-artifact@v4 # pin to a SHA if your policy requires it
+        with:
+          name: forge-macos-dmg
+          path: |
+            release/*.dmg
+            release/*.dmg.blockmap
+          if-no-files-found: error
+          retention-days: 14
+
+  linux:
+    name: Linux (.deb + .AppImage)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+
+      - name: Build — no publish
+        env:
+          NODE_OPTIONS: '--max-old-space-size=4096'
+        run: npm run build -- --publish never
+
+      - name: Upload Linux installer(s)
+        uses: actions/upload-artifact@v4 # pin to a SHA if your policy requires it
+        with:
+          name: forge-linux-deb
+          path: |
+            release/*.deb
+            release/*.AppImage
+          if-no-files-found: error
+          retention-days: 14
