@@ -22,7 +22,8 @@ export interface AgentDef {
   /** Selected model id/alias for this run, or undefined for the host CLI default
    *  (undefined = no model flag is emitted at launch). */
   model?: string;
-  /** Codex-only reasoning effort (low|medium|high|xhigh); undefined = none. */
+  /** Reasoning effort: claude `--effort` (low|medium|high|xhigh|max) or codex
+   *  `model_reasoning_effort` (low|medium|high|xhigh); undefined = none. */
   reasoningEffort?: string;
 }
 

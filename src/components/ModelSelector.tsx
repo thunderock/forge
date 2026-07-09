@@ -5,14 +5,7 @@ import { theme } from '../lib/theme';
 import type { AgentDef } from '../ipc/types';
 import type { ModelSelection } from '../store/types';
 import { SegmentedButtons } from './SegmentedButtons';
-import {
-  HOST_DEFAULT,
-  OTHER,
-  CODEX_EFFORTS,
-  agentSupportsEffort,
-  curatedModelsFor,
-  isOpenCode,
-} from '../lib/agent-models';
+import { HOST_DEFAULT, OTHER, effortsFor, curatedModelsFor, isOpenCode } from '../lib/agent-models';
 
 interface ModelSelectorProps {
   agentDef: AgentDef;
@@ -70,7 +63,8 @@ export function ModelSelector(props: ModelSelectorProps) {
   });
 
   const showOtherInput = createMemo(() => selectValue() === OTHER);
-  const showEffort = createMemo(() => agentSupportsEffort(props.agentDef));
+  const efforts = createMemo(() => effortsFor(props.agentDef));
+  const showEffort = createMemo(() => efforts().length > 0);
 
   function onSelectChange(value: string): void {
     const effort = props.selection.reasoningEffort;
@@ -125,7 +119,7 @@ export function ModelSelector(props: ModelSelectorProps) {
         <SegmentedButtons
           options={[
             { value: '', label: 'Default' },
-            ...CODEX_EFFORTS.map((e) => ({ value: e as string, label: e })),
+            ...efforts().map((e) => ({ value: e, label: e })),
           ]}
           value={props.selection.reasoningEffort ?? ''}
           onChange={(v) =>

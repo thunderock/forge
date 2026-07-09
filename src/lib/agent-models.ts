@@ -14,6 +14,9 @@ export const OTHER = '__other__';
 export const CLAUDE_MODELS = ['opus', 'sonnet', 'haiku'] as const;
 export const CODEX_MODELS = ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini'] as const;
 export const CODEX_EFFORTS = ['low', 'medium', 'high', 'xhigh'] as const;
+// Claude Code effort levels (`claude --effort`), including `max` ("max mode").
+// Codex tops out at xhigh; only claude offers `max`.
+export const CLAUDE_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
 
 function basename(command: string): string {
   return command.split('/').pop() ?? command;
@@ -31,9 +34,20 @@ export function isOpenCode(agentDef: AgentDef): boolean {
   return basename(agentDef.command) === 'opencode';
 }
 
-/** Codex is the only launched agent that honors reasoning effort (opencode --variant is inert). */
+/**
+ * Reasoning-effort levels offered for this agent, or `[]` when it has none.
+ * claude → `--effort` (low|medium|high|xhigh|max); codex → `-c model_reasoning_effort=`
+ * (low|medium|high|xhigh). opencode's `--variant` is inert on the launched TUI, so none.
+ */
+export function effortsFor(agentDef: AgentDef): string[] {
+  if (isClaude(agentDef)) return [...CLAUDE_EFFORTS];
+  if (isCodex(agentDef)) return [...CODEX_EFFORTS];
+  return [];
+}
+
+/** True when the agent honors a reasoning-effort selector (claude or codex). */
 export function agentSupportsEffort(agentDef: AgentDef): boolean {
-  return isCodex(agentDef);
+  return effortsFor(agentDef).length > 0;
 }
 
 /**

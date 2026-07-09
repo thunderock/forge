@@ -227,6 +227,22 @@ describe('buildModelArgs', () => {
     expect(args[0]).toBe('--model');
   });
 
+  it('emits claude --effort (incl. max) alongside --model', () => {
+    expect(buildModelArgs({ ...claudeAgent, model: 'opus', reasoningEffort: 'max' })).toEqual([
+      '--model',
+      'opus',
+      '--effort',
+      'max',
+    ]);
+  });
+
+  it('emits claude --effort even when the model is host-default', () => {
+    expect(buildModelArgs({ ...claudeAgent, reasoningEffort: 'high' })).toEqual([
+      '--effort',
+      'high',
+    ]);
+  });
+
   it('emits codex -m and -c model_reasoning_effort when both set', () => {
     expect(buildModelArgs({ ...codexAgent, model: 'gpt-5.4', reasoningEffort: 'high' })).toEqual([
       '-m',

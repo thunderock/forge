@@ -44,6 +44,7 @@ export function buildModelArgs(agentDef: AgentDef): string[] {
 
   if (base === 'claude') {
     if (model) out.push('--model', model); // opus | sonnet | haiku | <custom>
+    if (effort) out.push('--effort', effort); // low | medium | high | xhigh | max ("max mode")
   } else if (base.includes('codex')) {
     if (model) out.push('-m', model); // gpt-5.5 | gpt-5.4 | gpt-5.4-mini | <custom>
     if (effort) out.push('-c', `model_reasoning_effort=${effort}`);
