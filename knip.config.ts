@@ -5,28 +5,9 @@ const config: KnipConfig = {
     'electron/main.ts',
     'electron/preload.cjs',
     'electron/mcp/server.ts', // added in coordinator-2-mcp-backend; listed here so knip tracks it from the start
-    'src/main.tsx',
-    'src/remote/main.tsx',
+    // Frontend entries (src/index.tsx, src/remote/index.tsx) are auto-detected from index.html.
   ],
   project: ['electron/**/*.ts', 'src/**/*.{ts,tsx}'],
-  ignore: [
-    'dist/**',
-    'dist-electron/**',
-    'dist-remote/**',
-    'release/**',
-    'scripts/**',
-    // Vite/Electron configs are entry points picked up by their respective tools
-    'electron/vite.config.electron.ts',
-    'electron/vite.config.electron.test.ts',
-    'electron/shims/**',
-  ],
-  ignoreDependencies: [
-    // Peer dependencies and indirect runtime deps
-    'electron',
-    'electron-builder',
-    'concurrently',
-    'wait-on',
-  ],
   ignoreBinaries: [
     // Optional security tooling invoked from npm scripts; installed on demand
     'semgrep',
