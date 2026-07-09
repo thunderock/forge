@@ -16,6 +16,7 @@ export const [store, setStore] = createStore<AppStore>({
   activeAgentId: null,
   availableAgents: [],
   customAgents: [],
+  lastModelSelectionByAgentId: {},
   showNewTaskDialog: false,
   sidebarVisible: true,
   panelUserSize: {},

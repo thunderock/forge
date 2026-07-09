@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { reconcile } from 'solid-js/store';
 import type { AgentDef } from '../ipc/types';
 import type { PersistedTask } from './types';
 
@@ -803,5 +804,70 @@ describe('showSteps → defaultStepsEnabled migration', () => {
     const saved = JSON.parse(mockInvoke.mock.calls[0][1].json);
     expect(saved.showSteps).toBeUndefined();
     expect(saved.defaultStepsEnabled).toBe(true);
+  });
+});
+
+describe('lastModelSelectionByAgentId persistence (MDL-05)', () => {
+  // reconcile({}) fully clears prior keys — setStore('field', {}) merges (no-op) for records.
+  beforeEach(() => setStore('lastModelSelectionByAgentId', reconcile({})));
+
+  const baseState = {
+    projects: [],
+    lastProjectId: null,
+    lastAgentId: null,
+    taskOrder: [],
+    collapsedTaskOrder: [],
+    tasks: {},
+    activeTaskId: null,
+    sidebarVisible: true,
+  };
+
+  it('round-trips a populated map through saveState', async () => {
+    setStore('lastModelSelectionByAgentId', {
+      'claude-code': { model: 'opus' },
+      codex: { model: 'gpt-5.4', reasoningEffort: 'high' },
+    });
+    mockInvoke.mockResolvedValueOnce(undefined);
+    await saveState();
+    const saved = JSON.parse(mockInvoke.mock.calls[0][1].json);
+    expect(saved.lastModelSelectionByAgentId).toEqual({
+      'claude-code': { model: 'opus' },
+      codex: { model: 'gpt-5.4', reasoningEffort: 'high' },
+    });
+  });
+
+  it('omits the map from saveState when empty', async () => {
+    setStore('lastModelSelectionByAgentId', {});
+    mockInvoke.mockResolvedValueOnce(undefined);
+    await saveState();
+    const saved = JSON.parse(mockInvoke.mock.calls[0][1].json);
+    expect(saved.lastModelSelectionByAgentId).toBeUndefined();
+  });
+
+  it('loads a persisted map into the store', async () => {
+    mockInvoke.mockResolvedValueOnce(
+      JSON.stringify({
+        ...baseState,
+        lastModelSelectionByAgentId: { codex: { model: 'gpt-5.5', reasoningEffort: 'xhigh' } },
+      }),
+    );
+    await loadState();
+    expect(store.lastModelSelectionByAgentId).toEqual({
+      codex: { model: 'gpt-5.5', reasoningEffort: 'xhigh' },
+    });
+  });
+
+  it('defaults to {} when the key is absent (back-compat, no migration)', async () => {
+    mockInvoke.mockResolvedValueOnce(JSON.stringify(baseState));
+    await loadState();
+    expect(store.lastModelSelectionByAgentId).toEqual({});
+  });
+
+  it('defaults to {} when the persisted value is malformed (array/primitive)', async () => {
+    mockInvoke.mockResolvedValueOnce(
+      JSON.stringify({ ...baseState, lastModelSelectionByAgentId: ['nope'] }),
+    );
+    await loadState();
+    expect(store.lastModelSelectionByAgentId).toEqual({});
   });
 });
