@@ -67,6 +67,10 @@ interface NewTaskDialogProps {
 export function NewTaskDialog(props: NewTaskDialogProps) {
   const [prompt, setPrompt] = createSignal('');
   const [name, setName] = createSignal('');
+  // Optional skill to invoke; rendered per-agent (`/name` claude/opencode, `$name` codex)
+  // and prepended to the prompt at creation. Suggestions are best-effort autocomplete only.
+  const [skill, setSkill] = createSignal('');
+  const [skillSuggestions, setSkillSuggestions] = createSignal<string[]>([]);
   // Fan-out: the set of selected agent ids (default all installed). `selectedAgents()`
   // derives the installed AgentDefs in registry order.
   const [selectedAgentIds, setSelectedAgentIds] = createSignal<Set<string>>(new Set());
@@ -126,6 +130,7 @@ export function NewTaskDialog(props: NewTaskDialogProps) {
   let promptRef!: HTMLTextAreaElement;
   const titleId = createUniqueId();
   const branchInputId = createUniqueId();
+  const skillListId = createUniqueId();
   let formRef!: HTMLFormElement;
   let buildOutputRef!: HTMLPreElement;
   let scrollContainerRef!: HTMLDivElement;
@@ -205,6 +210,7 @@ export function NewTaskDialog(props: NewTaskDialogProps) {
     // Reset signals for a fresh dialog
     setPrompt('');
     setName('');
+    setSkill('');
     setError('');
     setLoading(false);
     setGitIsolation('worktree');
@@ -225,6 +231,11 @@ export function NewTaskDialog(props: NewTaskDialogProps) {
       if (store.availableAgents.length === 0) {
         await loadAgents();
       }
+      // Best-effort skill suggestions for the Skill field autocomplete.
+      invoke<string[]>(IPC.ListAgentSkills).then(
+        (skills) => setSkillSuggestions(Array.isArray(skills) ? skills : []),
+        () => setSkillSuggestions([]),
+      );
       // Default the fan-out selection to ALL installed agents (FAN-01).
       setSelectedAgentIds(
         new Set(store.availableAgents.filter((a) => a.available !== false).map((a) => a.id)),
@@ -692,6 +703,7 @@ export function NewTaskDialog(props: NewTaskDialogProps) {
           symlinkDirs: gitIsolation() === 'worktree' ? [...selectedDirs()] : undefined,
           branchPrefixOverride: gitIsolation() === 'worktree' ? prefix : undefined,
           initialPrompt: isFromDrop ? undefined : p,
+          skill: skill().trim() || undefined,
           githubUrl: ghUrl,
           stepsEnabled: stepsEnabled(),
           dockerMode: dockerMode() || undefined,
@@ -817,6 +829,37 @@ export function NewTaskDialog(props: NewTaskDialogProps) {
                 resize: 'vertical',
               }}
             />
+          </div>
+
+          {/* Skill (optional) — invoke a gsd/agent skill; rendered per-agent (/name vs $name) */}
+          <div
+            data-nav-field="skill"
+            style={{ display: 'flex', 'flex-direction': 'column', gap: '8px' }}
+          >
+            <label style={sectionLabelStyle}>
+              Skill <span style={{ opacity: '0.5', 'text-transform': 'none' }}>(optional)</span>
+            </label>
+            <input
+              class="input-field"
+              type="text"
+              list={skillListId}
+              value={skill()}
+              onInput={(e) => setSkill(e.currentTarget.value)}
+              placeholder="e.g. gsd-quick — runs /gsd-quick (claude/opencode) or $gsd-quick (codex)"
+              style={{
+                background: theme.bgInput,
+                border: `1px solid ${theme.border}`,
+                'border-radius': '8px',
+                padding: '10px 14px',
+                color: theme.fg,
+                'font-size': '14px',
+                'font-family': "'JetBrains Mono', monospace",
+                outline: 'none',
+              }}
+            />
+            <datalist id={skillListId}>
+              <For each={skillSuggestions()}>{(s) => <option value={s} />}</For>
+            </datalist>
           </div>
 
           <div
