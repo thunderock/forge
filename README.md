@@ -114,6 +114,19 @@ When you're happy with the result, merge the branch back to main from the sideba
 3. **Open Forge**, point it at a git repo, and start dispatching tasks.
 
 <details>
+<summary><strong>macOS: first launch blocked ("Forge is damaged" / unidentified developer)</strong></summary>
+
+Release builds are currently **unsigned and un-notarized**, so macOS Gatekeeper quarantines the app on download. After moving **Forge.app** into `/Applications`, clear the quarantine attribute once:
+
+```sh
+xattr -dr com.apple.quarantine /Applications/Forge.app
+```
+
+Then open Forge normally. This only affects downloaded release builds — `npm run dev` and locally-built apps aren't quarantined.
+
+</details>
+
+<details>
 <summary><strong>Antigravity CLI: run natively, not in Docker isolation</strong></summary>
 
 Antigravity (`agy`) signs in interactively and caches credentials in your OS keyring (Keychain/libsecret). The keyring cannot be reached from inside a Linux container — it needs a secret-service daemon the agent container doesn't run — and `agy` has no API-key fallback, so **Docker-isolated Antigravity tasks cannot authenticate. Run Antigravity as a native (non-Docker) task.**
