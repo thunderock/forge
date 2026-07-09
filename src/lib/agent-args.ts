@@ -13,6 +13,10 @@ function isCopilotCommand(command: string): boolean {
   return command.split('/').pop() === 'copilot';
 }
 
+function isClaudeCommand(command: string): boolean {
+  return command.split('/').pop() === 'claude';
+}
+
 const RESUME_FAILURE_PATTERNS: Record<string, string[]> = {
   claude: ['No conversation found to continue'],
 };
@@ -77,4 +81,39 @@ export function buildTaskAgentArgs(
       : []),
     ...(task.mcpLaunchArgs ?? legacyMcpConfigArgs(agentDef.command, task.mcpConfigPath)),
   ];
+}
+
+// --- Skill invocation (per-agent syntax) ---
+// gsd/agent skills are invoked differently per CLI: claude + opencode use a leading
+// slash (`/gsd-quick`), codex uses a dollar mention (`$gsd-quick`). A fan-out sends one
+// prompt to N agents, so the token must be rendered per agent.
+
+/**
+ * A prompt that leads with a skill/slash-command token (`/name` or `$name`), e.g.
+ * `/gsd-quick fix …`. The name must be followed by whitespace or end-of-string so an
+ * absolute path like `/Users/foo` is NOT misread as a command.
+ */
+export function isSkillInvocation(text: string): boolean {
+  return /^\s*[/$][A-Za-z0-9][\w-]*(\s|$)/.test(text);
+}
+
+/**
+ * Render a skill name in the target agent's invocation syntax: codex `$name`, everyone
+ * else `/name`. A user-typed leading `/`/`$` is tolerated and normalized. Existence is
+ * NOT checked — a bogus name is left for the agent to reject.
+ */
+export function renderSkillInvocation(agentDef: AgentDef, skill: string): string {
+  const name = skill.trim().replace(/^[/$]+/, '');
+  if (!name) return '';
+  return isCodexCommand(agentDef.command) ? `$${name}` : `/${name}`;
+}
+
+/**
+ * Claude Code ignores a slash command delivered as *bracketed paste* (it treats pasted
+ * `/foo` as literal text), so a skill-invocation prompt must reach claude un-bracketed to
+ * fire. Codex's `$name` is a plain message mention that works either way, so it keeps
+ * bracketed paste (which also dodges codex's paste-burst guard).
+ */
+export function shouldBypassBracketedPaste(command: string, text: string): boolean {
+  return isClaudeCommand(command) && isSkillInvocation(text);
 }

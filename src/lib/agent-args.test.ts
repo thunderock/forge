@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildModelArgs, buildTaskAgentArgs, isResumeArgsFailure } from './agent-args';
+import {
+  buildModelArgs,
+  buildTaskAgentArgs,
+  isResumeArgsFailure,
+  isSkillInvocation,
+  renderSkillInvocation,
+  shouldBypassBracketedPaste,
+} from './agent-args';
 
 const codexAgent = {
   id: 'codex',
@@ -317,5 +324,47 @@ describe('isResumeArgsFailure', () => {
 
   it('returns false for empty last output', () => {
     expect(isResumeArgsFailure('claude', [])).toBe(false);
+  });
+});
+
+describe('isSkillInvocation', () => {
+  it('detects a leading /name or $name (with or without args)', () => {
+    expect(isSkillInvocation('/gsd-quick fix the prompt')).toBe(true);
+    expect(isSkillInvocation('$gsd-quick fix the prompt')).toBe(true);
+    expect(isSkillInvocation('/gsd-quick')).toBe(true);
+    expect(isSkillInvocation('  /model')).toBe(true); // leading whitespace tolerated
+  });
+
+  it('does not misread an absolute path or plain prose', () => {
+    expect(isSkillInvocation('/Users/foo/bar')).toBe(false); // path, not a command
+    expect(isSkillInvocation('fix the /gsd-quick thing')).toBe(false); // not leading
+    expect(isSkillInvocation('just a normal prompt')).toBe(false);
+    expect(isSkillInvocation('$')).toBe(false);
+    expect(isSkillInvocation('')).toBe(false);
+  });
+});
+
+describe('renderSkillInvocation', () => {
+  it('renders codex with $ and everyone else with /', () => {
+    expect(renderSkillInvocation(codexAgent, 'gsd-quick')).toBe('$gsd-quick');
+    expect(renderSkillInvocation(claudeAgent, 'gsd-quick')).toBe('/gsd-quick');
+    expect(renderSkillInvocation(opencodeAgent, 'gsd-quick')).toBe('/gsd-quick');
+  });
+
+  it('normalizes a user-typed leading slash/dollar and blank input', () => {
+    expect(renderSkillInvocation(codexAgent, '/gsd-quick')).toBe('$gsd-quick');
+    expect(renderSkillInvocation(claudeAgent, '$gsd-quick')).toBe('/gsd-quick');
+    expect(renderSkillInvocation(claudeAgent, '   ')).toBe('');
+  });
+});
+
+describe('shouldBypassBracketedPaste', () => {
+  it('bypasses only for claude + a skill invocation', () => {
+    expect(shouldBypassBracketedPaste('claude', '/gsd-quick fix')).toBe(true);
+    expect(shouldBypassBracketedPaste('/usr/local/bin/claude', '/gsd-quick')).toBe(true);
+    // codex keeps bracketed paste ($ is a message mention, not a slash command)
+    expect(shouldBypassBracketedPaste('codex', '$gsd-quick fix')).toBe(false);
+    // claude with a normal prompt keeps bracketed paste
+    expect(shouldBypassBracketedPaste('claude', 'just a normal prompt')).toBe(false);
   });
 });
