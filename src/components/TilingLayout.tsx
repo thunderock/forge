@@ -32,6 +32,11 @@ import { createCtrlShiftWheelResizeHandler } from '../lib/wheelZoom';
 
 const VIEWPORT_EPSILON_PX = 4;
 
+// Layout math for the equal-fill default panel size (see `equalFillSize`).
+const STRIP_PADDING_X = 10; // `.tiling-layout-strip` padding: 2px 6px 2px 4px
+const HANDLE_WIDTH_PX = 6; // `.resize-handle-h` width, one after each flex panel
+const PLACEHOLDER_WIDTH_PX = 54; // fixed `__placeholder` panel
+
 /** Tiling-layout top-level child. Distinct from `PanelChild` because this
  *  layout owns its own horizontal drag model — fixed placeholders, per-panel
  *  min/max widths, pixel-precise persisted sizes — that doesn't map onto the
@@ -50,16 +55,38 @@ export function TilingLayout() {
   const [hasOverflowLeft, setHasOverflowLeft] = createSignal(false);
   const [hasOverflowRight, setHasOverflowRight] = createSignal(false);
   const [dragging, setDragging] = createSignal<number | null>(null);
+  // Strip content width, measured in updateViewportState — drives equal-fill sizing.
+  const [containerWidth, setContainerWidth] = createSignal(0);
   // Transient per-drag width overrides. Written on mousemove, committed to
   // store.panelSizes on mouseup. Keeps autosave's snapshot stable mid-drag.
   const [dragPreview, setDragPreview] = createSignal<Record<string, number>>({});
   let isFirstActiveTaskScroll = true;
+
+  // Default size for a flex (non-fixed) panel with no user-saved size: an equal
+  // share of the strip's content width, so panels fill the screen at the app's
+  // starting point. A drag/wheel resize writes a saved px size that overrides
+  // this. Returns undefined before the container is measured or in focus mode
+  // (where panels are absolute full-width and size is irrelevant).
+  function equalFillSize(): number | undefined {
+    const cw = containerWidth();
+    if (cw <= 0 || store.focusMode) return undefined;
+    const flexCount = store.taskOrder.length;
+    if (flexCount <= 0) return undefined;
+    const reserved = STRIP_PADDING_X + PLACEHOLDER_WIDTH_PX + flexCount * HANDLE_WIDTH_PX;
+    return Math.floor((cw - reserved) / flexCount);
+  }
 
   function sizeFor(child: TileChild): number {
     const preview = dragPreview()[child.id];
     if (preview !== undefined) return preview;
     const saved = getPanelUserSize(`tiling:${child.id}`);
     if (saved !== undefined) return saved;
+    if (!child.fixed) {
+      const equal = equalFillSize();
+      // Clamp to minSize: on a narrow window the equal share underflows and we
+      // keep the existing min-width + overflow-scroll behavior.
+      if (equal !== undefined) return Math.max(child.minSize ?? 0, equal);
+    }
     return child.initialSize ?? 200;
   }
 
@@ -83,7 +110,9 @@ export function TilingLayout() {
   };
 
   const updateViewportState = () => {
-    if (!containerRef || store.focusMode) {
+    if (!containerRef) return;
+    setContainerWidth(containerRef.clientWidth);
+    if (store.focusMode) {
       setHasOverflowLeft(false);
       setHasOverflowRight(false);
       syncTaskViewportVisibility({});
@@ -357,7 +386,7 @@ export function TilingLayout() {
     if (!placeholder) {
       placeholder = {
         id: '__placeholder',
-        initialSize: 54,
+        initialSize: PLACEHOLDER_WIDTH_PX,
         fixed: true,
         content: () => <NewTaskPlaceholder />,
       };

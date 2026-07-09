@@ -24,9 +24,11 @@ export {
   switchAgent,
   addCustomAgent,
   removeCustomAgent,
+  setLastModelSelection,
 } from './agents';
 export {
   createTask,
+  createFanoutTasks,
   createImportedTask,
   closeTask,
   retryCloseTask,

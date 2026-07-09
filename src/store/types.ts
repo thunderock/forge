@@ -224,6 +224,12 @@ export interface PersistedWindowState {
   maximized: boolean;
 }
 
+/** A per-agent model choice remembered globally across sessions (MDL-05). */
+export interface ModelSelection {
+  model?: string;
+  reasoningEffort?: string;
+}
+
 export interface PersistedState {
   projects: Project[];
   lastProjectId: string | null;
@@ -260,6 +266,8 @@ export interface PersistedState {
   shareDockerAgentAuth?: boolean;
   askCodeProvider?: 'claude' | 'minimax';
   customAgents?: AgentDef[];
+  /** Global per-agent last-model memory, keyed by agent id (MDL-05). */
+  lastModelSelectionByAgentId?: Record<string, ModelSelection>;
   keybindingMigrationDismissed?: boolean;
   focusMode?: boolean;
   verboseLogging?: boolean;
@@ -317,6 +325,8 @@ export interface AppStore {
   activeAgentId: string | null;
   availableAgents: AgentDef[];
   customAgents: AgentDef[];
+  /** Global per-agent last-model memory, keyed by agent id (MDL-05). */
+  lastModelSelectionByAgentId: Record<string, ModelSelection>;
   showNewTaskDialog: boolean;
   sidebarVisible: boolean;
   /** User-dragged sizes keyed by `${persistKey}:${childId}`. Presence of an

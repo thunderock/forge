@@ -14,6 +14,7 @@ import type {
   PersistedTask,
   PersistedWindowState,
   Project,
+  ModelSelection,
 } from './types';
 import type { AgentDef } from '../ipc/types';
 import { inferDockerSource } from '../lib/docker';
@@ -198,6 +199,10 @@ export async function saveState(): Promise<void> {
       store.dockerImage !== 'thunderockforge/forge-agent:latest' ? store.dockerImage : undefined,
     askCodeProvider: store.askCodeProvider !== 'claude' ? store.askCodeProvider : undefined,
     customAgents: store.customAgents.length > 0 ? [...store.customAgents] : undefined,
+    lastModelSelectionByAgentId:
+      Object.keys(store.lastModelSelectionByAgentId).length > 0
+        ? { ...store.lastModelSelectionByAgentId }
+        : undefined,
     keybindingMigrationDismissed: store.keybindingMigrationDismissed || undefined,
     focusMode: store.focusMode || undefined,
     verboseLogging: store.verboseLogging || undefined,
@@ -368,6 +373,7 @@ interface LegacyPersistedState {
   askCodeProvider?: unknown;
   minimaxApiKey?: unknown;
   customAgents?: unknown;
+  lastModelSelectionByAgentId?: unknown;
   terminals?: unknown;
   keybindingMigrationDismissed?: unknown;
   focusMode?: unknown;
@@ -611,6 +617,15 @@ export async function loadState(): Promise<void> {
             typeof (a as AgentDef).command === 'string',
         );
       }
+
+      // Restore global per-agent last-model memory (MDL-05).
+      // Back-compat: absent / legacy / malformed (array/primitive) → {} (first-time prefill = host default).
+      s.lastModelSelectionByAgentId =
+        raw.lastModelSelectionByAgentId &&
+        typeof raw.lastModelSelectionByAgentId === 'object' &&
+        !Array.isArray(raw.lastModelSelectionByAgentId)
+          ? (raw.lastModelSelectionByAgentId as Record<string, ModelSelection>)
+          : {};
 
       if (typeof raw.keybindingMigrationDismissed === 'boolean') {
         s.keybindingMigrationDismissed = raw.keybindingMigrationDismissed;

@@ -5,18 +5,37 @@ import type { AgentDef } from '../ipc/types';
 
 interface AgentSelectorProps {
   agents: AgentDef[];
-  selectedAgent: AgentDef | null;
-  onSelect: (agent: AgentDef) => void;
+  // Single-select mode (default)
+  selectedAgent?: AgentDef | null;
+  onSelect?: (agent: AgentDef) => void;
+  // Multi-select mode (fan-out): pass multiSelect + selectedIds + onToggle
+  multiSelect?: boolean;
+  selectedIds?: Set<string>;
+  onToggle?: (agent: AgentDef) => void;
   wrap?: boolean;
 }
 
 /**
- * Roving-tabindex agent picker.
- * Only the selected agent is in the Tab order; Arrow keys move between agents.
+ * Agent picker. Single-select (roving-tabindex radiogroup) by default; opt into
+ * `multiSelect` (checkbox group) for fan-out — where uninstalled agents are shown
+ * but not selectable.
  */
 export function AgentSelector(props: AgentSelectorProps) {
   const btnRefs: HTMLButtonElement[] = [];
   const allowWrap = () => props.wrap ?? true;
+  const isMulti = () => props.multiSelect === true;
+
+  const isSelected = (agent: AgentDef) =>
+    isMulti() ? (props.selectedIds?.has(agent.id) ?? false) : props.selectedAgent?.id === agent.id;
+
+  // Only multi-select disables uninstalled agents; single-select keeps today's behavior.
+  const isDisabled = (agent: AgentDef) => isMulti() && agent.available === false;
+
+  function activate(agent: AgentDef) {
+    if (isDisabled(agent)) return;
+    if (isMulti()) props.onToggle?.(agent);
+    else props.onSelect?.(agent);
+  }
 
   function handleKeyDown(e: KeyboardEvent, idx: number) {
     const agents = props.agents;
@@ -31,10 +50,16 @@ export function AgentSelector(props: AgentSelectorProps) {
     }
 
     if (nextIdx !== null) {
-      props.onSelect(agents[nextIdx]);
+      // Radio semantics select on arrow; checkbox group only moves focus (Space/Enter toggles).
+      if (!isMulti()) props.onSelect?.(agents[nextIdx]);
       btnRefs[nextIdx]?.focus();
     }
   }
+
+  const tabIndexFor = (agent: AgentDef) => {
+    if (isMulti()) return isDisabled(agent) ? -1 : 0;
+    return isSelected(agent) ? 0 : -1;
+  };
 
   return (
     <div data-nav-field="agent" style={{ display: 'flex', 'flex-direction': 'column', gap: '8px' }}>
@@ -46,10 +71,10 @@ export function AgentSelector(props: AgentSelectorProps) {
           'letter-spacing': '0.05em',
         }}
       >
-        Agent
+        {isMulti() ? 'Agents (each runs in its own worktree)' : 'Agent'}
       </label>
       <div
-        role="radiogroup"
+        role={isMulti() ? 'group' : 'radiogroup'}
         style={{
           display: 'flex',
           'flex-wrap': allowWrap() ? 'wrap' : 'nowrap',
@@ -60,54 +85,55 @@ export function AgentSelector(props: AgentSelectorProps) {
         }}
       >
         <For each={props.agents}>
-          {(agent, i) => {
-            const isSelected = () => props.selectedAgent?.id === agent.id;
-            return (
-              <button
-                ref={(el) => (btnRefs[i()] = el)}
-                type="button"
-                role="radio"
-                aria-checked={isSelected()}
-                tabIndex={isSelected() ? 0 : -1}
-                class={`agent-btn ${isSelected() ? 'selected' : ''}`}
-                onClick={() => props.onSelect(agent)}
-                onKeyDown={(e) => handleKeyDown(e, i())}
-                style={{
-                  flex: allowWrap() ? '0 1 auto' : '0 0 auto',
-                  'min-width': '70px',
-                  padding: '10px 8px',
-                  background: isSelected() ? theme.bgSelected : theme.bgInput,
-                  border: isSelected() ? `1px solid ${theme.accent}` : `1px solid ${theme.border}`,
-                  'border-radius': '8px',
-                  color: isSelected()
-                    ? store.themePreset === 'graphite' ||
-                      store.themePreset === 'minimal' ||
-                      store.themePreset === 'zenburnesque'
-                      ? '#ffffff'
-                      : theme.accentText
-                    : theme.fg,
-                  cursor: 'pointer',
-                  'font-size': '13px',
-                  'font-weight': isSelected() ? '500' : '400',
-                  'text-align': 'center',
-                  'white-space': 'nowrap',
-                }}
-              >
-                {agent.name}
-                <Show when={agent.available === false}>
-                  <span
-                    style={{
-                      'font-size': '11px',
-                      color: theme.fgMuted,
-                      'margin-left': '4px',
-                    }}
-                  >
-                    (not installed)
-                  </span>
-                </Show>
-              </button>
-            );
-          }}
+          {(agent, i) => (
+            <button
+              ref={(el) => (btnRefs[i()] = el)}
+              type="button"
+              role={isMulti() ? 'checkbox' : 'radio'}
+              aria-checked={isSelected(agent)}
+              disabled={isDisabled(agent)}
+              tabIndex={tabIndexFor(agent)}
+              class={`agent-btn ${isSelected(agent) ? 'selected' : ''}`}
+              onClick={() => activate(agent)}
+              onKeyDown={(e) => handleKeyDown(e, i())}
+              style={{
+                flex: allowWrap() ? '0 1 auto' : '0 0 auto',
+                'min-width': '70px',
+                padding: '10px 8px',
+                background: isSelected(agent) ? theme.bgSelected : theme.bgInput,
+                border: isSelected(agent)
+                  ? `1px solid ${theme.accent}`
+                  : `1px solid ${theme.border}`,
+                'border-radius': '8px',
+                color: isSelected(agent)
+                  ? store.themePreset === 'graphite' ||
+                    store.themePreset === 'minimal' ||
+                    store.themePreset === 'zenburnesque'
+                    ? '#ffffff'
+                    : theme.accentText
+                  : theme.fg,
+                cursor: isDisabled(agent) ? 'not-allowed' : 'pointer',
+                opacity: isDisabled(agent) ? 0.5 : 1,
+                'font-size': '13px',
+                'font-weight': isSelected(agent) ? '500' : '400',
+                'text-align': 'center',
+                'white-space': 'nowrap',
+              }}
+            >
+              {agent.name}
+              <Show when={agent.available === false}>
+                <span
+                  style={{
+                    'font-size': '11px',
+                    color: theme.fgMuted,
+                    'margin-left': '4px',
+                  }}
+                >
+                  (not installed)
+                </span>
+              </Show>
+            </button>
+          )}
         </For>
       </div>
     </div>

@@ -14,6 +14,8 @@ const ALLOWED_CHANNELS = new Set([
   'count_running_agents',
   'kill_all_agents',
   'list_agents',
+  'list_opencode_models',
+  'list_agent_skills',
   // Task
   'create_task',
   'delete_task',

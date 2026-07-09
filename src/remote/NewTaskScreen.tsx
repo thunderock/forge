@@ -161,7 +161,7 @@ export function NewTaskScreen(props: NewTaskScreenProps) {
           <label style={{ display: 'flex', 'flex-direction': 'column', gap: '6px', flex: '1' }}>
             <span style={{ 'font-size': '13px', color: '#9bb0c3' }}>Prompt</span>
             <textarea
-              placeholder="What should the agent work on?"
+              placeholder="What should the agents work on?"
               value={prompt()}
               onInput={(e) => setPrompt(e.currentTarget.value)}
               maxlength={16000}

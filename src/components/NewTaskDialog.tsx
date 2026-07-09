@@ -4,6 +4,7 @@ import {
   createMemo,
   createUniqueId,
   Show,
+  For,
   onCleanup,
   on,
   untrack,
@@ -14,7 +15,7 @@ import { invoke } from '../lib/ipc';
 import { IPC } from '../../electron/ipc/channels';
 import {
   store,
-  createTask,
+  createFanoutTasks,
   toggleNewTaskDialog,
   loadAgents,
   getProject,
@@ -27,8 +28,10 @@ import {
   setPrefillPrompt,
   setDockerAvailable,
   setDockerImage,
+  setLastModelSelection,
 } from '../store/store';
-import type { GitIsolationMode } from '../store/types';
+import type { GitIsolationMode, ModelSelection } from '../store/types';
+import { setActiveTask } from '../store/navigation';
 import {
   toBranchName,
   sanitizeBranchPrefix,
@@ -41,6 +44,7 @@ import { extractGitHubUrl } from '../lib/github-url';
 import { theme, sectionLabelStyle, bannerStyle } from '../lib/theme';
 import { isMac } from '../lib/platform';
 import { AgentSelector } from './AgentSelector';
+import { ModelSelector } from './ModelSelector';
 import { BranchPrefixField } from './BranchPrefixField';
 import { BranchCombobox } from './BranchCombobox';
 import { ProjectSelect } from './ProjectSelect';
@@ -63,7 +67,24 @@ interface NewTaskDialogProps {
 export function NewTaskDialog(props: NewTaskDialogProps) {
   const [prompt, setPrompt] = createSignal('');
   const [name, setName] = createSignal('');
-  const [selectedAgent, setSelectedAgent] = createSignal<AgentDef | null>(null);
+  // Optional skill to invoke; rendered per-agent (`/name` claude/opencode, `$name` codex)
+  // and prepended to the prompt at creation. Suggestions are best-effort autocomplete only.
+  const [skill, setSkill] = createSignal('');
+  const [skillSuggestions, setSkillSuggestions] = createSignal<string[]>([]);
+  // Fan-out: the set of selected agent ids (default all installed). `selectedAgents()`
+  // derives the installed AgentDefs in registry order.
+  const [selectedAgentIds, setSelectedAgentIds] = createSignal<Set<string>>(new Set());
+  const selectedAgents = () =>
+    store.availableAgents.filter((a) => selectedAgentIds().has(a.id) && a.available !== false);
+  const toggleAgent = (agent: AgentDef) =>
+    setSelectedAgentIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(agent.id)) next.delete(agent.id);
+      else next.add(agent.id);
+      return next;
+    });
+  // Per-agent-id model choice for this task (a map so each fan-out pane carries its own).
+  const [modelSelections, setModelSelections] = createSignal<Record<string, ModelSelection>>({});
   const [selectedProjectId, setSelectedProjectId] = createSignal<string | null>(null);
   const [error, setError] = createSignal('');
   const [loading, setLoading] = createSignal(false);
@@ -109,6 +130,7 @@ export function NewTaskDialog(props: NewTaskDialogProps) {
   let promptRef!: HTMLTextAreaElement;
   const titleId = createUniqueId();
   const branchInputId = createUniqueId();
+  const skillListId = createUniqueId();
   let formRef!: HTMLFormElement;
   let buildOutputRef!: HTMLPreElement;
   let scrollContainerRef!: HTMLDivElement;
@@ -188,6 +210,7 @@ export function NewTaskDialog(props: NewTaskDialogProps) {
     // Reset signals for a fresh dialog
     setPrompt('');
     setName('');
+    setSkill('');
     setError('');
     setLoading(false);
     setGitIsolation('worktree');
@@ -208,10 +231,17 @@ export function NewTaskDialog(props: NewTaskDialogProps) {
       if (store.availableAgents.length === 0) {
         await loadAgents();
       }
-      const lastAgent = store.lastAgentId
-        ? (store.availableAgents.find((a) => a.id === store.lastAgentId) ?? null)
-        : null;
-      setSelectedAgent(lastAgent ?? store.availableAgents[0] ?? null);
+      // Best-effort skill suggestions for the Skill field autocomplete.
+      invoke<string[]>(IPC.ListAgentSkills).then(
+        (skills) => setSkillSuggestions(Array.isArray(skills) ? skills : []),
+        () => setSkillSuggestions([]),
+      );
+      // Default the fan-out selection to ALL installed agents (FAN-01).
+      setSelectedAgentIds(
+        new Set(store.availableAgents.filter((a) => a.available !== false).map((a) => a.id)),
+      );
+      // Prefill each agent's model choice from the global per-agent memory (MDL-05).
+      setModelSelections({ ...store.lastModelSelectionByAgentId });
 
       // Pre-fill from drop data if present
       const dropUrl = store.newTaskDropUrl;
@@ -548,10 +578,8 @@ export function NewTaskDialog(props: NewTaskDialogProps) {
     return pid ? hasDirectTask(pid) : false;
   };
 
-  const agentSupportsSkipPermissions = () => {
-    const agent = selectedAgent();
-    return !!agent?.skip_permissions_args?.length;
-  };
+  const agentSupportsSkipPermissions = () =>
+    selectedAgents().some((a) => (a.skip_permissions_args?.length ?? 0) > 0);
 
   const canSubmit = () => {
     // No name/prompt requirement — an empty task defaults to "Task N".
@@ -573,9 +601,13 @@ export function NewTaskDialog(props: NewTaskDialogProps) {
     const manualName = name().trim();
     const n = resolvedName();
 
-    const agent = selectedAgent();
-    if (!agent) {
-      setError('Select an agent');
+    const agents = selectedAgents();
+    if (agents.length === 0) {
+      setError('Select at least one agent');
+      return;
+    }
+    if (coordinatorMode() && agents.length > 1) {
+      setError('Coordinator mode runs a single agent — select just one');
       return;
     }
 
@@ -629,43 +661,74 @@ export function NewTaskDialog(props: NewTaskDialogProps) {
       }
 
       const projDocker = projectDockerfile();
-      const taskId = await createTask({
-        name: n,
-        nameIsAutoGenerated: !manualName,
-        agentDef: agent,
-        projectId,
-        gitIsolation: gitIsolation(),
-        baseBranch: baseBranch(),
-        symlinkDirs: gitIsolation() === 'worktree' ? [...selectedDirs()] : undefined,
-        branchPrefixOverride: gitIsolation() === 'worktree' ? prefix : undefined,
-        initialPrompt: isFromDrop ? undefined : p,
-        githubUrl: ghUrl,
-        stepsEnabled: stepsEnabled(),
-        skipPermissions: agentSupportsSkipPermissions() && skipPermissions(),
-        dockerMode: dockerMode() || undefined,
-        dockerSource: dockerMode()
-          ? projDocker
-            ? 'project'
-            : store.dockerImage && store.dockerImage !== DEFAULT_DOCKER_IMAGE
-              ? 'custom'
-              : 'default'
-          : undefined,
-        dockerImage: dockerMode()
-          ? (projDocker?.imageTag ?? (store.dockerImage || DEFAULT_DOCKER_IMAGE))
-          : undefined,
-        coordinatorMode: coordinatorMode() || undefined,
-        propagateSkipPermissions:
-          coordinatorMode() && agentSupportsSkipPermissions() && skipPermissions()
-            ? propagateSkipPermissions()
-            : undefined,
-        maxConcurrentTasks: coordinatorMode()
-          ? clampCoordinatorConcurrentTasks(maxConcurrentTasks())
-          : undefined,
+      const dockerSource = dockerMode()
+        ? projDocker
+          ? 'project'
+          : store.dockerImage && store.dockerImage !== DEFAULT_DOCKER_IMAGE
+            ? 'custom'
+            : 'default'
+        : undefined;
+      const dockerImage = dockerMode()
+        ? (projDocker?.imageTag ?? (store.dockerImage || DEFAULT_DOCKER_IMAGE))
+        : undefined;
+
+      const fanOut = agents.length > 1;
+      // One entry per selected agent: an AgentDef COPY carrying its Phase-5 model (never
+      // mutate availableAgents), a distinct name/branch slug, and per-agent skip-perms (Pitfall 2).
+      const perAgent = agents.map((agent) => {
+        const sel = modelSelections()[agent.id] ?? {};
+        const agentDefWithModel: AgentDef = {
+          ...agent,
+          ...(sel.model?.trim() ? { model: sel.model.trim() } : {}),
+          ...(sel.reasoningEffort?.trim() ? { reasoningEffort: sel.reasoningEffort.trim() } : {}),
+        };
+        return {
+          id: agent.id,
+          sel,
+          fanoutAgent: {
+            agentDef: agentDefWithModel,
+            name: fanOut ? `${n} · ${agent.name}` : n,
+            skipPermissions: (agent.skip_permissions_args?.length ?? 0) > 0 && skipPermissions(),
+          },
+        };
       });
-      // Drop flow: prefill prompt without auto-sending
+
+      // Sequential worktree creation (Pitfall 1). One task per agent; length 1 = today's exact flow.
+      const createdIds = await createFanoutTasks(
+        {
+          nameIsAutoGenerated: !manualName,
+          projectId,
+          gitIsolation: gitIsolation(),
+          baseBranch: baseBranch(),
+          symlinkDirs: gitIsolation() === 'worktree' ? [...selectedDirs()] : undefined,
+          branchPrefixOverride: gitIsolation() === 'worktree' ? prefix : undefined,
+          initialPrompt: isFromDrop ? undefined : p,
+          skill: skill().trim() || undefined,
+          githubUrl: ghUrl,
+          stepsEnabled: stepsEnabled(),
+          dockerMode: dockerMode() || undefined,
+          dockerSource,
+          dockerImage,
+          coordinatorMode: coordinatorMode() || undefined,
+          propagateSkipPermissions:
+            coordinatorMode() && agentSupportsSkipPermissions() && skipPermissions()
+              ? propagateSkipPermissions()
+              : undefined,
+          maxConcurrentTasks: coordinatorMode()
+            ? clampCoordinatorConcurrentTasks(maxConcurrentTasks())
+            : undefined,
+        },
+        perAgent.map((pa) => pa.fanoutAgent),
+      );
+
+      // Drop flow: prefill prompt without auto-sending (into each created task).
       if (isFromDrop && p) {
-        setPrefillPrompt(taskId, p);
+        for (const id of createdIds) setPrefillPrompt(id, p);
       }
+      // Remember each agent's model choice globally for next time (MDL-05).
+      for (const pa of perAgent) setLastModelSelection(pa.id, pa.sel);
+      // Focus the first created pane (createTask steals activeTaskId per call — Pitfall 3).
+      if (createdIds[0]) setActiveTask(createdIds[0]);
       toggleNewTaskDialog(false);
     } catch (err) {
       setError(String(err));
@@ -751,7 +814,7 @@ export function NewTaskDialog(props: NewTaskDialogProps) {
               placeholder={
                 coordinatorMode()
                   ? 'Example: Work through the items in /path/to/todos.md. Only work from that file. Use <branch> as the baseBranch for all sub-tasks.'
-                  : 'What should the agent work on?'
+                  : 'What should the agents work on?'
               }
               rows={3}
               style={{
@@ -766,6 +829,37 @@ export function NewTaskDialog(props: NewTaskDialogProps) {
                 resize: 'vertical',
               }}
             />
+          </div>
+
+          {/* Skill (optional) — invoke a gsd/agent skill; rendered per-agent (/name vs $name) */}
+          <div
+            data-nav-field="skill"
+            style={{ display: 'flex', 'flex-direction': 'column', gap: '8px' }}
+          >
+            <label style={sectionLabelStyle}>
+              Skill <span style={{ opacity: '0.5', 'text-transform': 'none' }}>(optional)</span>
+            </label>
+            <input
+              class="input-field"
+              type="text"
+              list={skillListId}
+              value={skill()}
+              onInput={(e) => setSkill(e.currentTarget.value)}
+              placeholder="e.g. gsd-quick — runs /gsd-quick (claude/opencode) or $gsd-quick (codex)"
+              style={{
+                background: theme.bgInput,
+                border: `1px solid ${theme.border}`,
+                'border-radius': '8px',
+                padding: '10px 14px',
+                color: theme.fg,
+                'font-size': '14px',
+                'font-family': "'JetBrains Mono', monospace",
+                outline: 'none',
+              }}
+            />
+            <datalist id={skillListId}>
+              <For each={skillSuggestions()}>{(s) => <option value={s} />}</For>
+            </datalist>
           </div>
 
           <div
@@ -846,10 +940,28 @@ export function NewTaskDialog(props: NewTaskDialogProps) {
 
           <AgentSelector
             agents={store.availableAgents}
-            selectedAgent={selectedAgent()}
-            onSelect={setSelectedAgent}
+            multiSelect
+            selectedIds={selectedAgentIds()}
+            onToggle={toggleAgent}
             wrap={false}
           />
+
+          <For each={selectedAgents()}>
+            {(agent) => (
+              <div style={{ display: 'flex', 'flex-direction': 'column', gap: '6px' }}>
+                <Show when={selectedAgents().length > 1}>
+                  <span style={{ 'font-size': '12px', color: theme.fgMuted, 'font-weight': '500' }}>
+                    {agent.name}
+                  </span>
+                </Show>
+                <ModelSelector
+                  agentDef={agent}
+                  selection={modelSelections()[agent.id] ?? {}}
+                  onChange={(sel) => setModelSelections((m) => ({ ...m, [agent.id]: sel }))}
+                />
+              </div>
+            )}
+          </For>
 
           {/* Isolation mode selector — hidden for non-git projects */}
           <Show when={!isNonGitProject()}>

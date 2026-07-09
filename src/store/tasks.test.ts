@@ -133,6 +133,7 @@ vi.stubGlobal('window', {
 
 import {
   createTask,
+  createFanoutTasks,
   initMCPListeners,
   setTaskControl,
   collapseTask,
@@ -808,6 +809,104 @@ describe('createTask coordinator base branch prompt', () => {
   });
 });
 
+describe('createFanoutTasks', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    const harness = expectDefined(core.harness, 'mock store harness');
+    harness.reset(harness.state());
+    mockTasks = {};
+    mockAgents = {};
+    mockTaskOrder = [];
+    vi.mocked(getProjectPath).mockReturnValue('/repo');
+    vi.mocked(getProjectBranchPrefix).mockReturnValue('task');
+    vi.mocked(isProjectMissing).mockReturnValue(false);
+    let n = 0;
+    mockInvoke.mockImplementation((channel: string) => {
+      if (channel === IPC.CreateTask) {
+        n += 1;
+        return Promise.resolve({
+          id: `t-${n}`,
+          branch_name: `task/x-${n}`,
+          worktree_path: `/repo/.worktrees/x-${n}`,
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+  });
+
+  const base = {
+    projectId: 'proj-1',
+    gitIsolation: 'worktree' as const,
+    baseBranch: 'main',
+    initialPrompt: 'hi',
+  };
+  const agent = (id: string, command: string) => ({
+    id,
+    name: id,
+    command,
+    args: [],
+    resume_args: [],
+    skip_permissions_args: [],
+    description: id,
+  });
+  const defOf = (taskId: string) => {
+    const t = mockTasks[taskId] as { agentIds: string[] };
+    return (mockAgents[t.agentIds[0]] as { def: { model?: string; reasoningEffort?: string } }).def;
+  };
+
+  it('creates one sibling task per agent, each carrying its AgentDef + model', async () => {
+    const ids = await createFanoutTasks(base, [
+      { agentDef: { ...agent('claude-code', 'claude'), model: 'opus' }, name: 'Feat · Claude' },
+      {
+        agentDef: { ...agent('codex', 'codex'), model: 'gpt-5.4', reasoningEffort: 'high' },
+        name: 'Feat · Codex',
+      },
+      { agentDef: agent('opencode', 'opencode'), name: 'Feat · OpenCode' },
+    ]);
+
+    expect(ids).toEqual(['t-1', 't-2', 't-3']);
+    const createCalls = mockInvoke.mock.calls.filter((c) => c[0] === IPC.CreateTask);
+    expect(createCalls).toHaveLength(3);
+    expect(createCalls.map((c) => (c[1] as { name: string }).name)).toEqual([
+      'Feat · Claude',
+      'Feat · Codex',
+      'Feat · OpenCode',
+    ]);
+    expect(defOf('t-1').model).toBe('opus');
+    expect(defOf('t-2')).toMatchObject({ model: 'gpt-5.4', reasoningEffort: 'high' });
+    expect(defOf('t-3').model).toBeUndefined();
+  });
+
+  it('single agent = one task, no regression', async () => {
+    const ids = await createFanoutTasks(base, [
+      { agentDef: agent('claude-code', 'claude'), name: 'Solo' },
+    ]);
+    expect(ids).toEqual(['t-1']);
+    expect(mockInvoke.mock.calls.filter((c) => c[0] === IPC.CreateTask)).toHaveLength(1);
+  });
+
+  const initialPromptOf = (taskId: string) =>
+    (mockTasks[taskId] as { initialPrompt?: string }).initialPrompt;
+
+  it('renders one skill per-agent into each initialPrompt (claude/opencode / , codex $)', async () => {
+    await createFanoutTasks({ ...base, skill: 'gsd-quick' }, [
+      { agentDef: agent('claude-code', 'claude'), name: 'A' },
+      { agentDef: agent('codex', 'codex'), name: 'B' },
+      { agentDef: agent('opencode', 'opencode'), name: 'C' },
+    ]);
+    expect(initialPromptOf('t-1')).toBe('/gsd-quick hi');
+    expect(initialPromptOf('t-2')).toBe('$gsd-quick hi');
+    expect(initialPromptOf('t-3')).toBe('/gsd-quick hi');
+  });
+
+  it('composes a skill with no prompt as just the invocation token', async () => {
+    await createFanoutTasks({ ...base, initialPrompt: undefined, skill: 'gsd-quick' }, [
+      { agentDef: agent('codex', 'codex'), name: 'B' },
+    ]);
+    expect(initialPromptOf('t-1')).toBe('$gsd-quick');
+  });
+});
+
 // ─── createTask stepsEnabled default regression ────────────────────────────────
 
 describe('createTask does not mutate defaultStepsEnabled', () => {
@@ -901,6 +1000,57 @@ describe('sendPrompt', () => {
     await sendPrompt('task-1', 'agent-1', 'line 1\nline 2');
 
     expect(writePayloads()).toEqual(['\x1b[I', '\x1b[200~line 1\nline 2\x1b[201~', '\r']);
+  });
+
+  it('delivers a claude slash command un-bracketed so the skill fires', async () => {
+    mockIsAgentBracketedPasteEnabled.mockReturnValue(true);
+    mockAgents = { 'agent-1': { status: 'running', def: { command: 'claude' } } };
+
+    await sendPrompt('task-1', 'agent-1', '/gsd-quick fix the prompt');
+
+    expect(writePayloads()).toEqual(['\x1b[I', '/gsd-quick fix the prompt', '\r']);
+  });
+
+  it('keeps bracketed paste for a codex $skill mention', async () => {
+    mockIsAgentBracketedPasteEnabled.mockReturnValue(true);
+    mockAgents = { 'agent-1': { status: 'running', def: { command: 'codex' } } };
+
+    await sendPrompt('task-1', 'agent-1', '$gsd-quick fix the prompt');
+
+    expect(writePayloads()).toEqual([
+      '\x1b[I',
+      '\x1b[200~$gsd-quick fix the prompt\x1b[201~',
+      '\r',
+    ]);
+  });
+
+  it('keeps bracketed paste for a normal claude prompt (regression)', async () => {
+    mockIsAgentBracketedPasteEnabled.mockReturnValue(true);
+    mockAgents = { 'agent-1': { status: 'running', def: { command: 'claude' } } };
+
+    await sendPrompt('task-1', 'agent-1', 'just a normal prompt');
+
+    expect(writePayloads()).toEqual(['\x1b[I', '\x1b[200~just a normal prompt\x1b[201~', '\r']);
+  });
+
+  it('skips the steps suffix for a skill invocation', async () => {
+    mockAgents = { 'agent-1': { status: 'running', def: { command: 'claude' } } };
+    mockTasks['task-1'].stepsEnabled = true;
+
+    await sendPrompt('task-1', 'agent-1', '/gsd-quick fix');
+
+    expect(writePayloads()).toEqual(['\x1b[I', '/gsd-quick fix', '\r']);
+  });
+
+  it('still appends the steps suffix for a normal first prompt when enabled', async () => {
+    mockAgents = { 'agent-1': { status: 'running', def: { command: 'claude' } } };
+    mockTasks['task-1'].stepsEnabled = true;
+
+    await sendPrompt('task-1', 'agent-1', 'normal prompt');
+
+    const payload = writePayloads()[1];
+    expect(payload).toContain('normal prompt\n\n---\n');
+    expect(payload).toContain('steps.json');
   });
 
   it.each(['landed_pending_review', 'landed_cleanup_failed', 'reviewed'] as const)(

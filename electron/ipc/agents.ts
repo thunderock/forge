@@ -1,5 +1,7 @@
 import { execFile } from 'child_process';
 import { promisify } from 'util';
+import { promises as fs } from 'fs';
+import os from 'os';
 import path from 'path';
 
 const execFileAsync = promisify(execFile);
@@ -16,7 +18,7 @@ interface AgentDef {
   prompt_ready_delay_ms?: number;
 }
 
-const DEFAULT_AGENTS: AgentDef[] = [
+export const DEFAULT_AGENTS: AgentDef[] = [
   {
     id: 'claude-code',
     name: 'Claude Code',
@@ -36,15 +38,6 @@ const DEFAULT_AGENTS: AgentDef[] = [
     description: "OpenAI's Codex CLI agent",
   },
   {
-    id: 'gemini',
-    name: 'Gemini CLI',
-    command: 'gemini',
-    args: [],
-    resume_args: ['--resume', 'latest'],
-    skip_permissions_args: ['--yolo'],
-    description: "Google's Gemini CLI agent",
-  },
-  {
     id: 'opencode',
     name: 'OpenCode',
     command: 'opencode',
@@ -52,30 +45,6 @@ const DEFAULT_AGENTS: AgentDef[] = [
     resume_args: [],
     skip_permissions_args: [],
     description: 'Open source AI coding agent (opencode.ai)',
-  },
-  {
-    id: 'copilot',
-    name: 'Copilot CLI',
-    command: 'copilot',
-    args: [],
-    resume_args: ['--continue'],
-    skip_permissions_args: ['--yolo'],
-    description: "GitHub's Copilot CLI agent",
-    // Copilot CLI shows up to two init dialogs (folder trust + instructions init)
-    // before reaching its real prompt.  A modest stability delay lets the prompt
-    // settle before sending, without being so long that the user notices the wait.
-    prompt_ready_delay_ms: 1_000,
-  },
-  {
-    id: 'antigravity',
-    name: 'Antigravity CLI',
-    command: 'agy',
-    args: [],
-    resume_args: ['-c'],
-    skip_permissions_args: ['--dangerously-skip-permissions'],
-    description: "Google's Antigravity CLI agent (successor to Gemini CLI)",
-    // Antigravity paints a TUI that needs a beat to settle before auto-send.
-    prompt_ready_delay_ms: 1_000,
   },
 ];
 
@@ -113,4 +82,103 @@ export async function listAgents(): Promise<AgentDef[]> {
   );
   cacheTime = now;
   return cachedAgents;
+}
+
+// --- OpenCode dynamic model discovery (MDL-04) ---
+
+/** Parse `opencode models` stdout into `provider/model` lines. */
+export function parseOpenCodeModels(stdout: string): string[] {
+  return stdout
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.includes('/'));
+}
+
+let cachedOpenCodeModels: string[] | null = null;
+let openCodeModelsCacheTime = 0;
+const OPENCODE_MODELS_TTL = 5 * 60_000;
+
+/** Test-only: clear the module-level cache so cases don't leak into each other. */
+export function resetOpenCodeModelsCacheForTests(): void {
+  cachedOpenCodeModels = null;
+  openCodeModelsCacheTime = 0;
+}
+
+/**
+ * Discover the user's opencode models via `opencode models` (one `provider/model`
+ * per line, authed providers only). TTL-cached; returns `[]` when opencode is
+ * absent / unauthed / errors — never throws (MDL-04).
+ */
+export async function listOpenCodeModels(): Promise<string[]> {
+  const now = Date.now();
+  if (cachedOpenCodeModels && now - openCodeModelsCacheTime < OPENCODE_MODELS_TTL) {
+    return cachedOpenCodeModels;
+  }
+  try {
+    const { stdout } = await execFileAsync('opencode', ['models'], {
+      encoding: 'utf8',
+      timeout: 5000,
+    });
+    cachedOpenCodeModels = parseOpenCodeModels(stdout);
+    openCodeModelsCacheTime = now;
+    return cachedOpenCodeModels;
+  } catch {
+    return [];
+  }
+}
+
+// --- Agent skill discovery (autocomplete for the New Task "Skill" field) ---
+
+const SKILL_NAME_RE = /^[a-z0-9][a-z0-9._-]*$/i;
+
+/** Config dirs where installed claude/codex skills + commands live on the host. */
+export function defaultSkillDirs(): string[] {
+  const home = os.homedir();
+  return [
+    path.join(home, '.claude', 'commands'),
+    path.join(home, '.claude', 'skills'),
+    path.join(home, '.codex', 'skills'),
+  ];
+}
+
+/** Dedupe + sort skill names from raw dir entries. Strips a `.md` suffix (command files)
+ *  and drops anything that isn't a plausible skill name. */
+export function mergeSkillNames(entries: string[]): string[] {
+  const names = new Set<string>();
+  for (const raw of entries) {
+    const name = raw.replace(/\.md$/i, '').trim();
+    if (name && SKILL_NAME_RE.test(name)) names.add(name);
+  }
+  return [...names].sort();
+}
+
+/** Read + merge skill names from the given dirs. Missing dirs are skipped; never throws. */
+export async function readSkillNames(dirs: string[]): Promise<string[]> {
+  const all: string[] = [];
+  for (const dir of dirs) {
+    try {
+      const entries = await fs.readdir(dir, { withFileTypes: true });
+      for (const e of entries) all.push(e.name);
+    } catch {
+      /* dir absent / unreadable — skip (discovery is best-effort) */
+    }
+  }
+  return mergeSkillNames(all);
+}
+
+let cachedSkills: string[] | null = null;
+let skillsCacheTime = 0;
+const AGENT_SKILLS_TTL = 5 * 60_000;
+
+/**
+ * Discover installed skill names across the host's claude/codex config dirs, for the New
+ * Task Skill-field autocomplete. TTL-cached; best-effort (returns whatever it finds, never
+ * throws). NOT authoritative — the field accepts free text and the agent validates.
+ */
+export async function listAgentSkills(): Promise<string[]> {
+  const now = Date.now();
+  if (cachedSkills && now - skillsCacheTime < AGENT_SKILLS_TTL) return cachedSkills;
+  cachedSkills = await readSkillNames(defaultSkillDirs());
+  skillsCacheTime = now;
+  return cachedSkills;
 }

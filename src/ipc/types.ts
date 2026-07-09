@@ -19,6 +19,12 @@ export interface AgentDef {
   prompt_ready_delay_ms?: number;
   /** CLI flag used to pass an MCP config path to this agent. Omit when unsupported. */
   mcp_config_flag?: string;
+  /** Selected model id/alias for this run, or undefined for the host CLI default
+   *  (undefined = no model flag is emitted at launch). */
+  model?: string;
+  /** Reasoning effort: claude `--effort` (low|medium|high|xhigh|max) or codex
+   *  `model_reasoning_effort` (low|medium|high|xhigh); undefined = none. */
+  reasoningEffort?: string;
 }
 
 export interface CreateTaskResult {
