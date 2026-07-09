@@ -70,7 +70,7 @@ import {
   getUncommittedFileDiffs,
 } from './git.js';
 import { createTask, deleteTask } from './tasks.js';
-import { listAgents } from './agents.js';
+import { listAgents, listOpenCodeModels } from './agents.js';
 import {
   saveAppState,
   loadAppState,
@@ -484,6 +484,7 @@ export function registerAllHandlers(win: BrowserWindow): void {
 
   // --- Agent commands ---
   ipcMain.handle(IPC.ListAgents, () => listAgents());
+  ipcMain.handle(IPC.ListOpenCodeModels, () => listOpenCodeModels());
   ipcMain.handle(IPC.CheckDockerAvailable, () => isDockerAvailable());
   ipcMain.handle(IPC.CheckDockerImageExists, (_e, args) => {
     assertString(args.image, 'image');

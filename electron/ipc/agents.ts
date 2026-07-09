@@ -81,3 +81,46 @@ export async function listAgents(): Promise<AgentDef[]> {
   cacheTime = now;
   return cachedAgents;
 }
+
+// --- OpenCode dynamic model discovery (MDL-04) ---
+
+/** Parse `opencode models` stdout into `provider/model` lines. */
+export function parseOpenCodeModels(stdout: string): string[] {
+  return stdout
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.includes('/'));
+}
+
+let cachedOpenCodeModels: string[] | null = null;
+let openCodeModelsCacheTime = 0;
+const OPENCODE_MODELS_TTL = 5 * 60_000;
+
+/** Test-only: clear the module-level cache so cases don't leak into each other. */
+export function resetOpenCodeModelsCacheForTests(): void {
+  cachedOpenCodeModels = null;
+  openCodeModelsCacheTime = 0;
+}
+
+/**
+ * Discover the user's opencode models via `opencode models` (one `provider/model`
+ * per line, authed providers only). TTL-cached; returns `[]` when opencode is
+ * absent / unauthed / errors — never throws (MDL-04).
+ */
+export async function listOpenCodeModels(): Promise<string[]> {
+  const now = Date.now();
+  if (cachedOpenCodeModels && now - openCodeModelsCacheTime < OPENCODE_MODELS_TTL) {
+    return cachedOpenCodeModels;
+  }
+  try {
+    const { stdout } = await execFileAsync('opencode', ['models'], {
+      encoding: 'utf8',
+      timeout: 5000,
+    });
+    cachedOpenCodeModels = parseOpenCodeModels(stdout);
+    openCodeModelsCacheTime = now;
+    return cachedOpenCodeModels;
+  } catch {
+    return [];
+  }
+}
