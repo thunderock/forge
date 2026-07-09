@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildTaskAgentArgs, isResumeArgsFailure } from './agent-args';
+import { buildModelArgs, buildTaskAgentArgs, isResumeArgsFailure } from './agent-args';
 
 const codexAgent = {
   id: 'codex',
@@ -40,6 +40,26 @@ const copilotAgent = {
   args: [],
   resume_args: ['--continue'],
   skip_permissions_args: ['--yolo'],
+};
+
+const opencodeAgent = {
+  id: 'opencode',
+  name: 'OpenCode',
+  description: 'OpenCode agent',
+  command: 'opencode',
+  args: [],
+  resume_args: [],
+  skip_permissions_args: [],
+};
+
+const customAgent = {
+  id: 'custom-1',
+  name: 'My CLI',
+  description: 'Custom agent',
+  command: 'mycli',
+  args: [],
+  resume_args: [],
+  skip_permissions_args: [],
 };
 
 describe('buildTaskAgentArgs', () => {
@@ -170,6 +190,69 @@ describe('buildTaskAgentArgs', () => {
         true,
       ),
     ).toEqual(['--continue', '--additional-mcp-config', '@/tmp/mcp.json']);
+  });
+
+  it('emits no model flag for the host CLI default (MDL-01)', () => {
+    // Guards the existing behaviour: no model set => argv identical to pre-feature.
+    expect(
+      buildTaskAgentArgs(
+        claudeAgent,
+        { skipPermissions: false, mcpConfigPath: '/tmp/mcp.json' },
+        false,
+      ),
+    ).toEqual(['--mcp-config', '/tmp/mcp.json']);
+  });
+
+  it('prepends codex -m/-c before the resume subcommand (MDL-02/MDL-03)', () => {
+    expect(
+      buildTaskAgentArgs(
+        { ...codexAgent, model: 'gpt-5.4', reasoningEffort: 'high' },
+        { skipPermissions: false, mcpConfigPath: undefined },
+        true,
+      ),
+    ).toEqual(['-m', 'gpt-5.4', '-c', 'model_reasoning_effort=high', 'resume', '--last']);
+  });
+});
+
+describe('buildModelArgs', () => {
+  it('returns [] for the host CLI default (no model) — MDL-01', () => {
+    expect(buildModelArgs(claudeAgent)).toEqual([]);
+    expect(buildModelArgs(codexAgent)).toEqual([]);
+    expect(buildModelArgs(opencodeAgent)).toEqual([]);
+  });
+
+  it('emits claude --model <alias> first', () => {
+    const args = buildModelArgs({ ...claudeAgent, model: 'opus' });
+    expect(args).toEqual(['--model', 'opus']);
+    expect(args[0]).toBe('--model');
+  });
+
+  it('emits codex -m and -c model_reasoning_effort when both set', () => {
+    expect(buildModelArgs({ ...codexAgent, model: 'gpt-5.4', reasoningEffort: 'high' })).toEqual([
+      '-m',
+      'gpt-5.4',
+      '-c',
+      'model_reasoning_effort=high',
+    ]);
+  });
+
+  it('emits codex effort even when the model is host-default', () => {
+    expect(buildModelArgs({ ...codexAgent, reasoningEffort: 'xhigh' })).toEqual([
+      '-c',
+      'model_reasoning_effort=xhigh',
+    ]);
+  });
+
+  it('emits opencode -m provider/model with NO --variant', () => {
+    const args = buildModelArgs({ ...opencodeAgent, model: 'opencode/deepseek-v4-flash-free' });
+    expect(args).toEqual(['-m', 'opencode/deepseek-v4-flash-free']);
+    expect(args).not.toContain('--variant');
+  });
+
+  it('emits no model flag for an unknown/custom command', () => {
+    expect(buildModelArgs({ ...customAgent, model: 'whatever', reasoningEffort: 'high' })).toEqual(
+      [],
+    );
   });
 });
 
