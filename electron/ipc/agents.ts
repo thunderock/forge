@@ -170,12 +170,6 @@ let cachedSkills: string[] | null = null;
 let skillsCacheTime = 0;
 const AGENT_SKILLS_TTL = 5 * 60_000;
 
-/** Test-only: clear the module-level cache so cases don't leak into each other. */
-export function resetAgentSkillsCacheForTests(): void {
-  cachedSkills = null;
-  skillsCacheTime = 0;
-}
-
 /**
  * Discover installed skill names across the host's claude/codex config dirs, for the New
  * Task Skill-field autocomplete. TTL-cached; best-effort (returns whatever it finds, never
