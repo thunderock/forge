@@ -16,7 +16,7 @@ interface AgentDef {
   prompt_ready_delay_ms?: number;
 }
 
-const DEFAULT_AGENTS: AgentDef[] = [
+export const DEFAULT_AGENTS: AgentDef[] = [
   {
     id: 'claude-code',
     name: 'Claude Code',
@@ -36,15 +36,6 @@ const DEFAULT_AGENTS: AgentDef[] = [
     description: "OpenAI's Codex CLI agent",
   },
   {
-    id: 'gemini',
-    name: 'Gemini CLI',
-    command: 'gemini',
-    args: [],
-    resume_args: ['--resume', 'latest'],
-    skip_permissions_args: ['--yolo'],
-    description: "Google's Gemini CLI agent",
-  },
-  {
     id: 'opencode',
     name: 'OpenCode',
     command: 'opencode',
@@ -52,30 +43,6 @@ const DEFAULT_AGENTS: AgentDef[] = [
     resume_args: [],
     skip_permissions_args: [],
     description: 'Open source AI coding agent (opencode.ai)',
-  },
-  {
-    id: 'copilot',
-    name: 'Copilot CLI',
-    command: 'copilot',
-    args: [],
-    resume_args: ['--continue'],
-    skip_permissions_args: ['--yolo'],
-    description: "GitHub's Copilot CLI agent",
-    // Copilot CLI shows up to two init dialogs (folder trust + instructions init)
-    // before reaching its real prompt.  A modest stability delay lets the prompt
-    // settle before sending, without being so long that the user notices the wait.
-    prompt_ready_delay_ms: 1_000,
-  },
-  {
-    id: 'antigravity',
-    name: 'Antigravity CLI',
-    command: 'agy',
-    args: [],
-    resume_args: ['-c'],
-    skip_permissions_args: ['--dangerously-skip-permissions'],
-    description: "Google's Antigravity CLI agent (successor to Gemini CLI)",
-    // Antigravity paints a TUI that needs a beat to settle before auto-send.
-    prompt_ready_delay_ms: 1_000,
   },
 ];
 
