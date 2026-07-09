@@ -27,6 +27,11 @@ import type {
   StepEntry,
 } from '../ipc/types';
 import { parseGitHubUrl, taskNameFromGitHubUrl } from '../lib/github-url';
+import {
+  isSkillInvocation,
+  renderSkillInvocation,
+  shouldBypassBracketedPaste,
+} from '../lib/agent-args';
 import type { Agent, Task, GitIsolationMode } from './types';
 import type { DockerSource } from '../lib/docker';
 import { COORDINATOR_PREAMBLE } from './coordinator-preamble';
@@ -144,6 +149,9 @@ export interface CreateTaskOptions {
   coordinatorMode?: boolean;
   propagateSkipPermissions?: boolean;
   maxConcurrentTasks?: number;
+  /** Optional gsd/agent skill to invoke; rendered per-agent (claude/opencode `/name`,
+   *  codex `$name`) and prepended to the prompt. Not validated — the agent errors if bogus. */
+  skill?: string;
 }
 
 /** One entry per agent to fan out: its AgentDef copy (with Phase-5 model) + resolved task name + per-agent skip-perms. */
@@ -277,11 +285,22 @@ export async function createTask(opts: CreateTaskOptions): Promise<string> {
   // Per-task steps tracking — explicit opt-in from dialog, or fall back to default preference
   const stepsEnabled = opts.stepsEnabled ?? store.defaultStepsEnabled;
 
+  // Prepend the per-agent skill token (claude/opencode `/name`, codex `$name`) so a
+  // fan-out's single skill launches in each agent's own syntax. Empty when no skill set.
+  const skillToken = opts.skill ? renderSkillInvocation(agentDef, opts.skill) : '';
+  const composedPrompt = skillToken
+    ? `${skillToken}${initialPrompt ? ` ${initialPrompt}` : ''}`
+    : initialPrompt;
+
   // Inject steps instruction into the first prompt so the agent maintains steps.json.
   // Appended after a separator for recency bias; savedInitialPrompt keeps the original clean text.
-  // Only possible here when an initialPrompt was provided; if not, sendPrompt handles injection.
+  // Only possible here when a prompt was provided; if not, sendPrompt handles injection.
+  // Skip entirely for a skill invocation: the multi-line suffix would break claude's slash
+  // command, and gsd skills manage their own steps.json.
   const effectivePrompt =
-    stepsEnabled && initialPrompt ? `${initialPrompt}\n\n---\n${STEPS_INSTRUCTION}` : initialPrompt;
+    stepsEnabled && composedPrompt && !skillToken
+      ? `${composedPrompt}\n\n---\n${STEPS_INSTRUCTION}`
+      : composedPrompt;
   const coordinatorBaseBranchInstruction =
     opts.coordinatorMode && branchName
       ? `Use \`${branchName}\` as the baseBranch for all sub-tasks.\n\n`
@@ -314,7 +333,7 @@ export async function createTask(opts: CreateTaskOptions): Promise<string> {
           coordinatorBaseBranchInstruction +
           effectivePrompt
         : (effectivePrompt ?? undefined),
-    savedInitialPrompt: initialPrompt ?? undefined,
+    savedInitialPrompt: composedPrompt ?? undefined,
     stepsEnabled: stepsEnabled || undefined,
     skipPermissions: skipPermissions ?? undefined,
     dockerMode: dockerMode ?? undefined,
@@ -689,7 +708,13 @@ export async function sendPrompt(taskId: string, agentId: string, text: string):
   // When steps tracking is enabled but no initial prompt was provided in the dialog,
   // the steps instruction was never injected in createTask. Append it to each
   // agent's first manual prompt so newly added agents also maintain steps.json.
-  const injectSteps = !!(task?.stepsEnabled && !hasPromptedAgent && !isQueuedInitialPrompt);
+  // Never for a skill invocation (`/name`/`$name`) — the suffix would break the command.
+  const injectSteps = !!(
+    task?.stepsEnabled &&
+    !hasPromptedAgent &&
+    !isQueuedInitialPrompt &&
+    !isSkillInvocation(text)
+  );
   const effectiveText = injectSteps ? `${text}\n\n---\n${STEPS_INSTRUCTION}` : text;
 
   // Send a Focus In escape sequence before the prompt text.  When the user focuses
@@ -702,7 +727,12 @@ export async function sendPrompt(taskId: string, agentId: string, text: string):
   // bracketed paste, wrap only the prompt text; this avoids Codex's paste-burst
   // guard treating rapid synthetic keystrokes plus Enter as a paste.
   setTaskLastInputAt(taskId);
-  const useBracketed = isAgentBracketedPasteEnabled(agentId);
+  // Claude ignores a slash command sent as bracketed paste — deliver those un-bracketed
+  // so `/gsd-quick …` actually fires (codex `$name` is a mention, keeps bracketed paste).
+  const agentCommand = store.agents[agentId]?.def?.command ?? '';
+  const useBracketed =
+    isAgentBracketedPasteEnabled(agentId) &&
+    !shouldBypassBracketedPaste(agentCommand, effectiveText);
   await writeToAgentWhenReady(
     taskId,
     agentId,

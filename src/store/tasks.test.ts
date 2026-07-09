@@ -884,6 +884,27 @@ describe('createFanoutTasks', () => {
     expect(ids).toEqual(['t-1']);
     expect(mockInvoke.mock.calls.filter((c) => c[0] === IPC.CreateTask)).toHaveLength(1);
   });
+
+  const initialPromptOf = (taskId: string) =>
+    (mockTasks[taskId] as { initialPrompt?: string }).initialPrompt;
+
+  it('renders one skill per-agent into each initialPrompt (claude/opencode / , codex $)', async () => {
+    await createFanoutTasks({ ...base, skill: 'gsd-quick' }, [
+      { agentDef: agent('claude-code', 'claude'), name: 'A' },
+      { agentDef: agent('codex', 'codex'), name: 'B' },
+      { agentDef: agent('opencode', 'opencode'), name: 'C' },
+    ]);
+    expect(initialPromptOf('t-1')).toBe('/gsd-quick hi');
+    expect(initialPromptOf('t-2')).toBe('$gsd-quick hi');
+    expect(initialPromptOf('t-3')).toBe('/gsd-quick hi');
+  });
+
+  it('composes a skill with no prompt as just the invocation token', async () => {
+    await createFanoutTasks({ ...base, initialPrompt: undefined, skill: 'gsd-quick' }, [
+      { agentDef: agent('codex', 'codex'), name: 'B' },
+    ]);
+    expect(initialPromptOf('t-1')).toBe('$gsd-quick');
+  });
 });
 
 // ─── createTask stepsEnabled default regression ────────────────────────────────
@@ -979,6 +1000,57 @@ describe('sendPrompt', () => {
     await sendPrompt('task-1', 'agent-1', 'line 1\nline 2');
 
     expect(writePayloads()).toEqual(['\x1b[I', '\x1b[200~line 1\nline 2\x1b[201~', '\r']);
+  });
+
+  it('delivers a claude slash command un-bracketed so the skill fires', async () => {
+    mockIsAgentBracketedPasteEnabled.mockReturnValue(true);
+    mockAgents = { 'agent-1': { status: 'running', def: { command: 'claude' } } };
+
+    await sendPrompt('task-1', 'agent-1', '/gsd-quick fix the prompt');
+
+    expect(writePayloads()).toEqual(['\x1b[I', '/gsd-quick fix the prompt', '\r']);
+  });
+
+  it('keeps bracketed paste for a codex $skill mention', async () => {
+    mockIsAgentBracketedPasteEnabled.mockReturnValue(true);
+    mockAgents = { 'agent-1': { status: 'running', def: { command: 'codex' } } };
+
+    await sendPrompt('task-1', 'agent-1', '$gsd-quick fix the prompt');
+
+    expect(writePayloads()).toEqual([
+      '\x1b[I',
+      '\x1b[200~$gsd-quick fix the prompt\x1b[201~',
+      '\r',
+    ]);
+  });
+
+  it('keeps bracketed paste for a normal claude prompt (regression)', async () => {
+    mockIsAgentBracketedPasteEnabled.mockReturnValue(true);
+    mockAgents = { 'agent-1': { status: 'running', def: { command: 'claude' } } };
+
+    await sendPrompt('task-1', 'agent-1', 'just a normal prompt');
+
+    expect(writePayloads()).toEqual(['\x1b[I', '\x1b[200~just a normal prompt\x1b[201~', '\r']);
+  });
+
+  it('skips the steps suffix for a skill invocation', async () => {
+    mockAgents = { 'agent-1': { status: 'running', def: { command: 'claude' } } };
+    mockTasks['task-1'].stepsEnabled = true;
+
+    await sendPrompt('task-1', 'agent-1', '/gsd-quick fix');
+
+    expect(writePayloads()).toEqual(['\x1b[I', '/gsd-quick fix', '\r']);
+  });
+
+  it('still appends the steps suffix for a normal first prompt when enabled', async () => {
+    mockAgents = { 'agent-1': { status: 'running', def: { command: 'claude' } } };
+    mockTasks['task-1'].stepsEnabled = true;
+
+    await sendPrompt('task-1', 'agent-1', 'normal prompt');
+
+    const payload = writePayloads()[1];
+    expect(payload).toContain('normal prompt\n\n---\n');
+    expect(payload).toContain('steps.json');
   });
 
   it.each(['landed_pending_review', 'landed_cleanup_failed', 'reviewed'] as const)(
