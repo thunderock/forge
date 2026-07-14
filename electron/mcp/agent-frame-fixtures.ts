@@ -85,4 +85,50 @@ export const NOT_READY_AGENT_FRAME_FIXTURES: NotReadyAgentFrameFixture[] = [
     reason: 'no_prompt',
     frame: ['❯ Option A', '  Option B', '  Option C', 'Choose an option to continue'].join('\n'),
   },
+  {
+    // Two-option selection cursor: `❯ Yes` is a selection cursor, NOT the bare
+    // agent prompt. The line-anchored ready pattern `^\s*❯\s*$` requires a lone
+    // ❯, which `❯ Yes` fails — so it must read not-ready (SC4 correctness #2).
+    name: 'Two-option ❯ selection cursor',
+    reason: 'no_prompt',
+    frame: ['❯ Yes', '  No', 'Continue?'].join('\n'),
+  },
+  {
+    // A diff hunk whose body line begins with `>` while the agent is busy. The
+    // busy marker (`esc to interrupt`) short-circuits detection to `busy` before
+    // any prompt scan runs.
+    name: 'Busy diff hunk with quoted > line',
+    reason: 'busy',
+    frame: ['diff --git a/x b/x', '@@ -1 +1 @@', '> quoted diff line', 'esc to interrupt'].join(
+      '\n',
+    ),
+  },
+  {
+    // Load-bearing: the SAME quoted `>` diff line with NO busy marker to
+    // short-circuit. This proves the line-anchored Gemini ready pattern
+    // `^\s*>\s*(?:Type your message|$)` does NOT treat a bare quoted `>` diff
+    // line as the `> ` ready prompt — `> quoted diff line` has neither
+    // end-of-line nor "Type your message" after `>`, so it reads not-ready
+    // via the prompt scan (reason `no_prompt`), not the busy short-circuit.
+    name: 'Diff hunk with quoted > line, no busy marker',
+    reason: 'no_prompt',
+    frame: ['diff --git a/x b/x', '@@ -1 +1 @@', '> quoted diff line'].join('\n'),
+  },
+];
+
+/**
+ * READY frames modelling a just-sent prompt echoed back above the agent's bare
+ * prompt marker. Used by 07-02's prompt-echo suppression test and by the
+ * broadcast readiness suite (the echoed body followed by a lone ❯/› still reads
+ * ready, so a delivered broadcast does not wedge the queue).
+ */
+export const PROMPT_ECHO_FRAME_FIXTURES: AgentFrameFixture[] = [
+  {
+    name: 'Claude prompt echo above bare ❯',
+    frame: ['Refactor the auth module and add tests', '', '❯'].join('\n'),
+  },
+  {
+    name: 'Codex prompt echo above bare ›',
+    frame: ['Summarize the recent changes', '', '›'].join('\n'),
+  },
 ];

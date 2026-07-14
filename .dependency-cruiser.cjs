@@ -13,7 +13,13 @@ module.exports = {
         // Allow importing pure shared modules with no Node/Electron deps:
         //   - electron/ipc/channels.ts — IPC channel enum
         //   - electron/mcp/prompt-detect.ts — regex-only prompt detector reused by the renderer task-status pipeline
-        pathNot: ['^electron/ipc/channels\\.ts', '^electron/mcp/prompt-detect\\.ts'],
+        //   - electron/mcp/agent-frame-fixtures.ts — pure recorded-PTY-frame string data shared by the
+        //     detector tests and the renderer broadcast readiness tests (no Node/Electron runtime deps)
+        pathNot: [
+          '^electron/ipc/channels\\.ts',
+          '^electron/mcp/prompt-detect\\.ts',
+          '^electron/mcp/agent-frame-fixtures\\.ts',
+        ],
       },
     },
     {
