@@ -473,4 +473,128 @@ describe('broadcast delivery engine', () => {
       );
     });
   });
+
+  // ── teardown + never-idle backstop ───────────────────────────────────────
+  describe('teardown + never-idle backstop', () => {
+    const EMPTY_SIZES = {
+      queue: 0,
+      writing: 0,
+      promptReadySeenAt: 0,
+      enqueuedAt: 0,
+      stabilityTimers: 0,
+      suppressUntil: 0,
+    };
+
+    it('subscribes teardown; a teardown fire drops queue + timer + backstop', () => {
+      setRunningAgent(AGENT);
+      ts.tail = '❯';
+
+      expect(enqueue(AGENT, item('A'))).toBe(true);
+      expect(subscribeAgentTeardown).toHaveBeenCalledTimes(1);
+      expect(__broadcastTestHooks.queueLength(AGENT)).toBe(1);
+      expect(__broadcastTestHooks.isBackstopActive()).toBe(true);
+
+      // Simulate the renderer's clearAgentActivity firing the teardown subscriber.
+      ts.capturedTeardown?.(AGENT);
+
+      expect(__broadcastTestHooks.queueLength(AGENT)).toBe(0);
+      expect(__broadcastTestHooks.hasStabilityTimer(AGENT)).toBe(false);
+      expect(__broadcastTestHooks.isBackstopActive()).toBe(false);
+      expect(__broadcastTestHooks.internalSizes()).toEqual(EMPTY_SIZES);
+    });
+
+    it('a flush timer never writes to a dead pty (status re-checked at flush)', async () => {
+      setRunningAgent(AGENT);
+      ts.tail = '❯';
+      enqueue(AGENT, item('A'));
+
+      // Agent exits after enqueue but before the flush fires.
+      mockAgents[AGENT].status = 'exited';
+      ts.captured?.(AGENT); // readiness fire → tryFlush → not running → teardown
+      await vi.advanceTimersByTimeAsync(STABILITY_MS);
+
+      expect(tasksMock.sendPrompt).not.toHaveBeenCalled();
+      expect(__broadcastTestHooks.queueLength(AGENT)).toBe(0);
+    });
+
+    it('the backstop tears down a pending agent that has exited (no readiness fire)', async () => {
+      setRunningAgent(AGENT);
+      ts.idle = false;
+      ts.tail = 'Working… esc to interrupt';
+      enqueue(AGENT, item('A'));
+      mockAgents[AGENT].status = 'exited';
+
+      // No readiness fire — only the single backstop interval sweeps it.
+      await vi.advanceTimersByTimeAsync(500);
+
+      expect(tasksMock.sendPrompt).not.toHaveBeenCalled();
+      expect(__broadcastTestHooks.queueLength(AGENT)).toBe(0);
+      expect(__broadcastTestHooks.isBackstopActive()).toBe(false);
+    });
+
+    it('drops + notifies a never-idle agent after the timeout (policy=drop)', async () => {
+      setRunningAgent(AGENT);
+      ts.idle = false;
+      ts.tail = 'Working… esc to interrupt';
+      enqueue(AGENT, item('A'));
+
+      await vi.advanceTimersByTimeAsync(120_000 + 500);
+
+      expect(tasksMock.sendPrompt).not.toHaveBeenCalled();
+      expect(__broadcastTestHooks.queueLength(AGENT)).toBe(0);
+      expect(notifyMock.showNotification).toHaveBeenCalledWith(
+        expect.stringContaining('not delivered'),
+      );
+      expect(__broadcastTestHooks.isBackstopActive()).toBe(false);
+    });
+
+    it('force-write policy flushes at the timeout instead of dropping', async () => {
+      setRunningAgent(AGENT);
+      ts.idle = false;
+      ts.tail = 'Working… esc to interrupt';
+      __broadcastTestHooks.setNeverIdlePolicy('force-write');
+      enqueue(AGENT, item('A'));
+
+      await vi.advanceTimersByTimeAsync(120_000 + 500);
+
+      expect(tasksMock.sendPrompt).toHaveBeenCalledWith('task-q', AGENT, 'A');
+    });
+
+    it('leaves zero residual state after creating and dropping many agents', () => {
+      for (let i = 0; i < 5; i++) {
+        const id = `a-${i}`;
+        setRunningAgent(id);
+        enqueue(id, item(`p${i}`, `t-${i}`));
+      }
+      expect(__broadcastTestHooks.isBackstopActive()).toBe(true);
+
+      for (let i = 0; i < 5; i++) ts.capturedTeardown?.(`a-${i}`);
+
+      expect(__broadcastTestHooks.internalSizes()).toEqual(EMPTY_SIZES);
+      expect(__broadcastTestHooks.isBackstopActive()).toBe(false);
+    });
+
+    it('drains two rapid broadcasts to one slow agent in FIFO order', async () => {
+      setTask('t-slow', { agentIds: ['a-slow'] });
+      setAgent('a-slow', { def: { command: 'claude' } });
+      ts.idle = false;
+      ts.tail = 'Working… esc to interrupt';
+
+      const s1 = await broadcast('first');
+      const s2 = await broadcast('second');
+      expect(s1).toEqual({ immediate: 0, queued: 1, skipped: 0 });
+      expect(s2).toEqual({ immediate: 0, queued: 1, skipped: 0 });
+      expect(__broadcastTestHooks.queueLength('a-slow')).toBe(2);
+
+      // Agent returns to a stable prompt; drains A then B in submission order.
+      ts.idle = true;
+      ts.tail = '❯';
+      ts.captured?.('a-slow');
+      await vi.advanceTimersByTimeAsync(STABILITY_MS);
+      expect(sentTexts()).toEqual(['first']);
+
+      await vi.advanceTimersByTimeAsync(ECHO_SUPPRESS_MS + STABILITY_MS);
+      expect(sentTexts()).toEqual(['first', 'second']);
+    });
+  });
 });

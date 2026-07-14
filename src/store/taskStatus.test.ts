@@ -98,6 +98,7 @@ import {
   markAgentOutput,
   clearAgentActivity,
   subscribeAgentReadiness,
+  subscribeAgentTeardown,
   onAgentReady,
   offAgentReady,
 } from './taskStatus';
@@ -1088,5 +1089,48 @@ describe('subscribeAgentReadiness', () => {
 
     unsub();
     offAgentReady('agent-1');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// subscribeAgentTeardown (non-exclusive removal hook — broadcast queue teardown)
+// ---------------------------------------------------------------------------
+describe('subscribeAgentTeardown', () => {
+  it('notifies subscribers when clearAgentActivity removes an agent; unsubscribe stops it', () => {
+    setMockTask('task-1', { agentIds: ['agent-1'] });
+    setMockAgent('agent-1', { status: 'running' });
+    markAgentSpawned('agent-1');
+
+    const seen: string[] = [];
+    const unsub = subscribeAgentTeardown((id) => seen.push(id));
+
+    // clearAgentActivity is the canonical per-agent removal routine (called from
+    // every renderer removal path) — it fires the teardown subscribers.
+    clearAgentActivity('agent-1');
+    expect(seen).toEqual(['agent-1']);
+
+    // After unsubscribe, further removals do not notify.
+    seen.length = 0;
+    unsub();
+    clearAgentActivity('agent-1');
+    expect(seen).toEqual([]);
+  });
+
+  it('fires for multiple non-exclusive subscribers on the same removal', () => {
+    setMockTask('task-1', { agentIds: ['agent-1'] });
+    setMockAgent('agent-1', { status: 'running' });
+    markAgentSpawned('agent-1');
+
+    const a = vi.fn();
+    const b = vi.fn();
+    const unsubA = subscribeAgentTeardown(a);
+    const unsubB = subscribeAgentTeardown(b);
+
+    clearAgentActivity('agent-1');
+    expect(a).toHaveBeenCalledWith('agent-1');
+    expect(b).toHaveBeenCalledWith('agent-1');
+
+    unsubA();
+    unsubB();
   });
 });
