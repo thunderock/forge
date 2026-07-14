@@ -86,3 +86,11 @@ export function toggleNewTaskDialog(show?: boolean): void {
   }
   setStore('showNewTaskDialog', shouldShow);
 }
+
+// Broadcast dialog toggle. Mirrors toggleNewTaskDialog but WITHOUT the
+// "add a project first" guard and drop-url/prefill resets: a broadcast targets
+// live running agents, not a new task, so it opens regardless of projects (it
+// simply shows "0 running agents" when none exist).
+export function toggleBroadcastDialog(show?: boolean): void {
+  setStore('showBroadcastDialog', show ?? !store.showBroadcastDialog);
+}

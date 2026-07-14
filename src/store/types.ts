@@ -328,6 +328,9 @@ export interface AppStore {
   /** Global per-agent last-model memory, keyed by agent id (MDL-05). */
   lastModelSelectionByAgentId: Record<string, ModelSelection>;
   showNewTaskDialog: boolean;
+  /** Broadcast-prompt dialog visibility. Targets live running agents (not a new
+   *  task), so it opens regardless of whether any project is linked. */
+  showBroadcastDialog: boolean;
   sidebarVisible: boolean;
   /** User-dragged sizes keyed by `${persistKey}:${childId}`. Presence of an
    *  entry means that panel is pinned; absence means it's content-sized or

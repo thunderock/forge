@@ -277,6 +277,17 @@ export const DEFAULT_BINDINGS: KeyBinding[] = [
     global: true,
   },
   {
+    id: 'app.broadcast',
+    layer: 'app',
+    category: 'App',
+    description: 'Broadcast prompt to all agents',
+    platform: 'both',
+    key: 'Enter',
+    modifiers: { cmdOrCtrl: true, shift: true },
+    action: 'broadcastPrompt',
+    global: true,
+  },
+  {
     id: 'app.toggle-sidebar',
     layer: 'app',
     category: 'App',

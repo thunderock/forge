@@ -77,7 +77,9 @@ export {
   moveActiveTask,
   jumpToTask,
   toggleNewTaskDialog,
+  toggleBroadcastDialog,
 } from './navigation';
+export { broadcast, getBroadcastTargetCount } from './broadcast';
 export {
   registerFocusFn,
   unregisterFocusFn,
