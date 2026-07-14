@@ -89,6 +89,7 @@ import { subscribeAgentReadiness, subscribeAgentTeardown } from './taskStatus';
 import {
   enumerateBroadcastTargets,
   getBroadcastTargetCount,
+  getBroadcastPending,
   broadcast,
   enqueue,
   tryFlush,
@@ -126,6 +127,45 @@ beforeEach(() => {
   mockAgents = {};
   mockTaskOrder = [];
   __broadcastTestHooks.reset();
+});
+
+// ── getBroadcastPending (per-pane "Queued (broadcast)" indicator) ────────────
+describe('getBroadcastPending', () => {
+  it('reflects the queue head, with (+N more) when stacked', () => {
+    expect(getBroadcastPending('a-1')).toBeUndefined();
+    enqueue('a-1', item('first'));
+    expect(getBroadcastPending('a-1')).toBe('first');
+    enqueue('a-1', item('second'));
+    // Head stays 'first'; the suffix communicates the backlog depth.
+    expect(getBroadcastPending('a-1')).toBe('first (+1 more)');
+  });
+
+  it('truncates a long queued prompt to a bounded snippet', () => {
+    const long = 'x'.repeat(200);
+    enqueue('a-1', item(long));
+    const pending = expectDefined(getBroadcastPending('a-1'), 'pending');
+    expect(pending.length).toBeLessThan(long.length);
+    expect(pending.endsWith('…')).toBe(true);
+  });
+
+  it('clears when the agent tears down (exit)', () => {
+    enqueue('a-1', item('hello'));
+    expect(getBroadcastPending('a-1')).toBe('hello');
+    // The teardown notifier fires on agent removal (clearAgentActivity).
+    expectDefined(ts.capturedTeardown, 'teardown subscriber')('a-1');
+    expect(getBroadcastPending('a-1')).toBeUndefined();
+  });
+
+  it('does not linger after an immediate write-through to an idle agent', async () => {
+    setTask('task-idle', { agentIds: ['a-idle'] });
+    setRunningAgent('a-idle');
+    ts.idle = true;
+    ts.tail = '❯ '; // hardened-ready marker → dispatch write-through
+    await broadcast('go');
+    // deliverNext shifts synchronously before its await, so the queue drained.
+    expect(getBroadcastPending('a-idle')).toBeUndefined();
+    expect(sentTexts()).toContain('go');
+  });
 });
 
 // ── enumerateBroadcastTargets ───────────────────────────────────────────────

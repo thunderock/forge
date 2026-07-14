@@ -3,7 +3,6 @@ import { Dialog } from './Dialog';
 import { invoke } from '../lib/ipc';
 import { IPC } from '../../electron/ipc/channels';
 import { broadcast, getBroadcastTargetCount } from '../store/store';
-import type { BroadcastSummary } from '../store/broadcast';
 import { theme, sectionLabelStyle, bannerStyle } from '../lib/theme';
 import { isMac } from '../lib/platform';
 
@@ -24,8 +23,6 @@ export function BroadcastDialog(props: BroadcastDialogProps) {
   // `$name` codex). Suggestions are best-effort autocomplete only.
   const [skill, setSkill] = createSignal('');
   const [skillSuggestions, setSkillSuggestions] = createSignal<string[]>([]);
-  // Post-send delivery tally from broadcast()'s return; null until the first send.
-  const [summary, setSummary] = createSignal<BroadcastSummary | null>(null);
   const [sending, setSending] = createSignal(false);
   const [error, setError] = createSignal('');
   const titleId = createUniqueId();
@@ -45,7 +42,6 @@ export function BroadcastDialog(props: BroadcastDialogProps) {
         if (!open) return;
         setPrompt('');
         setSkill('');
-        setSummary(null);
         setSending(false);
         setError('');
         invoke<string[]>(IPC.ListAgentSkills).then(
@@ -66,10 +62,12 @@ export function BroadcastDialog(props: BroadcastDialogProps) {
     setSending(true);
     setError('');
     try {
-      // Delivery is focus-independent and handled entirely by the engine; the
-      // dialog only renders the returned {immediate, queued, skipped} summary.
-      const result = await broadcast(text, skillArg);
-      setSummary(result);
+      // Fire-and-forget: the engine owns delivery/queueing independently of this
+      // dialog, so dismiss immediately on success. Per-agent feedback shows at the
+      // bottom of each pane — immediate delivery, or a "Queued (broadcast): …" line
+      // for a busy agent (getBroadcastPending → PromptInput).
+      await broadcast(text, skillArg);
+      props.onClose();
     } catch (err) {
       setError(String(err));
     } finally {
@@ -102,11 +100,7 @@ export function BroadcastDialog(props: BroadcastDialogProps) {
             autofocus
             class="input-field"
             value={prompt()}
-            onInput={(e) => {
-              setPrompt(e.currentTarget.value);
-              // A stale summary must never linger over a freshly-composed message.
-              if (summary()) setSummary(null);
-            }}
+            onInput={(e) => setPrompt(e.currentTarget.value)}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
                 e.preventDefault();
@@ -158,16 +152,6 @@ export function BroadcastDialog(props: BroadcastDialogProps) {
           </datalist>
         </div>
 
-        {/* Post-send delivery summary */}
-        <Show when={summary()}>
-          {(s) => (
-            <div style={{ ...bannerStyle(theme.success ?? theme.accent), 'font-size': '13px' }}>
-              Sent to {s().immediate} now, queued for {s().queued}
-              {s().skipped ? `, skipped ${s().skipped}` : ''}
-            </div>
-          )}
-        </Show>
-
         <Show when={error()}>
           <div style={{ ...bannerStyle(theme.error), 'font-size': '13px' }}>{error()}</div>
         </Show>
@@ -188,7 +172,7 @@ export function BroadcastDialog(props: BroadcastDialogProps) {
               'font-size': '14px',
             }}
           >
-            {summary() ? 'Close' : 'Cancel'}
+            Cancel
           </button>
           <button
             type="submit"

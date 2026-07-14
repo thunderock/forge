@@ -79,7 +79,7 @@ export {
   toggleNewTaskDialog,
   toggleBroadcastDialog,
 } from './navigation';
-export { broadcast, getBroadcastTargetCount } from './broadcast';
+export { broadcast, getBroadcastTargetCount, getBroadcastPending } from './broadcast';
 export {
   registerFocusFn,
   unregisterFocusFn,

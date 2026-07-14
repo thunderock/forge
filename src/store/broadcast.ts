@@ -14,6 +14,7 @@
 // (contextIsolation:true, nodeIntegration:false): no Buffer, and browser timers
 // are `number`s with no `.unref()`.
 
+import { createSignal } from 'solid-js';
 import type { AgentDef } from '../ipc/types';
 import {
   getAgentPromptReadiness,
@@ -121,6 +122,40 @@ const enqueuedAt = new Map<string, number>();
 const stabilityTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const suppressUntil = new Map<string, number>();
 
+// Reactive per-agent "pending broadcast" display text for the per-pane indicator
+// (PromptInput reads it via getBroadcastPending). Derived from the head of each
+// agent's FIFO on every queue mutation; cleared when that agent's queue drains.
+const [pendingDisplay, setPendingDisplay] = createSignal<Record<string, string>>({});
+
+/** Recompute an agent's pending-broadcast label from the current head of its FIFO
+ *  (with a "(+N more)" suffix when several are stacked). Called after every queue
+ *  mutation so the per-pane indicator tracks enqueue → deliver → drain. */
+function refreshPending(agentId: string): void {
+  const q = queue.get(agentId);
+  const head = q?.[0]?.text;
+  const depth = q?.length ?? 0;
+  setPendingDisplay((prev) => {
+    if (head === undefined) {
+      if (!(agentId in prev)) return prev;
+      const next = { ...prev };
+      delete next[agentId];
+      return next;
+    }
+    const snippet = head.length > 80 ? `${head.slice(0, 80)}…` : head;
+    const label = depth > 1 ? `${snippet} (+${depth - 1} more)` : snippet;
+    if (prev[agentId] === label) return prev;
+    return { ...prev, [agentId]: label };
+  });
+}
+
+/** Reactive: the broadcast prompt currently queued for an agent — the head of its
+ *  FIFO (with a "(+N more)" suffix when several are stacked), or undefined when
+ *  nothing is pending. PromptInput renders this at the bottom of the agent's pane
+ *  as the per-agent delivery feedback (the dialog fires-and-closes). */
+export function getBroadcastPending(agentId: string): string | undefined {
+  return pendingDisplay()[agentId];
+}
+
 // The ONE backstop interval (never-idle timeout + dead-agent sweep). Runs only
 // while a queue is non-empty and self-stops when all drain. NO `.unref()`: the
 // renderer is a pure browser context so setInterval returns a `number` with no
@@ -191,6 +226,7 @@ function teardownAgent(agentId: string): void {
   promptReadySeenAt.delete(agentId);
   enqueuedAt.delete(agentId);
   suppressUntil.delete(agentId);
+  refreshPending(agentId);
   maybeStopBackstop();
 }
 
@@ -274,6 +310,7 @@ function pushQueued(agentId: string, prompt: QueuedPrompt): void {
     queue.set(agentId, [prompt]);
     enqueuedAt.set(agentId, Date.now());
   }
+  refreshPending(agentId);
 }
 
 /** Append a prompt to an agent's FIFO. Rejects (returns false) when the prompt
@@ -393,6 +430,7 @@ function dropHead(agentId: string): void {
     teardownAgent(agentId);
   } else {
     enqueuedAt.set(agentId, Date.now());
+    refreshPending(agentId);
   }
 }
 
@@ -417,6 +455,7 @@ async function deliverNext(agentId: string): Promise<void> {
   } else {
     enqueuedAt.set(agentId, Date.now());
   }
+  refreshPending(agentId);
   try {
     await sendPrompt(queued.taskId, agentId, queued.text);
     // Success: open the echo-settle window and reset the stability anchor so the
@@ -453,6 +492,7 @@ export const __broadcastTestHooks = {
     enqueuedAt.clear();
     stabilityTimers.clear();
     suppressUntil.clear();
+    setPendingDisplay({});
     neverIdlePolicy = BROADCAST_NEVER_IDLE_POLICY;
     if (unsubscribeReadiness) {
       unsubscribeReadiness();

@@ -27,6 +27,7 @@ import {
   setTaskPromptDraftActive,
   setTaskTerminalInputPending,
   showNotification,
+  getBroadcastPending,
 } from '../store/store';
 import { clearStagedNotification, setTaskTerminalInputPendingFromQuestion } from '../store/tasks';
 import { isLandedTaskState } from '../store/landing';
@@ -976,6 +977,24 @@ export function PromptInput(props: PromptInputProps) {
         >
           {autoFireCountdownText()}
         </div>
+      </Show>
+      <Show when={getBroadcastPending(props.agentId)}>
+        {(text) => (
+          <div
+            style={{
+              'font-size': '11px',
+              color: theme.accent,
+              padding: '2px 4px',
+              'margin-top': '2px',
+              overflow: 'hidden',
+              'text-overflow': 'ellipsis',
+              'white-space': 'nowrap',
+            }}
+            title={`Queued (broadcast): ${text()}`}
+          >
+            Queued (broadcast): {text()}
+          </div>
+        )}
       </Show>
     </div>
   );
