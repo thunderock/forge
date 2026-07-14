@@ -97,6 +97,9 @@ import {
   markAgentSpawned,
   markAgentOutput,
   clearAgentActivity,
+  subscribeAgentReadiness,
+  onAgentReady,
+  offAgentReady,
 } from './taskStatus';
 
 function setMockTask(taskId: string, overrides: Record<string, unknown> = {}): void {
@@ -1041,5 +1044,49 @@ describe('coordinator auto-trust', () => {
       taskId: 'task-1',
       controlledBy: 'coordinator',
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// subscribeAgentReadiness (non-exclusive readiness hook — broadcast queue flush)
+// ---------------------------------------------------------------------------
+describe('subscribeAgentReadiness', () => {
+  it('notifies subscribers when markAgentOutput detects a prompt frame; unsubscribe stops it', () => {
+    setMockTask('task-1', { agentIds: ['agent-1'] });
+    setMockAgent('agent-1', { status: 'running' });
+    markAgentSpawned('agent-1');
+
+    const seen: string[] = [];
+    const unsub = subscribeAgentReadiness((id) => seen.push(id));
+
+    // A bare ❯ prompt frame drives the per-chunk readiness transition.
+    markAgentOutput('agent-1', new TextEncoder().encode('❯'), 'task-1');
+    expect(seen).toContain('agent-1');
+
+    // After unsubscribe, further readiness transitions do not notify.
+    seen.length = 0;
+    unsub();
+    markAgentOutput('agent-1', new TextEncoder().encode('\r❯'), 'task-1');
+    expect(seen).not.toContain('agent-1');
+  });
+
+  it('fires alongside — never clobbering — the single-slot onAgentReady callback', () => {
+    setMockTask('task-1', { agentIds: ['agent-1'] });
+    setMockAgent('agent-1', { status: 'running' });
+    markAgentSpawned('agent-1');
+
+    const readyCb = vi.fn();
+    onAgentReady('agent-1', readyCb);
+    const subCb = vi.fn();
+    const unsub = subscribeAgentReadiness(subCb);
+
+    markAgentOutput('agent-1', new TextEncoder().encode('❯'), 'task-1');
+
+    // The Set subscriber does not consume or replace the one-shot onAgentReady slot.
+    expect(readyCb).toHaveBeenCalledTimes(1);
+    expect(subCb).toHaveBeenCalledWith('agent-1');
+
+    unsub();
+    offAgentReady('agent-1');
   });
 });
