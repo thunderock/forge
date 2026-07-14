@@ -20,6 +20,7 @@ import { CLOSE_DIALOG_BUTTONS, resolveCloseChoice } from './lib/close-decision';
 import { Sidebar } from './components/Sidebar';
 import { TilingLayout } from './components/TilingLayout';
 import { NewTaskDialog } from './components/NewTaskDialog';
+import { BroadcastDialog } from './components/BroadcastDialog';
 import { HelpDialog } from './components/HelpDialog';
 import { SettingsDialog } from './components/SettingsDialog';
 import { WindowTitleBar } from './components/WindowTitleBar';
@@ -33,6 +34,7 @@ import {
   loadState,
   saveState,
   toggleNewTaskDialog,
+  toggleBroadcastDialog,
   toggleSidebar,
   toggleArena,
   moveActiveTask,
@@ -550,7 +552,13 @@ function App() {
     });
 
     const handlePaste = (e: ClipboardEvent) => {
-      if (store.showNewTaskDialog || store.showHelpDialog || store.showSettingsDialog) return;
+      if (
+        store.showNewTaskDialog ||
+        store.showHelpDialog ||
+        store.showSettingsDialog ||
+        store.showBroadcastDialog
+      )
+        return;
       const el = document.activeElement;
       if (
         el instanceof HTMLInputElement ||
@@ -675,6 +683,7 @@ function App() {
         if (!e.repeat) createTerminal();
       },
       newTask: () => toggleNewTaskDialog(true),
+      broadcastPrompt: () => toggleBroadcastDialog(true),
       toggleSidebar: () => toggleSidebar(),
       toggleFocusMode: () => toggleTaskFocusMode(),
       toggleHelp: () => toggleHelpDialog(),
@@ -691,6 +700,10 @@ function App() {
         }
         if (store.showNewTaskDialog) {
           toggleNewTaskDialog(false);
+          return;
+        }
+        if (store.showBroadcastDialog) {
+          toggleBroadcastDialog(false);
           return;
         }
       },
@@ -920,6 +933,10 @@ function App() {
           <NewTaskDialog
             open={store.showNewTaskDialog}
             onClose={() => toggleNewTaskDialog(false)}
+          />
+          <BroadcastDialog
+            open={store.showBroadcastDialog}
+            onClose={() => toggleBroadcastDialog(false)}
           />
         </main>
         <Show when={!isMac}>
