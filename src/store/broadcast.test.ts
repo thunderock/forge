@@ -16,13 +16,25 @@ const core = vi.hoisted(() => ({
     | undefined,
 }));
 
-// Controllable taskStatus signals + captured readiness subscriber. Hoisted so
-// the vi.mock factory can close over them safely.
+// Controllable taskStatus signals + captured readiness/teardown subscribers.
+// Hoisted so the vi.mock factory can close over them safely.
 const ts = vi.hoisted(() => ({
   tail: '',
   idle: true,
   question: false,
   captured: undefined as ((agentId: string) => void) | undefined,
+  capturedTeardown: undefined as ((agentId: string) => void) | undefined,
+}));
+
+// sendPrompt is mocked so per-agent delivery is a controllable spy — the queue
+// logic + per-agent render are provable with no real pty (default resolves).
+const tasksMock = vi.hoisted(() => ({
+  sendPrompt: vi.fn((_taskId: string, _agentId: string, _text: string) => Promise.resolve()),
+}));
+
+// showNotification is mocked so drop/failure notices are assertable.
+const notifyMock = vi.hoisted(() => ({
+  showNotification: vi.fn((_message: string) => {}),
 }));
 
 vi.mock('./core', async () => {
@@ -50,8 +62,8 @@ vi.mock('./core', async () => {
   return core.harness.moduleMock();
 });
 
-// taskStatus is mocked so readiness/idle/question and the readiness notifier are
-// fully controllable — the queue logic is provable with no real pty.
+// taskStatus is mocked so readiness/idle/question and both notifiers are fully
+// controllable — the queue logic is provable with no real pty.
 vi.mock('./taskStatus', () => ({
   getAgentOutputTail: vi.fn(() => ts.tail),
   isAgentIdle: vi.fn(() => ts.idle),
@@ -62,12 +74,22 @@ vi.mock('./taskStatus', () => ({
       ts.captured = undefined;
     };
   }),
+  subscribeAgentTeardown: vi.fn((fn: (agentId: string) => void) => {
+    ts.capturedTeardown = fn;
+    return () => {
+      ts.capturedTeardown = undefined;
+    };
+  }),
 }));
 
-import { subscribeAgentReadiness } from './taskStatus';
+vi.mock('./tasks', () => ({ sendPrompt: tasksMock.sendPrompt }));
+vi.mock('./notification', () => ({ showNotification: notifyMock.showNotification }));
+
+import { subscribeAgentReadiness, subscribeAgentTeardown } from './taskStatus';
 import {
   enumerateBroadcastTargets,
   getBroadcastTargetCount,
+  broadcast,
   enqueue,
   tryFlush,
   __broadcastTestHooks,
@@ -82,12 +104,28 @@ function setAgent(id: string, overrides: Record<string, unknown> = {}): void {
   mockAgents[id] = { id, status: 'running', def: { command: 'claude' }, ...overrides };
 }
 
+function setRunningAgent(id: string, command = 'claude'): void {
+  mockAgents[id] = { id, status: 'running', def: { command } };
+}
+
+// A queued item now carries its taskId so deliverNext can call the UNMODIFIED
+// sendPrompt(taskId, agentId, text).
+function item(text: string, taskId = 'task-q'): { taskId: string; text: string } {
+  return { taskId, text };
+}
+
+/** Ordered list of prompt bodies passed to the sendPrompt spy. */
+function sentTexts(): string[] {
+  return tasksMock.sendPrompt.mock.calls.map((c) => c[2]);
+}
+
 beforeEach(() => {
   const harness = expectDefined(core.harness, 'mock store harness');
   harness.reset(harness.state());
   mockTasks = {};
   mockAgents = {};
   mockTaskOrder = [];
+  __broadcastTestHooks.reset();
 });
 
 // ── enumerateBroadcastTargets ───────────────────────────────────────────────
@@ -174,32 +212,25 @@ describe('enumerateBroadcastTargets', () => {
   });
 });
 
-// ── idle-gated per-agent FIFO queue ─────────────────────────────────────────
-describe('broadcast queue (idle-gated per-agent FIFO)', () => {
+// ── delivery engine (queue + broadcast entry) ───────────────────────────────
+describe('broadcast delivery engine', () => {
   const AGENT = 'agent-1';
   const STABILITY_MS = 50;
-  let delivered: string[];
-
-  function setRunningAgent(id: string): void {
-    mockAgents[id] = { id, status: 'running', def: { command: 'claude' } };
-  }
-
-  function recordDeliveries(): void {
-    __broadcastTestHooks.setDeliver((_id, text) => {
-      delivered.push(text);
-      return Promise.resolve();
-    });
-  }
+  const ECHO_SUPPRESS_MS = 2_000;
 
   beforeEach(() => {
     vi.useFakeTimers();
-    vi.clearAllMocks();
     __broadcastTestHooks.reset();
+    tasksMock.sendPrompt.mockReset();
+    tasksMock.sendPrompt.mockImplementation(() => Promise.resolve());
+    notifyMock.showNotification.mockReset();
+    vi.mocked(subscribeAgentReadiness).mockClear();
+    vi.mocked(subscribeAgentTeardown).mockClear();
     ts.tail = '';
     ts.idle = true;
     ts.question = false;
     ts.captured = undefined;
-    delivered = [];
+    ts.capturedTeardown = undefined;
   });
 
   afterEach(() => {
@@ -207,123 +238,239 @@ describe('broadcast queue (idle-gated per-agent FIFO)', () => {
     vi.useRealTimers();
   });
 
-  it('registers a readiness subscriber (ensureSubscribed) that drives tryFlush', async () => {
-    setRunningAgent(AGENT);
-    ts.tail = '❯';
-    recordDeliveries();
+  // ── idle-gated per-agent FIFO queue ──────────────────────────────────────
+  describe('idle-gated per-agent FIFO queue', () => {
+    it('registers a readiness subscriber (ensureSubscribed) that drives tryFlush', async () => {
+      setRunningAgent(AGENT);
+      ts.tail = '❯';
 
-    expect(enqueue(AGENT, 'A')).toBe(true);
-    expect(subscribeAgentReadiness).toHaveBeenCalledTimes(1);
+      expect(enqueue(AGENT, item('A'))).toBe(true);
+      expect(subscribeAgentReadiness).toHaveBeenCalledTimes(1);
 
-    // Firing the captured callback (as markAgentOutput would) drains the queue.
-    ts.captured?.(AGENT);
-    await vi.advanceTimersByTimeAsync(STABILITY_MS);
-    expect(delivered).toEqual(['A']);
-  });
-
-  it('drains queued prompts in FIFO order once the prompt is stable', async () => {
-    setRunningAgent(AGENT);
-    ts.tail = '❯';
-    recordDeliveries();
-
-    expect(enqueue(AGENT, 'A')).toBe(true);
-    expect(enqueue(AGENT, 'B')).toBe(true);
-
-    ts.captured?.(AGENT);
-    expect(delivered).toEqual([]); // <50ms stability flicker guard: nothing yet
-    await vi.advanceTimersByTimeAsync(STABILITY_MS);
-    expect(delivered).toEqual(['A', 'B']);
-    expect(__broadcastTestHooks.queueLength(AGENT)).toBe(0);
-  });
-
-  it('does not double-deliver under a re-entrant readiness fire (single write lock)', async () => {
-    setRunningAgent(AGENT);
-    ts.tail = '❯';
-    let releaseFirst: (() => void) | undefined;
-    __broadcastTestHooks.setDeliver((_id, text) => {
-      delivered.push(text);
-      if (delivered.length === 1) {
-        return new Promise<void>((resolve) => {
-          releaseFirst = resolve;
-        });
-      }
-      return Promise.resolve();
+      // Firing the captured callback (as markAgentOutput would) drains the queue
+      // through the UNMODIFIED sendPrompt.
+      ts.captured?.(AGENT);
+      await vi.advanceTimersByTimeAsync(STABILITY_MS);
+      expect(sentTexts()).toEqual(['A']);
+      expect(tasksMock.sendPrompt).toHaveBeenCalledWith('task-q', AGENT, 'A');
     });
 
-    enqueue(AGENT, 'A');
-    enqueue(AGENT, 'B');
+    it('drains queued prompts in FIFO order, gated by the echo-suppress window', async () => {
+      setRunningAgent(AGENT);
+      ts.tail = '❯';
 
-    ts.captured?.(AGENT);
-    await vi.advanceTimersByTimeAsync(STABILITY_MS);
-    expect(delivered).toEqual(['A']); // A in flight, lock held
-    expect(__broadcastTestHooks.isWriting(AGENT)).toBe(true);
+      expect(enqueue(AGENT, item('A'))).toBe(true);
+      expect(enqueue(AGENT, item('B'))).toBe(true);
 
-    // Re-entrant readiness fire while the lock is held must NOT deliver B.
-    ts.captured?.(AGENT);
-    await vi.advanceTimersByTimeAsync(STABILITY_MS);
-    expect(delivered).toEqual(['A']);
+      ts.captured?.(AGENT);
+      expect(sentTexts()).toEqual([]); // <50ms stability flicker guard: nothing yet
+      await vi.advanceTimersByTimeAsync(STABILITY_MS);
+      expect(sentTexts()).toEqual(['A']); // A delivered; B held by echo-suppress
 
-    // Releasing the lock drains B in order.
-    releaseFirst?.();
-    await vi.advanceTimersByTimeAsync(STABILITY_MS);
-    expect(delivered).toEqual(['A', 'B']);
+      // After the echo-suppress window (agent stays at a stable prompt) B drains.
+      await vi.advanceTimersByTimeAsync(ECHO_SUPPRESS_MS + STABILITY_MS);
+      expect(sentTexts()).toEqual(['A', 'B']);
+      expect(__broadcastTestHooks.queueLength(AGENT)).toBe(0);
+    });
+
+    it('does not double-deliver under a re-entrant readiness fire (single write lock)', async () => {
+      setRunningAgent(AGENT);
+      ts.tail = '❯';
+      let releaseFirst: (() => void) | undefined;
+      tasksMock.sendPrompt.mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            releaseFirst = resolve;
+          }),
+      );
+
+      enqueue(AGENT, item('A'));
+      enqueue(AGENT, item('B'));
+
+      ts.captured?.(AGENT);
+      await vi.advanceTimersByTimeAsync(STABILITY_MS);
+      expect(sentTexts()).toEqual(['A']); // A in flight, lock held
+      expect(__broadcastTestHooks.isWriting(AGENT)).toBe(true);
+
+      // Re-entrant readiness fire while the lock is held must NOT deliver B.
+      ts.captured?.(AGENT);
+      await vi.advanceTimersByTimeAsync(STABILITY_MS);
+      expect(sentTexts()).toEqual(['A']);
+
+      // Releasing the lock + past the echo-suppress window drains B in order.
+      releaseFirst?.();
+      await vi.advanceTimersByTimeAsync(ECHO_SUPPRESS_MS + STABILITY_MS);
+      expect(sentTexts()).toEqual(['A', 'B']);
+    });
+
+    it('a one-chunk marker flicker does not flush mid-stream', async () => {
+      setRunningAgent(AGENT);
+      ts.tail = '❯';
+
+      enqueue(AGENT, item('A'));
+      ts.captured?.(AGENT); // ready seen; schedule stability recheck
+
+      // Marker vanishes (busy output streams in) before the window elapses.
+      ts.tail = 'compiling the project… esc to interrupt';
+      await vi.advanceTimersByTimeAsync(STABILITY_MS);
+      expect(sentTexts()).toEqual([]);
+
+      // Marker returns and persists ≥50ms → flush.
+      ts.tail = '❯';
+      ts.captured?.(AGENT);
+      await vi.advanceTimersByTimeAsync(STABILITY_MS);
+      expect(sentTexts()).toEqual(['A']);
+    });
+
+    it('holds while a question dialog is active, then flushes once it clears', async () => {
+      setRunningAgent(AGENT);
+      ts.tail = '❯';
+      ts.question = true;
+
+      enqueue(AGENT, item('A'));
+      ts.captured?.(AGENT);
+      await vi.advanceTimersByTimeAsync(STABILITY_MS);
+      expect(sentTexts()).toEqual([]); // question gate holds
+
+      ts.question = false;
+      ts.captured?.(AGENT);
+      await vi.advanceTimersByTimeAsync(STABILITY_MS);
+      expect(sentTexts()).toEqual(['A']);
+    });
+
+    it('rejects enqueue past MAX_PENDING_PER_AGENT (8)', () => {
+      setRunningAgent(AGENT);
+      for (let i = 0; i < 8; i++) expect(enqueue(AGENT, item(`p${i}`))).toBe(true);
+      expect(enqueue(AGENT, item('overflow'))).toBe(false);
+      expect(__broadcastTestHooks.queueLength(AGENT)).toBe(8);
+    });
+
+    it('rejects an oversize prompt (> MAX_PROMPT_BYTES)', () => {
+      setRunningAgent(AGENT);
+      const huge = 'a'.repeat(64 * 1024 + 1);
+      expect(enqueue(AGENT, item(huge))).toBe(false);
+    });
+
+    it('drops the queue when the agent is no longer running', () => {
+      setRunningAgent(AGENT);
+      enqueue(AGENT, item('A'));
+      mockAgents[AGENT].status = 'exited';
+      tryFlush(AGENT);
+      expect(__broadcastTestHooks.queueLength(AGENT)).toBe(0);
+      expect(tasksMock.sendPrompt).not.toHaveBeenCalled();
+    });
   });
 
-  it('a one-chunk marker flicker does not flush mid-stream', async () => {
-    setRunningAgent(AGENT);
-    ts.tail = '❯';
-    recordDeliveries();
+  // ── broadcast() public entry ─────────────────────────────────────────────
+  describe('broadcast() entry', () => {
+    it('write-throughs to two idle agents via per-agent-rendered sendPrompt', async () => {
+      // BLOCKER-2 regression guard: two idle+ready agents with empty queues MUST
+      // take the dispatch write-through path (no stability wait) → immediate:2.
+      setTask('task-claude', { agentIds: ['a-claude'] });
+      setAgent('a-claude', { def: { command: 'claude' } });
+      setTask('task-codex', { agentIds: ['a-codex'] });
+      setAgent('a-codex', { def: { command: 'codex' } });
+      ts.tail = '❯';
+      ts.idle = true;
+      ts.question = false;
 
-    enqueue(AGENT, 'A');
-    ts.captured?.(AGENT); // ready seen; schedule stability recheck
+      const summary = await broadcast('do X', 'gsd-quick');
 
-    // Marker vanishes (busy output streams in) before the window elapses.
-    ts.tail = 'compiling the project… esc to interrupt';
-    await vi.advanceTimersByTimeAsync(STABILITY_MS);
-    expect(delivered).toEqual([]);
+      expect(summary).toEqual({ immediate: 2, queued: 0, skipped: 0 });
+      // Per-agent render proven via the sendPrompt spy args: claude `/name`, codex `$name`.
+      expect(tasksMock.sendPrompt).toHaveBeenCalledWith(
+        'task-claude',
+        'a-claude',
+        '/gsd-quick do X',
+      );
+      expect(tasksMock.sendPrompt).toHaveBeenCalledWith('task-codex', 'a-codex', '$gsd-quick do X');
+    });
 
-    // Marker returns and persists ≥50ms → flush.
-    ts.tail = '❯';
-    ts.captured?.(AGENT);
-    await vi.advanceTimersByTimeAsync(STABILITY_MS);
-    expect(delivered).toEqual(['A']);
-  });
+    it('delivers a plain-prose broadcast unchanged (no skill token)', async () => {
+      setTask('task-claude', { agentIds: ['a-claude'] });
+      setAgent('a-claude', { def: { command: 'claude' } });
+      ts.tail = '❯';
+      ts.idle = true;
 
-  it('holds while a question dialog is active, then flushes once it clears', async () => {
-    setRunningAgent(AGENT);
-    ts.tail = '❯';
-    ts.question = true;
-    recordDeliveries();
+      const summary = await broadcast('just do it');
+      expect(summary).toEqual({ immediate: 1, queued: 0, skipped: 0 });
+      expect(tasksMock.sendPrompt).toHaveBeenCalledWith('task-claude', 'a-claude', 'just do it');
+    });
 
-    enqueue(AGENT, 'A');
-    ts.captured?.(AGENT);
-    await vi.advanceTimersByTimeAsync(STABILITY_MS);
-    expect(delivered).toEqual([]); // question gate holds
+    it('queues for a busy agent, then flushes once it returns to a stable prompt', async () => {
+      setTask('t', { agentIds: ['a'] });
+      setAgent('a', { def: { command: 'claude' } });
+      ts.idle = false;
+      ts.tail = 'Working… esc to interrupt';
 
-    ts.question = false;
-    ts.captured?.(AGENT);
-    await vi.advanceTimersByTimeAsync(STABILITY_MS);
-    expect(delivered).toEqual(['A']);
-  });
+      const summary = await broadcast('later');
+      expect(summary).toEqual({ immediate: 0, queued: 1, skipped: 0 });
+      expect(tasksMock.sendPrompt).not.toHaveBeenCalled();
 
-  it('rejects enqueue past MAX_PENDING_PER_AGENT (8)', () => {
-    setRunningAgent(AGENT);
-    for (let i = 0; i < 8; i++) expect(enqueue(AGENT, `p${i}`)).toBe(true);
-    expect(enqueue(AGENT, 'overflow')).toBe(false);
-    expect(__broadcastTestHooks.queueLength(AGENT)).toBe(8);
-  });
+      ts.idle = true;
+      ts.tail = '❯';
+      ts.captured?.('a');
+      await vi.advanceTimersByTimeAsync(STABILITY_MS);
+      expect(tasksMock.sendPrompt).toHaveBeenCalledWith('t', 'a', 'later');
+    });
 
-  it('rejects an oversize prompt (> MAX_PROMPT_BYTES)', () => {
-    setRunningAgent(AGENT);
-    const huge = 'a'.repeat(64 * 1024 + 1);
-    expect(enqueue(AGENT, huge)).toBe(false);
-  });
+    it('counts an oversize rendered prompt as skipped (never delivered)', async () => {
+      setTask('t', { agentIds: ['a'] });
+      setAgent('a', { def: { command: 'claude' } });
+      ts.tail = '❯';
+      ts.idle = true;
 
-  it('drops the queue when the agent is no longer running', () => {
-    setRunningAgent(AGENT);
-    enqueue(AGENT, 'A');
-    mockAgents[AGENT].status = 'exited';
-    tryFlush(AGENT);
-    expect(__broadcastTestHooks.queueLength(AGENT)).toBe(0);
+      const summary = await broadcast('a'.repeat(64 * 1024 + 1));
+      expect(summary).toEqual({ immediate: 0, queued: 0, skipped: 1 });
+      expect(tasksMock.sendPrompt).not.toHaveBeenCalled();
+    });
+
+    it('echo-suppresses the next queued item until a fresh stable prompt after the window', async () => {
+      setTask('t', { agentIds: ['a'] });
+      setAgent('a', { def: { command: 'claude' } });
+      ts.tail = '❯';
+
+      enqueue('a', item('first', 't'));
+      enqueue('a', item('second', 't'));
+
+      ts.captured?.('a');
+      await vi.advanceTimersByTimeAsync(STABILITY_MS);
+      expect(sentTexts()).toEqual(['first']);
+
+      // Within the echo-suppress window, re-firing readiness must NOT deliver 'second'.
+      ts.captured?.('a');
+      await vi.advanceTimersByTimeAsync(STABILITY_MS);
+      expect(sentTexts()).toEqual(['first']);
+
+      // Agent leaves its prompt (echoes/works) during the window so stability
+      // must be genuinely re-established before 'second' flushes.
+      ts.tail = 'Working… esc to interrupt';
+      await vi.advanceTimersByTimeAsync(ECHO_SUPPRESS_MS);
+      expect(sentTexts()).toEqual(['first']);
+
+      // Fresh stable prompt after the window → 'second' drains.
+      ts.tail = '❯';
+      ts.captured?.('a');
+      await vi.advanceTimersByTimeAsync(STABILITY_MS);
+      expect(sentTexts()).toEqual(['first', 'second']);
+    });
+
+    it('drops (never re-enqueues) a rejected delivery and notifies the user', async () => {
+      setTask('t', { agentIds: ['a'] });
+      setAgent('a', { def: { command: 'claude' } });
+      ts.tail = '❯';
+      tasksMock.sendPrompt.mockRejectedValueOnce(new Error('write failed'));
+
+      enqueue('a', item('boom', 't'));
+      ts.captured?.('a');
+      await vi.advanceTimersByTimeAsync(STABILITY_MS);
+
+      expect(tasksMock.sendPrompt).toHaveBeenCalledTimes(1); // called once, NOT retried
+      expect(sentTexts()).toEqual(['boom']);
+      expect(__broadcastTestHooks.queueLength('a')).toBe(0); // dropped, not re-enqueued
+      expect(notifyMock.showNotification).toHaveBeenCalledWith(
+        expect.stringContaining('delivery failed'),
+      );
+    });
   });
 });
