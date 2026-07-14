@@ -6,6 +6,7 @@ import {
   removeProject,
   removeProjectWithTasks,
   toggleNewTaskDialog,
+  toggleBroadcastDialog,
   setActiveTask,
   toggleSidebar,
   reorderTaskVisually,
@@ -652,30 +653,66 @@ export function Sidebar() {
             </button>
           }
         >
-          <button
-            class="icon-btn"
-            onClick={() => toggleNewTaskDialog(true)}
-            style={{
-              background: 'transparent',
-              border: `1px solid ${theme.border}`,
-              'border-radius': '8px',
-              padding: '8px 14px',
-              color: theme.fgMuted,
-              cursor: 'pointer',
-              'font-size': sf(13),
-              'font-weight': '500',
-              display: 'flex',
-              'align-items': 'center',
-              'justify-content': 'center',
-              gap: '6px',
-              width: '100%',
-            }}
-          >
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
-              <path d="M7.75 2a.75.75 0 0 1 .75.75V7h4.25a.75.75 0 0 1 0 1.5H8.5v4.25a.75.75 0 0 1-1.5 0V8.5H2.75a.75.75 0 0 1 0-1.5H7V2.75A.75.75 0 0 1 7.75 2Z" />
-            </svg>
-            New Task
-          </button>
+          <div style={{ display: 'flex', gap: '6px' }}>
+            <button
+              class="icon-btn"
+              onClick={() => toggleNewTaskDialog(true)}
+              style={{
+                background: 'transparent',
+                border: `1px solid ${theme.border}`,
+                'border-radius': '8px',
+                padding: '8px 14px',
+                color: theme.fgMuted,
+                cursor: 'pointer',
+                'font-size': sf(13),
+                'font-weight': '500',
+                display: 'flex',
+                'align-items': 'center',
+                'justify-content': 'center',
+                gap: '6px',
+                flex: '1',
+              }}
+            >
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                <path d="M7.75 2a.75.75 0 0 1 .75.75V7h4.25a.75.75 0 0 1 0 1.5H8.5v4.25a.75.75 0 0 1-1.5 0V8.5H2.75a.75.75 0 0 1 0-1.5H7V2.75A.75.75 0 0 1 7.75 2Z" />
+              </svg>
+              New Task
+            </button>
+            {/* Broadcast a prompt to all running agents (distinct signal icon so it
+                does not read as "create task"). Opens regardless of projects. */}
+            <button
+              class="icon-btn"
+              onClick={() => toggleBroadcastDialog(true)}
+              title="Broadcast a prompt to all running agents"
+              style={{
+                background: 'transparent',
+                border: `1px solid ${theme.border}`,
+                'border-radius': '8px',
+                padding: '8px 14px',
+                color: theme.fgMuted,
+                cursor: 'pointer',
+                'font-size': sf(13),
+                'font-weight': '500',
+                display: 'flex',
+                'align-items': 'center',
+                'justify-content': 'center',
+                gap: '6px',
+                flex: '1',
+              }}
+            >
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 16 16"
+                fill="currentColor"
+                aria-hidden="true"
+              >
+                <path d="M8 6.5a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3Z" />
+                <path d="M5.03 3.97a.75.75 0 0 1 0 1.06 4.2 4.2 0 0 0 0 5.94.75.75 0 1 1-1.06 1.06 5.7 5.7 0 0 1 0-8.06.75.75 0 0 1 1.06 0Zm5.94 0a.75.75 0 0 1 1.06 0 5.7 5.7 0 0 1 0 8.06.75.75 0 1 1-1.06-1.06 4.2 4.2 0 0 0 0-5.94.75.75 0 0 1 0-1.06Z" />
+              </svg>
+              Broadcast
+            </button>
+          </div>
         </Show>
 
         {/* Tasks grouped by project */}
