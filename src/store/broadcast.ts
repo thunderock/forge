@@ -31,6 +31,7 @@ import {
   isAgentAskingQuestion,
   isAgentIdle,
   subscribeAgentReadiness,
+  subscribeAgentTeardown,
 } from './taskStatus';
 import { decideBroadcastDelivery } from './broadcast-decision';
 
@@ -103,8 +104,14 @@ const NEVER_IDLE_TIMEOUT_MS = 120_000;
 const ECHO_SUPPRESS_MS = 2_000;
 // Documented flippable policy: a human broadcast into a truly-busy interactive
 // TUI risks landing mid-dialog, so failing safe (drop + notify) is correct for a
-// manual action. 07-02 wires the backstop interval that enforces this.
+// manual action. Flippable module constant (the pure fn implements both branches).
 const BROADCAST_NEVER_IDLE_POLICY: 'drop' | 'force-write' = 'drop';
+// Backstop sweep cadence — the SINGLE interval in this module, existing only as
+// the never-idle timeout + dead-agent sweep. The primary flush trigger remains
+// the output-driven readiness hook; this self-stops when all queues drain.
+const FLUSH_BACKSTOP_MS = 500;
+// Live policy the flush path reads (defaults to the constant; test-flippable).
+let neverIdlePolicy: 'drop' | 'force-write' = BROADCAST_NEVER_IDLE_POLICY;
 
 // Per-agent append-only FIFO + synchronous write lock + stability/age/echo anchors.
 const queue = new Map<string, QueuedPrompt[]>();
@@ -114,13 +121,77 @@ const enqueuedAt = new Map<string, number>();
 const stabilityTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const suppressUntil = new Map<string, number>();
 
+// The ONE backstop interval (never-idle timeout + dead-agent sweep). Runs only
+// while a queue is non-empty and self-stops when all drain. NO `.unref()`: the
+// renderer is a pure browser context so setInterval returns a `number` with no
+// such method (calling it throws) and browser timers keep no process alive.
+let backstop: ReturnType<typeof setInterval> | null = null;
+
 // One-time, lazy subscription to the NON-EXCLUSIVE readiness notifier. Mirrors
 // the coordinator's buildAgentOutputCb -> flushNextQueuedPrompt wiring without
 // touching the single-slot ready callback owned by PromptInput.
 let unsubscribeReadiness: (() => void) | undefined;
+let unsubscribeTeardown: (() => void) | undefined;
 function ensureSubscribed(): void {
   if (unsubscribeReadiness) return;
   unsubscribeReadiness = subscribeAgentReadiness((agentId) => tryFlush(agentId));
+  // Wire teardown to the renderer's canonical per-agent removal routine so
+  // queue/timer/lock/anchors are dropped on agent exit (never leak, never flush
+  // into a dead pty).
+  unsubscribeTeardown = subscribeAgentTeardown((agentId) => teardownAgent(agentId));
+}
+
+/** True while any agent still has a pending queued prompt. */
+function hasPendingQueues(): boolean {
+  for (const q of queue.values()) if (q.length) return true;
+  return false;
+}
+
+/** Start the single backstop interval if a queue is pending and it is not
+ *  already running. */
+function startBackstop(): void {
+  if (backstop !== null || !hasPendingQueues()) return;
+  backstop = setInterval(runBackstopTick, FLUSH_BACKSTOP_MS);
+}
+
+/** Stop the backstop once every queue has drained. */
+function maybeStopBackstop(): void {
+  if (backstop === null || hasPendingQueues()) return;
+  clearInterval(backstop);
+  backstop = null;
+}
+
+/** Backstop sweep: for every agent with pending items, drop it if it is gone,
+ *  else re-run the flush decision (drives the never-idle timeout for silent
+ *  busy agents that never re-emit a readiness edge). */
+function runBackstopTick(): void {
+  // Snapshot keys — teardownAgent/deliverNext mutate the queue map during sweep.
+  for (const agentId of [...queue.keys()]) {
+    if (!queue.get(agentId)?.length) continue;
+    if (store.agents[agentId]?.status !== 'running') {
+      teardownAgent(agentId);
+      continue;
+    }
+    tryFlush(agentId);
+  }
+  maybeStopBackstop();
+}
+
+/** ONE shared teardown for an agent — wired to clearAgentActivity via
+ *  subscribeAgentTeardown, and reused for the flush-time drop of a gone/invalid
+ *  agent. Drops queue/timer/lock/anchors/suppress and stops the backstop if idle. */
+function teardownAgent(agentId: string): void {
+  queue.delete(agentId);
+  const timer = stabilityTimers.get(agentId);
+  if (timer !== undefined) {
+    clearTimeout(timer);
+    stabilityTimers.delete(agentId);
+  }
+  writing.delete(agentId);
+  promptReadySeenAt.delete(agentId);
+  enqueuedAt.delete(agentId);
+  suppressUntil.delete(agentId);
+  maybeStopBackstop();
 }
 
 /** Render a broadcast for one agent: a skill is emitted in that agent's syntax
@@ -163,18 +234,6 @@ function markStable(agentId: string, ready: boolean, now: number): void {
     return;
   }
   if (!promptReadySeenAt.has(agentId)) promptReadySeenAt.set(agentId, now);
-}
-
-function clearAgentQueue(agentId: string): void {
-  queue.delete(agentId);
-  enqueuedAt.delete(agentId);
-  promptReadySeenAt.delete(agentId);
-  suppressUntil.delete(agentId);
-  const timer = stabilityTimers.get(agentId);
-  if (timer !== undefined) {
-    clearTimeout(timer);
-    stabilityTimers.delete(agentId);
-  }
 }
 
 /** True when a queued broadcast may still be delivered to this agent. Re-filters
@@ -225,6 +284,7 @@ export function enqueue(agentId: string, prompt: QueuedPrompt): boolean {
   if (q && q.length >= MAX_PENDING_PER_AGENT) return false;
   pushQueued(agentId, prompt);
   ensureSubscribed();
+  startBackstop(); // sweep never-idle/dead agents that never re-emit readiness
   return true;
 }
 
@@ -262,7 +322,7 @@ export async function broadcast(text: string, skill?: string): Promise<Broadcast
       suppressUntil: suppressUntil.get(target.agentId),
       stabilityMs: PROMPT_STABILITY_MS,
       neverIdleTimeoutMs: NEVER_IDLE_TIMEOUT_MS,
-      neverIdlePolicy: BROADCAST_NEVER_IDLE_POLICY,
+      neverIdlePolicy,
     });
     const prompt: QueuedPrompt = { taskId: target.taskId, text: rendered };
     if (decision.action === 'write-through') {
@@ -284,9 +344,9 @@ export function tryFlush(agentId: string): void {
   const q = queue.get(agentId);
   if (!q?.length) return;
   if (!isDeliverable(agentId)) {
-    // Agent gone or no longer a valid target — drop queued items so a flush timer
-    // never writes to a dead pty. Full lifecycle teardown wires in 07-02.
-    clearAgentQueue(agentId);
+    // Agent gone or no longer a valid target — tear down so a flush timer never
+    // writes to a dead pty (and the backstop stops once all queues drain).
+    teardownAgent(agentId);
     return;
   }
   const r = readiness(agentId);
@@ -305,26 +365,32 @@ export function tryFlush(agentId: string): void {
     suppressUntil: suppressUntil.get(agentId),
     stabilityMs: PROMPT_STABILITY_MS,
     neverIdleTimeoutMs: NEVER_IDLE_TIMEOUT_MS,
-    neverIdlePolicy: BROADCAST_NEVER_IDLE_POLICY,
+    neverIdlePolicy,
   });
   if (decision.action === 'flush') {
     void deliverNext(agentId);
   } else if (decision.action === 'drop') {
     dropHead(agentId);
-  } else if (decision.action === 'wait') {
+  } else if (decision.action === 'wait' && r.ready) {
+    // Only self-poll while waiting for a READY marker to persist the ~50ms
+    // stability window. A not-ready (busy) agent is driven by the output
+    // readiness hook + the backstop sweep, not a tight timer — no busy-poll.
     scheduleStabilityRecheck(agentId);
   }
   // 'write-through' / 'enqueue' are dispatch-phase only — unreachable here.
 }
 
-/** Drop the head-of-queue item (never-idle policy). 07-02 adds the user notice. */
+/** Drop the head-of-queue item under the never-idle policy and notify the user
+ *  (the agent stayed busy past NEVER_IDLE_TIMEOUT_MS — a manual broadcast fails
+ *  safe rather than landing mid-dialog). */
 function dropHead(agentId: string): void {
   const q = queue.get(agentId);
   if (!q?.length) return;
-  q.shift();
-  // TODO(07-02): notify the user that a never-idle broadcast was dropped.
+  const dropped = q.shift();
+  const label = dropped ? agentLabel(dropped.taskId, agentId) : agentId;
+  showNotification(`${label} stayed busy — broadcast not delivered`);
   if (q.length === 0) {
-    clearAgentQueue(agentId);
+    teardownAgent(agentId);
   } else {
     enqueuedAt.set(agentId, Date.now());
   }
@@ -366,24 +432,35 @@ async function deliverNext(agentId: string): Promise<void> {
     showNotification(`Broadcast delivery failed for ${agentLabel(queued.taskId, agentId)}`);
   } finally {
     writing.delete(agentId);
-    // Items remain → re-arm a stability recheck (gated again by the echo window).
+    // Items remain → re-arm a stability recheck (gated again by the echo window);
+    // otherwise this queue drained → stop the backstop if no agent is pending.
     if (queue.get(agentId)?.length) scheduleStabilityRecheck(agentId);
+    else maybeStopBackstop();
   }
 }
 
-/** Test-only accessor (queue/writing/timer sizes + reset). */
+/** Test-only accessor (queue/writing/timer sizes, backstop + policy control, reset). */
 export const __broadcastTestHooks = {
   reset(): void {
     for (const timer of stabilityTimers.values()) clearTimeout(timer);
+    if (backstop !== null) {
+      clearInterval(backstop);
+      backstop = null;
+    }
     queue.clear();
     writing.clear();
     promptReadySeenAt.clear();
     enqueuedAt.clear();
     stabilityTimers.clear();
     suppressUntil.clear();
+    neverIdlePolicy = BROADCAST_NEVER_IDLE_POLICY;
     if (unsubscribeReadiness) {
       unsubscribeReadiness();
       unsubscribeReadiness = undefined;
+    }
+    if (unsubscribeTeardown) {
+      unsubscribeTeardown();
+      unsubscribeTeardown = undefined;
     }
   },
   queueLength(agentId: string): number {
@@ -394,5 +471,28 @@ export const __broadcastTestHooks = {
   },
   hasStabilityTimer(agentId: string): boolean {
     return stabilityTimers.has(agentId);
+  },
+  isBackstopActive(): boolean {
+    return backstop !== null;
+  },
+  setNeverIdlePolicy(policy: 'drop' | 'force-write'): void {
+    neverIdlePolicy = policy;
+  },
+  internalSizes(): {
+    queue: number;
+    writing: number;
+    promptReadySeenAt: number;
+    enqueuedAt: number;
+    stabilityTimers: number;
+    suppressUntil: number;
+  } {
+    return {
+      queue: queue.size,
+      writing: writing.size,
+      promptReadySeenAt: promptReadySeenAt.size,
+      enqueuedAt: enqueuedAt.size,
+      stabilityTimers: stabilityTimers.size,
+      suppressUntil: suppressUntil.size,
+    };
   },
 };

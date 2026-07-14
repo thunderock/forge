@@ -199,6 +199,27 @@ function notifyAgentReadiness(agentId: string): void {
   for (const fn of readinessSubscribers) fn(agentId);
 }
 
+// --- Non-exclusive agent teardown subscribers ---
+// Fired from clearAgentActivity (the canonical per-agent removal routine, called
+// from every renderer removal path: agents.ts, tasks.ts, terminals.ts) so
+// consumers with per-agent state (e.g. the broadcast queue) can drop it in one
+// place. A Set so multiple consumers coexist without clobbering each other.
+const teardownSubscribers = new Set<(agentId: string) => void>();
+
+/** Subscribe to per-agent teardown (fired from clearAgentActivity). Returns an
+ *  unsubscribe fn. Non-exclusive — every subscriber is notified. */
+export function subscribeAgentTeardown(fn: (agentId: string) => void): () => void {
+  teardownSubscribers.add(fn);
+  return () => {
+    teardownSubscribers.delete(fn);
+  };
+}
+
+/** Notify all teardown subscribers that an agent is being removed. */
+function notifyAgentTeardown(agentId: string): void {
+  for (const fn of teardownSubscribers) fn(agentId);
+}
+
 /**
  * Normalize terminal output for quiescence comparison.
  * Strips ANSI, removes control characters, collapses whitespace so that
@@ -829,6 +850,9 @@ export function markAgentBusy(agentId: string): void {
 
 /** Clean up timers when an agent exits. */
 export function clearAgentActivity(agentId: string): void {
+  // Fire teardown subscribers first so per-agent consumers (e.g. the broadcast
+  // queue) drop their state before this routine tears down the tracking maps.
+  notifyAgentTeardown(agentId);
   const state = agentStates.get(agentId);
   if (state) {
     clearAutoTrustState(agentId);
