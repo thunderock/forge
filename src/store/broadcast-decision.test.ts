@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { expectDefined } from './test-helpers';
 import { getAgentPromptReadiness } from '../../electron/mcp/prompt-detect';
 import {
   READY_AGENT_FRAME_FIXTURES,
@@ -44,25 +45,28 @@ describe('hardened readiness over recorded frames', () => {
   });
 
   it('a `❯ Yes` selector reads not-ready (selection cursor, not the bare prompt)', () => {
-    const fx = NOT_READY_AGENT_FRAME_FIXTURES.find((f) => f.name === 'Two-option ❯ selection cursor');
-    expect(fx).toBeDefined();
-    expect(getAgentPromptReadiness(fx!.frame)).toMatchObject({ ready: false, reason: 'no_prompt' });
+    const fx = expectDefined(
+      NOT_READY_AGENT_FRAME_FIXTURES.find((f) => f.name === 'Two-option ❯ selection cursor'),
+    );
+    expect(getAgentPromptReadiness(fx.frame)).toMatchObject({ ready: false, reason: 'no_prompt' });
   });
 
   it('a busy diff `>` line reads not-ready via the busy short-circuit', () => {
-    const fx = NOT_READY_AGENT_FRAME_FIXTURES.find((f) => f.name === 'Busy diff hunk with quoted > line');
-    expect(fx).toBeDefined();
-    expect(getAgentPromptReadiness(fx!.frame)).toMatchObject({ ready: false, reason: 'busy' });
+    const fx = expectDefined(
+      NOT_READY_AGENT_FRAME_FIXTURES.find((f) => f.name === 'Busy diff hunk with quoted > line'),
+    );
+    expect(getAgentPromptReadiness(fx.frame)).toMatchObject({ ready: false, reason: 'busy' });
   });
 
   it('a diff `>` line with NO busy marker reads not-ready via the line-anchored scan', () => {
     // The load-bearing case: with no busy marker to short-circuit, a bare quoted
     // `>` diff line must NOT be mistaken for the Gemini `> ` ready prompt.
-    const fx = NOT_READY_AGENT_FRAME_FIXTURES.find(
-      (f) => f.name === 'Diff hunk with quoted > line, no busy marker',
+    const fx = expectDefined(
+      NOT_READY_AGENT_FRAME_FIXTURES.find(
+        (f) => f.name === 'Diff hunk with quoted > line, no busy marker',
+      ),
     );
-    expect(fx).toBeDefined();
-    expect(getAgentPromptReadiness(fx!.frame)).toMatchObject({ ready: false, reason: 'no_prompt' });
+    expect(getAgentPromptReadiness(fx.frame)).toMatchObject({ ready: false, reason: 'no_prompt' });
   });
 });
 
@@ -91,26 +95,38 @@ describe('decideBroadcastDelivery — dispatch phase', () => {
 
   it('ready but NOT idle -> enqueue (idle gate)', () => {
     expect(
-      decideBroadcastDelivery(params({ phase: 'dispatch', queueLength: 0, ready: true, idle: false })),
+      decideBroadcastDelivery(
+        params({ phase: 'dispatch', queueLength: 0, ready: true, idle: false }),
+      ),
     ).toEqual({ action: 'enqueue' });
   });
 
   it('busy (ready=false) -> enqueue', () => {
     expect(
-      decideBroadcastDelivery(params({ phase: 'dispatch', queueLength: 0, ready: false, idle: true })),
+      decideBroadcastDelivery(
+        params({ phase: 'dispatch', queueLength: 0, ready: false, idle: true }),
+      ),
     ).toEqual({ action: 'enqueue' });
   });
 
   it('non-empty queue -> enqueue even when idle+ready', () => {
     expect(
-      decideBroadcastDelivery(params({ phase: 'dispatch', queueLength: 2, ready: true, idle: true })),
+      decideBroadcastDelivery(
+        params({ phase: 'dispatch', queueLength: 2, ready: true, idle: true }),
+      ),
     ).toEqual({ action: 'enqueue' });
   });
 
   it('question active -> enqueue', () => {
     expect(
       decideBroadcastDelivery(
-        params({ phase: 'dispatch', queueLength: 0, ready: true, idle: true, questionActive: true }),
+        params({
+          phase: 'dispatch',
+          queueLength: 0,
+          ready: true,
+          idle: true,
+          questionActive: true,
+        }),
       ),
     ).toEqual({ action: 'enqueue' });
   });
@@ -128,12 +144,16 @@ describe('decideBroadcastDelivery — flush phase', () => {
     const firstReadyAt = Date.now(); // 0
     vi.advanceTimersByTime(40);
     expect(
-      decideBroadcastDelivery(params({ ready: true, promptFirstReadyAt: firstReadyAt, now: Date.now() })),
+      decideBroadcastDelivery(
+        params({ ready: true, promptFirstReadyAt: firstReadyAt, now: Date.now() }),
+      ),
     ).toEqual({ action: 'wait' });
 
     vi.advanceTimersByTime(10); // now = 50ms since first ready
     expect(
-      decideBroadcastDelivery(params({ ready: true, promptFirstReadyAt: firstReadyAt, now: Date.now() })),
+      decideBroadcastDelivery(
+        params({ ready: true, promptFirstReadyAt: firstReadyAt, now: Date.now() }),
+      ),
     ).toEqual({ action: 'flush' });
   });
 
