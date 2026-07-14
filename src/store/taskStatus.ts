@@ -179,6 +179,26 @@ function tryFireAgentReadyCallback(agentId: string): void {
   }
 }
 
+// --- Non-exclusive agent readiness subscribers ---
+// Distinct from the single-slot onAgentReady Map (owned by PromptInput): a Set
+// of subscribers so multiple consumers (e.g. the broadcast queue flush) can
+// react to the per-chunk readiness transition without clobbering each other.
+const readinessSubscribers = new Set<(agentId: string) => void>();
+
+/** Subscribe to per-chunk agent-readiness transitions. Returns an unsubscribe fn.
+ *  Non-exclusive — every subscriber is notified (unlike the single-slot onAgentReady). */
+export function subscribeAgentReadiness(fn: (agentId: string) => void): () => void {
+  readinessSubscribers.add(fn);
+  return () => {
+    readinessSubscribers.delete(fn);
+  };
+}
+
+/** Notify all readiness subscribers of a per-chunk readiness transition. */
+function notifyAgentReadiness(agentId: string): void {
+  for (const fn of readinessSubscribers) fn(agentId);
+}
+
 /**
  * Normalize terminal output for quiescence comparison.
  * Strips ANSI, removes control characters, collapses whitespace so that
@@ -680,7 +700,10 @@ function analyzeAgentOutput(agentId: string): void {
   // Also skip while auto-trust Enter is scheduled (50ms window) — the ❯ in
   // the selection UI is a false positive.  After the timer fires, the tail
   // buffer is cleared so only the agent's real prompt can trigger this.
-  if (!hasQuestion && state.autoTrustTimer === undefined) tryFireAgentReadyCallback(agentId);
+  if (!hasQuestion && state.autoTrustTimer === undefined) {
+    tryFireAgentReadyCallback(agentId);
+    notifyAgentReadiness(agentId);
+  }
 }
 
 /** Call this from the TerminalView Data handler with the raw PTY bytes.
@@ -765,6 +788,7 @@ export function markAgentOutput(agentId: string, data: Uint8Array, taskId?: stri
     // The chunkContainsAgentPrompt guard inside tryFireAgentReadyCallback
     // ensures shell prompts ($, %) don't trigger it.
     tryFireAgentReadyCallback(agentId);
+    notifyAgentReadiness(agentId);
 
     if (state.idleTimer !== undefined) {
       clearTimeout(state.idleTimer);
