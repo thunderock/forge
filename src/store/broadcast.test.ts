@@ -68,6 +68,7 @@ vi.mock('./taskStatus', () => ({
   getAgentOutputTail: vi.fn(() => ts.tail),
   isAgentIdle: vi.fn(() => ts.idle),
   isAgentAskingQuestion: vi.fn(() => ts.question),
+  normalizeCurrentFrame: (t: string) => t,
   subscribeAgentReadiness: vi.fn((fn: (agentId: string) => void) => {
     ts.captured = fn;
     return () => {
@@ -165,6 +166,64 @@ describe('getBroadcastPending', () => {
     // deliverNext shifts synchronously before its await, so the queue drained.
     expect(getBroadcastPending('a-idle')).toBeUndefined();
     expect(sentTexts()).toContain('go');
+  });
+});
+
+// ── broadcast quiescence fallback (markerless agents like opencode) ──────────
+describe('broadcast quiescence fallback', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    tasksMock.sendPrompt.mockClear();
+    notifyMock.showNotification.mockClear();
+    ts.tail = '';
+    ts.idle = true;
+    ts.question = false;
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    ts.tail = '';
+    ts.idle = true;
+    ts.question = false;
+  });
+
+  it('flushes a queued prompt once markerless output is stable for QUIESCENCE_MS', () => {
+    setTask('t-oc', { agentIds: ['a-oc'] });
+    setRunningAgent('a-oc', 'opencode');
+    ts.tail = 'opencode sitting idle — no marker anywhere';
+    expect(enqueue('a-oc', item('do it', 't-oc'))).toBe(true);
+
+    // The 500ms backstop polls; the first tick only sets the stability baseline.
+    vi.advanceTimersByTime(400);
+    expect(tasksMock.sendPrompt).not.toHaveBeenCalled();
+
+    // Output unchanged past QUIESCENCE_MS (1.5s) → flush WITHOUT a prompt marker.
+    vi.advanceTimersByTime(1_800);
+    expect(tasksMock.sendPrompt).toHaveBeenCalledWith('t-oc', 'a-oc', 'do it');
+  });
+
+  it('does not flush while markerless output keeps changing (clock resets)', () => {
+    setTask('t-oc', { agentIds: ['a-oc'] });
+    setRunningAgent('a-oc', 'opencode');
+    ts.tail = 'frame-0';
+    enqueue('a-oc', item('do it', 't-oc'));
+
+    // A new frame on every poll interval → the quiescence clock never matures.
+    for (let i = 1; i <= 6; i++) {
+      ts.tail = `frame-${i}`;
+      vi.advanceTimersByTime(500);
+    }
+    expect(tasksMock.sendPrompt).not.toHaveBeenCalled();
+  });
+
+  it('does not quiescence-flush while a question is active', () => {
+    setTask('t-oc', { agentIds: ['a-oc'] });
+    setRunningAgent('a-oc', 'opencode');
+    ts.tail = 'a stable question dialog is up';
+    ts.question = true; // blocks delivery regardless of quiescence
+    enqueue('a-oc', item('do it', 't-oc'));
+
+    vi.advanceTimersByTime(2_500);
+    expect(tasksMock.sendPrompt).not.toHaveBeenCalled();
   });
 });
 

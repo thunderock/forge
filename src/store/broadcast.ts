@@ -31,6 +31,7 @@ import {
   getAgentOutputTail,
   isAgentAskingQuestion,
   isAgentIdle,
+  normalizeCurrentFrame,
   subscribeAgentReadiness,
   subscribeAgentTeardown,
 } from './taskStatus';
@@ -111,6 +112,11 @@ const BROADCAST_NEVER_IDLE_POLICY: 'drop' | 'force-write' = 'drop';
 // the never-idle timeout + dead-agent sweep. The primary flush trigger remains
 // the output-driven readiness hook; this self-stops when all queues drain.
 const FLUSH_BACKSTOP_MS = 500;
+// Quiescence fallback (mirrors the initialPrompt slow path's QUIESCENCE_THRESHOLD_MS,
+// with the same 500ms poll = FLUSH_BACKSTOP_MS): a markerless agent (e.g. opencode,
+// whose TUI has no ❯/›/> ready marker) is delivered to once its normalized output
+// frame has been unchanged this long. Without it, such agents never flush.
+const QUIESCENCE_MS = 1_500;
 // Live policy the flush path reads (defaults to the constant; test-flippable).
 let neverIdlePolicy: 'drop' | 'force-write' = BROADCAST_NEVER_IDLE_POLICY;
 
@@ -121,6 +127,10 @@ const promptReadySeenAt = new Map<string, number>();
 const enqueuedAt = new Map<string, number>();
 const stabilityTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const suppressUntil = new Map<string, number>();
+// Per-agent normalized-frame snapshot for the quiescence fallback ({frame, since}):
+// a markerless agent flushes once its frame has been unchanged for QUIESCENCE_MS,
+// sampled on each tryFlush (the backstop's 500ms cadence is the poll).
+const quiescenceFrame = new Map<string, { frame: string; since: number }>();
 
 // Reactive per-agent "pending broadcast" display text for the per-pane indicator
 // (PromptInput reads it via getBroadcastPending). Derived from the head of each
@@ -226,6 +236,7 @@ function teardownAgent(agentId: string): void {
   promptReadySeenAt.delete(agentId);
   enqueuedAt.delete(agentId);
   suppressUntil.delete(agentId);
+  quiescenceFrame.delete(agentId);
   refreshPending(agentId);
   maybeStopBackstop();
 }
@@ -270,6 +281,24 @@ function markStable(agentId: string, ready: boolean, now: number): void {
     return;
   }
   if (!promptReadySeenAt.has(agentId)) promptReadySeenAt.set(agentId, now);
+}
+
+/** Quiescence fallback for markerless agents (mirrors the initialPrompt slow
+ *  path): true once the agent's normalized output frame has been unchanged for
+ *  QUIESCENCE_MS. Sampled on each tryFlush; the backstop's 500ms cadence is the
+ *  poll. An empty/whitespace frame does not start the clock. */
+function isQuiescent(agentId: string, now: number): boolean {
+  const frame = normalizeCurrentFrame(getAgentOutputTail(agentId)).trim();
+  if (!frame) {
+    quiescenceFrame.delete(agentId);
+    return false;
+  }
+  const prev = quiescenceFrame.get(agentId);
+  if (!prev || prev.frame !== frame) {
+    quiescenceFrame.set(agentId, { frame, since: now });
+    return false;
+  }
+  return now - prev.since >= QUIESCENCE_MS;
 }
 
 /** True when a queued broadcast may still be delivered to this agent. Re-filters
@@ -396,6 +425,11 @@ export function tryFlush(agentId: string): void {
     questionActive: isAgentAskingQuestion(agentId),
     writeLocked: writing.has(agentId),
     idle: isAgentIdle(agentId),
+    // Quiescence fallback, but NEVER while a busy marker (esc to interrupt / Working…)
+    // is showing — a running agent can be mid-work with momentarily-static output,
+    // and quiescing there would interrupt it. (The initialPrompt slow path doesn't
+    // need this guard because it runs at startup, before any work is in flight.)
+    quiescent: r.reason !== 'busy' && isQuiescent(agentId, now),
     promptFirstReadyAt: promptReadySeenAt.get(agentId),
     enqueuedAt: enqueuedAt.get(agentId),
     now,
@@ -463,6 +497,7 @@ async function deliverNext(agentId: string): Promise<void> {
     // post-write prompt echo from chain-firing the queue).
     suppressUntil.set(agentId, Date.now() + ECHO_SUPPRESS_MS);
     promptReadySeenAt.delete(agentId);
+    quiescenceFrame.delete(agentId);
   } catch (err) {
     // sendPrompt is a black box (three awaited writes, throws a plain Error) — we
     // CANNOT know whether the body already landed, so we DROP the (already
@@ -492,6 +527,7 @@ export const __broadcastTestHooks = {
     enqueuedAt.clear();
     stabilityTimers.clear();
     suppressUntil.clear();
+    quiescenceFrame.clear();
     setPendingDisplay({});
     neverIdlePolicy = BROADCAST_NEVER_IDLE_POLICY;
     if (unsubscribeReadiness) {
