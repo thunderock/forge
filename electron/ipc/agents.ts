@@ -182,6 +182,37 @@ export function parseCodexModelsCache(raw: string): CodexModelInfo[] {
   return rows.map((r) => r.info);
 }
 
+let cachedCodexModels: CodexModelInfo[] | null = null;
+let codexModelsCacheTime = 0;
+const CODEX_MODELS_TTL = 5 * 60_000;
+
+/** Test-only: clear the module-level cache so cases don't leak into each other. */
+export function resetCodexModelsCacheForTests(): void {
+  cachedCodexModels = null;
+  codexModelsCacheTime = 0;
+}
+
+/**
+ * Discover the codex models visible in its TUI picker by reading
+ * `~/.codex/models_cache.json`. TTL-cached; returns `[]` when the file is
+ * missing / unreadable / drifted — never throws (MDL-09). Failures are not
+ * cached so a later read can recover.
+ */
+export async function listCodexModels(): Promise<CodexModelInfo[]> {
+  const now = Date.now();
+  if (cachedCodexModels && now - codexModelsCacheTime < CODEX_MODELS_TTL) {
+    return cachedCodexModels;
+  }
+  try {
+    const raw = await fs.readFile(path.join(os.homedir(), '.codex', 'models_cache.json'), 'utf8');
+    cachedCodexModels = parseCodexModelsCache(raw);
+    codexModelsCacheTime = now;
+    return cachedCodexModels;
+  } catch {
+    return [];
+  }
+}
+
 // --- Agent skill discovery (autocomplete for the New Task "Skill" field) ---
 
 const SKILL_NAME_RE = /^[a-z0-9][a-z0-9._-]*$/i;

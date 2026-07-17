@@ -15,6 +15,8 @@ const ALLOWED_CHANNELS = new Set([
   'kill_all_agents',
   'list_agents',
   'list_opencode_models',
+  'list_codex_models',
+  'resolve_claude_models',
   'list_agent_skills',
   // Task
   'create_task',
