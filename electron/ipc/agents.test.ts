@@ -18,6 +18,7 @@ vi.mock('child_process', () => {
 });
 
 import { promises as fs } from 'fs';
+import { readFileSync } from 'node:fs';
 import os from 'os';
 import path from 'path';
 import { execFile } from 'child_process';
@@ -26,6 +27,7 @@ import {
   getSkipPermissionsArgs,
   listOpenCodeModels,
   parseOpenCodeModels,
+  parseCodexModelsCache,
   resetOpenCodeModelsCacheForTests,
   mergeSkillNames,
   readSkillNames,
@@ -92,6 +94,90 @@ describe('listOpenCodeModels (MDL-04)', () => {
     }) as unknown as typeof execFile);
 
     expect(await listOpenCodeModels()).toEqual([]);
+  });
+});
+
+describe('parseCodexModelsCache (MDL-06/09/10)', () => {
+  // Golden fixture: the REAL ~/.codex/models_cache.json captured 2026-07-16
+  // (client 0.144.4), filtered to parse-relevant fields, values verbatim.
+  const fixture = readFileSync(path.join(__dirname, 'codex-models-cache.fixture.json'), 'utf8');
+
+  it('reproduces the live 2026-07-16 codex TUI picker: slugs in priority order', () => {
+    expect(parseCodexModelsCache(fixture).map((m) => m.slug)).toEqual([
+      'gpt-5.6-sol',
+      'gpt-5.6-terra',
+      'gpt-5.6-luna',
+      'gpt-5.5',
+      'gpt-5.4',
+      'gpt-5.4-mini',
+    ]);
+  });
+
+  it('excludes the hidden codex-auto-review model', () => {
+    const slugs = parseCodexModelsCache(fixture).map((m) => m.slug);
+    expect(slugs).not.toContain('codex-auto-review');
+  });
+
+  it('carries each model’s declared efforts in order', () => {
+    const bySlug = new Map(parseCodexModelsCache(fixture).map((m) => [m.slug, m]));
+    const full = ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
+    expect(bySlug.get('gpt-5.6-sol')?.efforts).toEqual(full);
+    expect(bySlug.get('gpt-5.6-terra')?.efforts).toEqual(full);
+    expect(bySlug.get('gpt-5.6-luna')?.efforts).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);
+    expect(bySlug.get('gpt-5.5')?.efforts).toEqual(['low', 'medium', 'high', 'xhigh']);
+    expect(bySlug.get('gpt-5.4')?.efforts).toEqual(['low', 'medium', 'high', 'xhigh']);
+    expect(bySlug.get('gpt-5.4-mini')?.efforts).toEqual(['low', 'medium', 'high', 'xhigh']);
+  });
+
+  it('carries each model’s default effort (gpt-5.5 is xhigh, the rest medium)', () => {
+    const defaults = Object.fromEntries(
+      parseCodexModelsCache(fixture).map((m) => [m.slug, m.defaultEffort]),
+    );
+    expect(defaults).toEqual({
+      'gpt-5.6-sol': 'medium',
+      'gpt-5.6-terra': 'medium',
+      'gpt-5.6-luna': 'medium',
+      'gpt-5.5': 'xhigh',
+      'gpt-5.4': 'medium',
+      'gpt-5.4-mini': 'medium',
+    });
+  });
+
+  it('carries display names (spot-check GPT-5.6-Sol)', () => {
+    expect(parseCodexModelsCache(fixture)[0].displayName).toBe('GPT-5.6-Sol');
+  });
+
+  it('returns [] for empty / non-JSON / shape-drifted content', () => {
+    expect(parseCodexModelsCache('')).toEqual([]);
+    expect(parseCodexModelsCache('not json')).toEqual([]);
+    expect(parseCodexModelsCache('{}')).toEqual([]);
+    expect(parseCodexModelsCache('{"models":"nope"}')).toEqual([]);
+  });
+
+  it('returns [] when no entry has a usable slug', () => {
+    const raw = JSON.stringify({ models: [{ visibility: 'list' }, { slug: 42 }] });
+    expect(parseCodexModelsCache(raw)).toEqual([]);
+  });
+
+  it('keeps valid entries while skipping malformed siblings (per-entry tolerance)', () => {
+    const raw = JSON.stringify({
+      models: [
+        { slug: 'good-model', visibility: 'list', priority: 2 },
+        { visibility: 'list' }, // no slug
+        { slug: 'hidden', visibility: 'hide', priority: 1 },
+        null,
+        'garbage',
+      ],
+    });
+    expect(parseCodexModelsCache(raw)).toEqual([
+      {
+        slug: 'good-model',
+        displayName: 'good-model',
+        description: undefined,
+        defaultEffort: undefined,
+        efforts: [],
+      },
+    ]);
   });
 });
 
