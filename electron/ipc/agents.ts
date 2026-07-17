@@ -213,6 +213,51 @@ export async function listCodexModels(): Promise<CodexModelInfo[]> {
   }
 }
 
+// --- Claude alias → concrete model ID resolution (MDL-08) ---
+
+const CLAUDE_ALIASES = ['fable', 'opus', 'sonnet', 'haiku'] as const;
+
+/**
+ * Resolve claude model aliases to the concrete IDs declared via
+ * `ANTHROPIC_DEFAULT_<ALIAS>_MODEL`. Pure over the injected env objects: live
+ * process env wins, the settings.json `env` block fills gaps (Dock-launched
+ * Electron doesn't inherit shell exports). Only aliases resolving to a
+ * non-empty string are included.
+ */
+export function resolveClaudeModelIdsFrom(
+  env: Record<string, string | undefined>,
+  settingsEnv: Record<string, unknown>,
+): Record<string, string> {
+  const resolved: Record<string, string> = {};
+  for (const alias of CLAUDE_ALIASES) {
+    const key = `ANTHROPIC_DEFAULT_${alias.toUpperCase()}_MODEL`;
+    const fromSettings = settingsEnv[key];
+    const value = env[key] ?? (typeof fromSettings === 'string' ? fromSettings : undefined);
+    if (value) resolved[alias] = value;
+  }
+  return resolved;
+}
+
+/**
+ * IPC-facing resolution: merges live process env over `~/.claude/settings.json`'s
+ * `env` block. Missing/invalid settings degrade to env-only; never throws.
+ * Stateless — two tiny local reads per dialog-open don't warrant a TTL.
+ */
+export async function resolveClaudeModelIds(): Promise<Record<string, string>> {
+  let settingsEnv: Record<string, unknown> = {};
+  try {
+    const raw = await fs.readFile(path.join(os.homedir(), '.claude', 'settings.json'), 'utf8');
+    const parsed: unknown = JSON.parse(raw);
+    const env = (parsed as { env?: unknown } | null)?.env;
+    if (typeof env === 'object' && env !== null && !Array.isArray(env)) {
+      settingsEnv = env as Record<string, unknown>;
+    }
+  } catch {
+    /* settings.json absent/unreadable/invalid — fall back to process env only */
+  }
+  return resolveClaudeModelIdsFrom(process.env, settingsEnv);
+}
+
 // --- Agent skill discovery (autocomplete for the New Task "Skill" field) ---
 
 const SKILL_NAME_RE = /^[a-z0-9][a-z0-9._-]*$/i;
