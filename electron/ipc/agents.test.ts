@@ -26,9 +26,11 @@ import {
   DEFAULT_AGENTS,
   getSkipPermissionsArgs,
   listOpenCodeModels,
+  listCodexModels,
   parseOpenCodeModels,
   parseCodexModelsCache,
   resetOpenCodeModelsCacheForTests,
+  resetCodexModelsCacheForTests,
   mergeSkillNames,
   readSkillNames,
 } from './agents.js';
@@ -178,6 +180,64 @@ describe('parseCodexModelsCache (MDL-06/09/10)', () => {
         efforts: [],
       },
     ]);
+  });
+});
+
+describe('listCodexModels (MDL-06/09)', () => {
+  const fixture = readFileSync(path.join(__dirname, 'codex-models-cache.fixture.json'), 'utf8');
+
+  beforeEach(() => {
+    resetCodexModelsCacheForTests();
+    vi.restoreAllMocks();
+  });
+
+  it('reads ~/.codex/models_cache.json and returns the parsed models', async () => {
+    vi.spyOn(fs, 'readFile').mockResolvedValue(fixture);
+
+    const models = await listCodexModels();
+    expect(models.map((m) => m.slug)).toEqual([
+      'gpt-5.6-sol',
+      'gpt-5.6-terra',
+      'gpt-5.6-luna',
+      'gpt-5.5',
+      'gpt-5.4',
+      'gpt-5.4-mini',
+    ]);
+  });
+
+  it('returns [] when the cache file is missing (ENOENT)', async () => {
+    vi.spyOn(fs, 'readFile').mockRejectedValue(
+      Object.assign(new Error('ENOENT: no such file'), { code: 'ENOENT' }),
+    );
+
+    expect(await listCodexModels()).toEqual([]);
+  });
+
+  it('returns [] when the cache file contains garbage', async () => {
+    vi.spyOn(fs, 'readFile').mockResolvedValue('not json at all');
+
+    expect(await listCodexModels()).toEqual([]);
+  });
+
+  it('caches the parsed result within the TTL (single file read)', async () => {
+    const spy = vi.spyOn(fs, 'readFile').mockResolvedValue(fixture);
+
+    const first = await listCodexModels();
+    const second = await listCodexModels();
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(second).toEqual(first);
+  });
+
+  it('does not cache failures — a later call re-reads the file', async () => {
+    const spy = vi
+      .spyOn(fs, 'readFile')
+      .mockRejectedValueOnce(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }))
+      .mockResolvedValueOnce(fixture);
+
+    expect(await listCodexModels()).toEqual([]);
+    const retry = await listCodexModels();
+    expect(retry.map((m) => m.slug)).toContain('gpt-5.6-sol');
+    expect(spy).toHaveBeenCalledTimes(2);
   });
 });
 
