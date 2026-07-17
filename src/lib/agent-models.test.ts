@@ -197,4 +197,11 @@ describe('claudeModelOptions — golden label parity (MDL-08/09)', () => {
       { value: 'haiku', label: 'haiku — us.anthropic.claude-haiku-4-5-20251001-v1:0' },
     ]);
   });
+
+  it('option values track curatedModelsFor(claude) exactly — the selectValue membership contract', () => {
+    // ModelSelector's selectValue() checks membership against listedModels()
+    // (= curatedModelsFor for claude) while options render from claudeModelOptions;
+    // the two must never diverge or a stored alias would fall into Other….
+    expect(claudeModelOptions({}).map((o) => o.value)).toEqual(curatedModelsFor(agent('claude')));
+  });
 });

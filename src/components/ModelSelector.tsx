@@ -2,10 +2,20 @@ import { createSignal, createEffect, createMemo, For, Show } from 'solid-js';
 import { invoke } from '../lib/ipc';
 import { IPC } from '../../electron/ipc/channels';
 import { theme } from '../lib/theme';
-import type { AgentDef } from '../ipc/types';
+import type { AgentDef, CodexModelInfo } from '../ipc/types';
 import type { ModelSelection } from '../store/types';
 import { SegmentedButtons } from './SegmentedButtons';
-import { HOST_DEFAULT, OTHER, effortsFor, curatedModelsFor, isOpenCode } from '../lib/agent-models';
+import {
+  HOST_DEFAULT,
+  OTHER,
+  claudeModelOptions,
+  curatedModelsFor,
+  effortsForModel,
+  isClaude,
+  isCodex,
+  isEffortSupported,
+  isOpenCode,
+} from '../lib/agent-models';
 
 interface ModelSelectorProps {
   agentDef: AgentDef;
@@ -29,12 +39,15 @@ const labelStyle = { 'font-size': '12px', color: theme.fgMuted } as const;
 
 /**
  * Inline per-agent model picker for the New Task dialog (MDL-01/03/04). Reuses
- * the ProjectSelect `<select>` style + SegmentedButtons; opencode models are
- * fetched dynamically. Holds no persisted state — the dialog owns the value and
- * writes it back on submit.
+ * the ProjectSelect `<select>` style + SegmentedButtons; opencode and codex
+ * models are fetched dynamically (MDL-06), claude aliases are labeled with the
+ * host-resolved IDs (MDL-08). Holds no persisted state — the dialog owns the
+ * value and writes it back on submit.
  */
 export function ModelSelector(props: ModelSelectorProps) {
   const [openCodeModels, setOpenCodeModels] = createSignal<string[]>([]);
+  const [codexModels, setCodexModels] = createSignal<CodexModelInfo[]>([]);
+  const [claudeResolved, setClaudeResolved] = createSignal<Record<string, string>>({});
   const [loadingModels, setLoadingModels] = createSignal(false);
 
   // Fetch dynamic opencode models when opencode is the selected agent.
@@ -51,9 +64,44 @@ export function ModelSelector(props: ModelSelectorProps) {
       .finally(() => setLoadingModels(false));
   });
 
-  const listedModels = createMemo(() =>
-    isOpenCode(props.agentDef) ? openCodeModels() : curatedModelsFor(props.agentDef),
-  );
+  // Fetch the codex cache models (MDL-06) when codex is the selected agent;
+  // empty means "use the curated fallback" (MDL-09).
+  createEffect(() => {
+    const def = props.agentDef;
+    if (!isCodex(def)) {
+      setCodexModels([]);
+      return;
+    }
+    setLoadingModels(true);
+    void invoke<CodexModelInfo[]>(IPC.ListCodexModels)
+      .then((models) => setCodexModels(Array.isArray(models) ? models : []))
+      .catch(() => setCodexModels([]))
+      .finally(() => setLoadingModels(false));
+  });
+
+  // Resolve claude alias -> concrete-ID labels (MDL-08) when claude is selected;
+  // missing resolution leaves labels as plain aliases (MDL-09).
+  createEffect(() => {
+    const def = props.agentDef;
+    if (!isClaude(def)) {
+      setClaudeResolved({});
+      return;
+    }
+    void invoke<Record<string, string>>(IPC.ResolveClaudeModels)
+      .then((resolved) =>
+        setClaudeResolved(resolved && typeof resolved === 'object' ? resolved : {}),
+      )
+      .catch(() => setClaudeResolved({}));
+  });
+
+  const listedModels = createMemo(() => {
+    if (isOpenCode(props.agentDef)) return openCodeModels();
+    if (isCodex(props.agentDef)) {
+      const fetched = codexModels();
+      return fetched.length > 0 ? fetched.map((m) => m.slug) : curatedModelsFor(props.agentDef);
+    }
+    return curatedModelsFor(props.agentDef);
+  });
 
   // <select> value: host-default, a listed model, or OTHER (custom / free-text).
   const selectValue = createMemo(() => {
@@ -63,8 +111,22 @@ export function ModelSelector(props: ModelSelectorProps) {
   });
 
   const showOtherInput = createMemo(() => selectValue() === OTHER);
-  const efforts = createMemo(() => effortsFor(props.agentDef));
+  const claudeOptions = createMemo(() => claudeModelOptions(claudeResolved()));
+  const efforts = createMemo(() =>
+    effortsForModel(props.agentDef, props.selection.model?.trim() || undefined, codexModels()),
+  );
   const showEffort = createMemo(() => efforts().length > 0);
+
+  // Reset an effort the selected model doesn't support (MDL-07): covers both
+  // switching models and a stale persisted prefill. Waits out an in-flight codex
+  // fetch so a valid persisted effort (e.g. sol+ultra) isn't cleared against the
+  // static fallback list.
+  createEffect(() => {
+    if (isCodex(props.agentDef) && loadingModels()) return;
+    if (!isEffortSupported(props.selection.reasoningEffort, efforts())) {
+      props.onChange({ model: props.selection.model, reasoningEffort: undefined });
+    }
+  });
 
   function onSelectChange(value: string): void {
     const effort = props.selection.reasoningEffort;
@@ -95,7 +157,12 @@ export function ModelSelector(props: ModelSelectorProps) {
             Loading models…
           </option>
         </Show>
-        <For each={listedModels()}>{(m) => <option value={m}>{m}</option>}</For>
+        <Show
+          when={isClaude(props.agentDef)}
+          fallback={<For each={listedModels()}>{(m) => <option value={m}>{m}</option>}</For>}
+        >
+          <For each={claudeOptions()}>{(o) => <option value={o.value}>{o.label}</option>}</For>
+        </Show>
         <option value={OTHER}>Other…</option>
       </select>
 
