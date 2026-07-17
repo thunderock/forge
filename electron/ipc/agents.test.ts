@@ -31,6 +31,8 @@ import {
   parseCodexModelsCache,
   resetOpenCodeModelsCacheForTests,
   resetCodexModelsCacheForTests,
+  resolveClaudeModelIds,
+  resolveClaudeModelIdsFrom,
   mergeSkillNames,
   readSkillNames,
 } from './agents.js';
@@ -238,6 +240,68 @@ describe('listCodexModels (MDL-06/09)', () => {
     const retry = await listCodexModels();
     expect(retry.map((m) => m.slug)).toContain('gpt-5.6-sol');
     expect(spy).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('resolveClaudeModelIdsFrom (MDL-08/10)', () => {
+  // Golden parity: the four values captured from THIS host on 2026-07-16 —
+  // exactly the claude /model picker rows (settings.json env block + shell env).
+  const hostValues = {
+    ANTHROPIC_DEFAULT_FABLE_MODEL: 'us.anthropic.claude-fable-5[1m]',
+    ANTHROPIC_DEFAULT_OPUS_MODEL: 'us.anthropic.claude-opus-4-8[1m]',
+    ANTHROPIC_DEFAULT_SONNET_MODEL: 'us.anthropic.claude-sonnet-4-5-20250929-v1:0[1m]',
+    ANTHROPIC_DEFAULT_HAIKU_MODEL: 'us.anthropic.claude-haiku-4-5-20251001-v1:0',
+  };
+  const expected = {
+    fable: 'us.anthropic.claude-fable-5[1m]',
+    opus: 'us.anthropic.claude-opus-4-8[1m]',
+    sonnet: 'us.anthropic.claude-sonnet-4-5-20250929-v1:0[1m]',
+    haiku: 'us.anthropic.claude-haiku-4-5-20251001-v1:0',
+  };
+
+  it('resolves all four aliases from the captured host process env', () => {
+    expect(resolveClaudeModelIdsFrom(hostValues, {})).toEqual(expected);
+  });
+
+  it('resolves the same four aliases from the settings.json env block alone', () => {
+    expect(resolveClaudeModelIdsFrom({}, hostValues)).toEqual(expected);
+  });
+
+  it('prefers process env over settings.json on conflict', () => {
+    const resolved = resolveClaudeModelIdsFrom(
+      { ANTHROPIC_DEFAULT_FABLE_MODEL: 'A' },
+      { ANTHROPIC_DEFAULT_FABLE_MODEL: 'B' },
+    );
+    expect(resolved).toEqual({ fable: 'A' });
+  });
+
+  it('returns {} when nothing is declared', () => {
+    expect(resolveClaudeModelIdsFrom({}, {})).toEqual({});
+  });
+
+  it('skips non-string settings.json values', () => {
+    expect(resolveClaudeModelIdsFrom({}, { ANTHROPIC_DEFAULT_OPUS_MODEL: 42 })).toEqual({});
+  });
+
+  it('includes only the aliases that are declared (partial env)', () => {
+    const resolved = resolveClaudeModelIdsFrom(
+      { ANTHROPIC_DEFAULT_HAIKU_MODEL: 'us.anthropic.claude-haiku-4-5-20251001-v1:0' },
+      {},
+    );
+    expect(resolved).toEqual({ haiku: 'us.anthropic.claude-haiku-4-5-20251001-v1:0' });
+  });
+});
+
+describe('resolveClaudeModelIds (MDL-08/09)', () => {
+  it('degrades to the process-env-only result when settings.json is unreadable', async () => {
+    vi.spyOn(fs, 'readFile').mockRejectedValue(
+      Object.assign(new Error('ENOENT: no settings.json'), { code: 'ENOENT' }),
+    );
+
+    const resolved = await resolveClaudeModelIds();
+    expect(resolved).toEqual(resolveClaudeModelIdsFrom(process.env, {}));
+
+    vi.restoreAllMocks();
   });
 });
 
