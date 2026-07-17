@@ -27,6 +27,17 @@ export interface AgentDef {
   reasoningEffort?: string;
 }
 
+/** One visible codex model from `~/.codex/models_cache.json`, as returned by
+ *  IPC.ListCodexModels. Mirrors the main-process shape in electron/ipc/agents.ts
+ *  (duplicated across processes like AgentDef — renderer must not import electron/). */
+export interface CodexModelInfo {
+  slug: string;
+  displayName: string;
+  description?: string;
+  defaultEffort?: string;
+  efforts: string[];
+}
+
 export interface CreateTaskResult {
   id: string;
   branch_name: string;
