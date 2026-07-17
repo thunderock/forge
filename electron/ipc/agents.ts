@@ -127,6 +127,61 @@ export async function listOpenCodeModels(): Promise<string[]> {
   }
 }
 
+// --- Codex dynamic model discovery (MDL-06) ---
+
+export interface CodexModelInfo {
+  slug: string;
+  displayName: string;
+  description?: string;
+  defaultEffort?: string;
+  efforts: string[]; // that model's supported_reasoning_levels[].effort, in declared order
+}
+
+/**
+ * Parse the raw contents of `~/.codex/models_cache.json` — the same file the codex
+ * TUI picker renders from — into the visible models, priority-sorted. Pure and
+ * tolerant: any parse/shape failure yields `[]` so the renderer falls back to the
+ * curated list instead of crashing (MDL-09); malformed entries are skipped
+ * individually.
+ */
+export function parseCodexModelsCache(raw: string): CodexModelInfo[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return [];
+  }
+  const models = (parsed as { models?: unknown } | null)?.models;
+  if (!Array.isArray(models)) return [];
+
+  const rows: { info: CodexModelInfo; priority: number }[] = [];
+  for (const entry of models) {
+    if (typeof entry !== 'object' || entry === null) continue;
+    const m = entry as Record<string, unknown>;
+    if (typeof m.slug !== 'string' || m.visibility !== 'list') continue;
+    const levels = m.supported_reasoning_levels;
+    const efforts = Array.isArray(levels)
+      ? levels
+          .map((l) => (l as { effort?: unknown } | null)?.effort)
+          .filter((e): e is string => typeof e === 'string')
+      : [];
+    rows.push({
+      info: {
+        slug: m.slug,
+        displayName: typeof m.display_name === 'string' ? m.display_name : m.slug,
+        description: typeof m.description === 'string' ? m.description : undefined,
+        defaultEffort:
+          typeof m.default_reasoning_level === 'string' ? m.default_reasoning_level : undefined,
+        efforts,
+      },
+      priority: typeof m.priority === 'number' ? m.priority : Infinity,
+    });
+  }
+  // Stable sort: ties keep input order (Array.prototype.sort is stable in Node).
+  rows.sort((a, b) => a.priority - b.priority);
+  return rows.map((r) => r.info);
+}
+
 // --- Agent skill discovery (autocomplete for the New Task "Skill" field) ---
 
 const SKILL_NAME_RE = /^[a-z0-9][a-z0-9._-]*$/i;
