@@ -10,7 +10,11 @@ import { invoke, fireAndForget, Channel } from '../lib/ipc';
 import { IPC } from '../../electron/ipc/channels';
 import { getTerminalFontFamily } from '../lib/fonts';
 import { TERMINAL_SCROLLBACK_LINES, base64ToUint8Array } from '../lib/terminalConstants';
-import { getTerminalTheme, getTerminalThemeForCustom } from '../lib/theme';
+import {
+  getTerminalSearchDecorations,
+  getTerminalTheme,
+  getTerminalThemeForCustom,
+} from '../lib/theme';
 import { matchesGlobalShortcut } from '../lib/shortcuts';
 import { isMac } from '../lib/platform';
 import { resolvedBindings } from '../store/keybindings';
@@ -34,7 +38,7 @@ import {
 import { dataTransferToShellArgs, escapePath } from '../lib/terminalDrop';
 import { cleanCopiedTerminalText } from '../lib/copy-text';
 import { hasTerminalUserActivity, nextTerminalInputPending } from '../lib/terminalInputPending';
-import { createTerminalHttpLinkHandler } from '../lib/terminalLinks';
+import { computeWrappedPathLinks, createTerminalHttpLinkHandler } from '../lib/terminalLinks';
 import type { PtyOutput } from '../ipc/types';
 
 let windowUnloading = false;
@@ -166,17 +170,6 @@ const openTerminalHttpLinkWithModifier = createTerminalHttpLinkHandler({
 function getTerminalBindings() {
   return resolvedBindings().filter((b) => b.layer === 'terminal');
 }
-
-// Browser-style find: amber highlight for all matches, orange for the active
-// one. Like a browser, the highlight palette is fixed rather than theme-derived.
-// Overview-ruler colors must be solid; match backgrounds carry alpha so the
-// underlying glyphs stay legible on both light and dark terminals.
-const SEARCH_DECORATIONS = {
-  matchBackground: 'rgba(255, 213, 79, 0.4)',
-  matchOverviewRuler: '#ffd54f',
-  activeMatchBackground: 'rgba(255, 138, 0, 0.85)',
-  activeMatchColorOverviewRuler: '#ff8a00',
-} as const;
 
 export function TerminalView(props: TerminalViewProps) {
   let containerRef!: HTMLDivElement;
@@ -359,7 +352,7 @@ export function TerminalView(props: TerminalViewProps) {
       resetSearchResults();
       return;
     }
-    const opts = { incremental, decorations: SEARCH_DECORATIONS };
+    const opts = { incremental, decorations: getTerminalSearchDecorations() };
     if (direction === 'prev') searchAddon.findPrevious(q, opts);
     else searchAddon.findNext(q, opts);
   }
@@ -458,31 +451,12 @@ export function TerminalView(props: TerminalViewProps) {
           callback(undefined);
           return;
         }
-        const line = term.buffer.active.getLine(y - 1)?.translateToString(true) ?? '';
-        // Match file paths: absolute, ./ or ../ relative, and bare relative with /
-        // Supports @scoped packages, line:col suffixes like foo.ts:42:10
-        const regex =
-          /(?:\/[\w@./-]+|\.{1,2}\/[\w@./-]+|[\w@][\w@./-]*\/[\w@./-]+)(?::\d+(?::\d+)?)?/g;
-        const links: { startIndex: number; length: number; text: string }[] = [];
-        let match: RegExpExecArray | null;
-        while ((match = regex.exec(line)) !== null) {
-          // Strip trailing punctuation that's not part of the path
-          const text = match[0].replace(/[.,;:!?)]+$/, '');
-          if (!text) continue;
-          // Must contain a dot somewhere (file extension) to avoid matching plain directories
-          if (!text.includes('.')) continue;
-          links.push({
-            startIndex: match.index,
-            length: text.length,
-            text,
-          });
-        }
+        // Reconstruct wrapped lines so a path that spans multiple rows stays a
+        // single clickable link across every row it occupies.
+        const links = computeWrappedPathLinks(term.buffer.active, y - 1);
         callback(
           links.map((link) => ({
-            range: {
-              start: { x: link.startIndex + 1, y },
-              end: { x: link.startIndex + link.length + 1, y },
-            },
+            range: link.range,
             text: link.text,
             activate(event: MouseEvent, _text: string) {
               // Require Cmd+click (Mac) or Ctrl+click (Linux) to open links
@@ -1209,14 +1183,14 @@ export function TerminalView(props: TerminalViewProps) {
             'align-items': 'center',
             'justify-content': 'center',
             gap: '12px',
-            background: 'rgba(0,0,0,0.85)',
+            background: 'color-mix(in srgb, var(--bg-elevated) 92%, transparent)',
             'font-family': 'var(--font-ui)',
             'z-index': '10',
           }}
         >
           <span
             style={{
-              color: '#ff6b6b',
+              color: 'var(--error)',
               'font-size': '13px',
               'text-align': 'center',
               padding: '0 16px',

@@ -20,6 +20,7 @@ type MockStore = {
   showPromptInput: boolean;
   sidebarVisible: boolean;
   taskSplitMode: Record<string, boolean>;
+  pendingAction: { type: 'close' | 'merge' | 'push'; taskId: string } | null;
 };
 
 type MockTask = {
@@ -56,6 +57,10 @@ vi.mock('./navigation', () => ({
   }),
 }));
 
+vi.mock('./notification', () => ({
+  showNotification: vi.fn(),
+}));
+
 vi.mock('./sidebar-order', () => ({
   computeSidebarTaskOrder: vi.fn(() => mockStore.taskOrder),
 }));
@@ -70,8 +75,10 @@ import {
   navigateColumn,
   navigateRow,
   scrollTaskElementIntoView,
+  setPendingAction,
   setTaskFocusedPanel,
 } from './focus';
+import { showNotification } from './notification';
 
 function setTask(id: string, overrides: Record<string, unknown> = {}): void {
   mockStore.tasks[id] = {
@@ -87,6 +94,7 @@ function setTask(id: string, overrides: Record<string, unknown> = {}): void {
 }
 
 beforeEach(() => {
+  vi.clearAllMocks();
   const harness = expectDefined(core.harness, 'mock store harness');
   mockStore = harness.reset({
     activeTaskId: 'task-1',
@@ -107,6 +115,7 @@ beforeEach(() => {
     showPromptInput: true,
     sidebarVisible: true,
     taskSplitMode: {},
+    pendingAction: null,
   });
 
   vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => {
@@ -211,6 +220,29 @@ describe('focus navigation neighbor map', () => {
     navigateRow('down');
 
     expect(mockStore.focusedPanel['task-1']).toBe('shell:0');
+  });
+});
+
+describe('setPendingAction', () => {
+  it.each([
+    ['merge', 'Merge'],
+    ['push', 'Push'],
+  ] as const)('shows feedback instead of queuing %s for a direct task', (type, label) => {
+    setTask('task-1', { gitIsolation: 'direct' });
+
+    setPendingAction({ type, taskId: 'task-1' });
+
+    expect(showNotification).toHaveBeenCalledWith(`${label} is only available for worktree tasks`);
+    expect(mockStore.pendingAction).toBeNull();
+  });
+
+  it('queues git actions for worktree tasks', () => {
+    setTask('task-1', { gitIsolation: 'worktree' });
+
+    setPendingAction({ type: 'merge', taskId: 'task-1' });
+
+    expect(showNotification).not.toHaveBeenCalled();
+    expect(mockStore.pendingAction).toEqual({ type: 'merge', taskId: 'task-1' });
   });
 });
 

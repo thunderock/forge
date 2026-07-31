@@ -100,6 +100,10 @@ export interface Task {
   worktreePath: string;
   agentIds: string[];
   selectedAgentId?: string;
+  /** Layout for a task's AI terminals when it has more than one agent.
+   *  'split' (default) tiles them side by side; 'tabs' shows only the selected
+   *  agent, using the header agent chips as tabs. */
+  aiTerminalLayout?: 'split' | 'tabs';
   shellAgentIds: string[];
   notes: string;
   lastPrompt: string;
@@ -178,6 +182,7 @@ export interface PersistedTask {
   agentDefs?: AgentDef[];
   agentIds?: string[];
   selectedAgentId?: string;
+  aiTerminalLayout?: 'split' | 'tabs';
   gitIsolation: GitIsolationMode;
   baseBranch?: string;
   externalWorktree?: boolean;

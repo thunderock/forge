@@ -29,6 +29,7 @@ import { markDirty } from '../lib/terminalFitManager';
 import { theme } from '../lib/theme';
 import { mod } from '../lib/platform';
 import { createCtrlShiftWheelResizeHandler } from '../lib/wheelZoom';
+import { shouldAnimateTaskAppearance } from '../lib/reducedMotion';
 
 const VIEWPORT_EPSILON_PX = 4;
 
@@ -273,6 +274,7 @@ export function TilingLayout() {
           content: () => {
             const task = store.tasks[panelId];
             const terminal = store.terminals[panelId];
+            const appearanceClass = shouldAnimateTaskAppearance() ? 'task-appearing' : undefined;
             // eslint-disable-next-line solid/components-return-once
             if (!task && !terminal) return <div />;
             return (
@@ -281,7 +283,7 @@ export function TilingLayout() {
                 class={
                   task?.closingStatus === 'removing' || terminal?.closingStatus === 'removing'
                     ? 'task-removing'
-                    : 'task-appearing'
+                    : appearanceClass
                 }
                 style={{
                   height: '100%',
@@ -293,6 +295,10 @@ export function TilingLayout() {
                   'box-sizing': 'border-box',
                 }}
                 onAnimationEnd={(e) => {
+                  if (e.animationName === 'taskAppear')
+                    e.currentTarget.classList.remove('task-appearing');
+                }}
+                onAnimationCancel={(e) => {
                   if (e.animationName === 'taskAppear')
                     e.currentTarget.classList.remove('task-appearing');
                 }}

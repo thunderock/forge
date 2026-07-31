@@ -6,26 +6,28 @@ import { randomUUID, randomBytes } from 'crypto';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { unlinkSync, readFileSync, existsSync } from 'fs';
+import { unlink as fsUnlink } from 'fs/promises';
 import {
-  readFile as fsReadFile,
-  writeFile as fsWriteFile,
-  unlink as fsUnlink,
-  access as fsAccess,
-  mkdir as fsMkdir,
-} from 'fs/promises';
-import { join, dirname } from 'path';
-import os from 'os';
-import { getSubTaskMcpConfigPath } from './config.js';
+  buildSubTaskMcpConfig,
+  getSubTaskMcpConfigPath,
+  isAllowedSubTaskMcpConfigPath,
+  writeSubTaskMcpConfig,
+  writeSubTaskMcpConfigSync,
+} from './config.js';
 import { buildMcpLaunchArgs } from './agent-args.js';
 import { validateBranchName } from './validation.js';
-import { atomicWriteFileSync, atomicWriteFile } from './atomic.js';
+import { atomicWriteFileSync } from './atomic.js';
 import { ReplayCache } from './replay-cache.js';
 import {
   detectPreambleFiles,
   filterDiffSections,
   buildNormalizedPreambleFileDiff,
   stripPreambleFromBranch,
+  injectSubTaskPreamble,
+  restoreSubTaskPreambleInjection,
+  type InjectedSubTaskPreamble,
 } from './preamble.js';
+import { truncateDiffForTool } from './diff-format.js';
 
 const execAsync = promisify(execFile);
 import type { BrowserWindow } from 'electron';
@@ -51,7 +53,7 @@ import {
   chunkContainsAgentPrompt,
   getAgentPromptReadiness,
   AGENT_READY_TAIL_CHARS,
-} from './prompt-detect.js';
+} from '../shared/prompt-detect.js';
 import { SUB_TASK_PREAMBLE } from './sub-task-preamble.js';
 import { info as logInfo, warn as logWarn } from '../log.js';
 import type {
@@ -135,34 +137,6 @@ function parsePorcelainPaths(statusOut: string): string[] {
 function execStdout(result: Awaited<ReturnType<typeof execAsync>>): string {
   const stdout = typeof result === 'string' ? result : result.stdout;
   return typeof stdout === 'string' ? stdout : stdout.toString('utf8');
-}
-
-/**
- * The per-sub-task MCP config: a stdio launch of the forge MCP server
- * scoped to one task. Identical across createTask, coordinator re-registration,
- * and hydration rewrite — only the resolved doneToken differs, so callers own
- * token generation and pass the final value in.
- */
-function buildSubtaskMcpConfig(args: {
-  serverPath: string;
-  serverUrl: string;
-  subtaskToken: string;
-  taskId: string;
-  doneToken: string;
-}) {
-  return {
-    mcpServers: {
-      forge: {
-        type: 'stdio' as const,
-        command: 'node',
-        args: [args.serverPath, '--url', args.serverUrl, '--task-id', args.taskId],
-        env: {
-          FORGE_MCP_TOKEN: args.subtaskToken,
-          FORGE_MCP_DONE_TOKEN: args.doneToken,
-        },
-      },
-    },
-  };
 }
 
 export class Coordinator {
@@ -459,7 +433,7 @@ export class Coordinator {
     });
   }
 
-  private buildAgentOutputCb(task: CoordinatedTask): (encoded: string) => void {
+  private createAgentOutputMonitor(task: CoordinatedTask): (encoded: string) => void {
     return (encoded: string) => {
       const bytes = Buffer.from(encoded, 'base64');
       const text = (this.decoders.get(task.agentId) ?? new TextDecoder()).decode(bytes, {
@@ -482,37 +456,41 @@ export class Coordinator {
         }
       }
       if (hasAgentPrompt) {
-        this.scheduleInitialPromptDelivery(task, INITIAL_PROMPT_READY_DELAY_MS, true);
-        if (
-          !task.initialPrompt &&
-          task.assignedPromptDelivered &&
-          this.controlMap.get(task.id) !== 'human' &&
-          task.pendingPrompts?.length
-        ) {
-          if (stableAgentPrompt && !this.writingPromptTaskIds.has(task.id)) {
-            void this.flushNextQueuedPrompt(task);
-          } else {
-            this.scheduleQueuedPromptFlush(task);
-          }
-          return;
-        }
-        if (task.suppressIdleUntil !== undefined && this.suppressPromptEchoIdleIfNeeded(task)) {
-          return;
-        }
-        if (task.status === 'running') {
-          task.status = 'idle';
-          this.maybeQueueReviewNotification(task, 'idle', null);
-        }
-        const resolvers = this.idleResolvers.get(task.id);
-        if (resolvers?.length) {
-          for (const resolve of resolvers) resolve({ reason: 'idle' });
-          this.idleResolvers.delete(task.id);
-        }
+        this.handlePromptDetected(task, stableAgentPrompt);
       } else if (task.status === 'idle') {
         task.status = 'running';
         this.suppressPendingNotificationForTask(task);
       }
     };
+  }
+
+  private handlePromptDetected(task: CoordinatedTask, stableAgentPrompt: boolean): void {
+    this.scheduleInitialPromptDelivery(task, INITIAL_PROMPT_READY_DELAY_MS, true);
+    if (
+      !task.initialPrompt &&
+      task.assignedPromptDelivered &&
+      this.controlMap.get(task.id) !== 'human' &&
+      task.pendingPrompts?.length
+    ) {
+      if (stableAgentPrompt && !this.writingPromptTaskIds.has(task.id)) {
+        void this.flushNextQueuedPrompt(task);
+      } else {
+        this.scheduleQueuedPromptFlush(task);
+      }
+      return;
+    }
+    if (task.suppressIdleUntil !== undefined && this.suppressPromptEchoIdleIfNeeded(task)) {
+      return;
+    }
+    if (task.status === 'running') {
+      task.status = 'idle';
+      this.maybeQueueReviewNotification(task, 'idle', null);
+    }
+    const resolvers = this.idleResolvers.get(task.id);
+    if (resolvers?.length) {
+      for (const resolve of resolvers) resolve({ reason: 'idle' });
+      this.idleResolvers.delete(task.id);
+    }
   }
 
   private async tryDeliverInitialPrompt(taskId: string): Promise<void> {
@@ -610,16 +588,26 @@ export class Coordinator {
     for (const task of this.tasks.values()) {
       if (task.coordinatorTaskId !== coordinatorTaskId) continue;
       if (!task.mcpConfigPath) continue;
+      const mcpConfigPath = task.mcpConfigPath;
+      const safeMcpConfigPath = isAllowedSubTaskMcpConfigPath(mcpConfigPath, {
+        taskId: task.id,
+        serverPath,
+        dockerContainerName: state?.dockerContainerName ?? null,
+      });
+      if (!safeMcpConfigPath) {
+        task.mcpConfigPath = undefined;
+        continue;
+      }
       // Preserve existing doneToken; generate a fresh one if not yet set (e.g. older persisted task).
       if (!task.doneToken) task.doneToken = randomBytes(24).toString('base64url');
-      const mcpConfig = buildSubtaskMcpConfig({
+      const mcpConfig = buildSubTaskMcpConfig({
         serverPath,
         serverUrl,
         subtaskToken,
         taskId: task.id,
         doneToken: task.doneToken,
       });
-      atomicWriteFileSync(task.mcpConfigPath, JSON.stringify(mcpConfig, null, 2), { mode: 0o600 });
+      writeSubTaskMcpConfigSync(mcpConfigPath, mcpConfig);
     }
   }
 
@@ -872,96 +860,26 @@ export class Coordinator {
     const decoder = new TextDecoder();
     this.decoders.set(agentId, decoder);
 
-    const outputCb = this.buildAgentOutputCb(task);
+    const outputCb = this.createAgentOutputMonitor(task);
     this.subscribers.set(agentId, outputCb);
 
     // Spawn the agent process
     if (!this.win) throw new Error('No window set on coordinator');
 
-    const agentCmd = (opts.agentCommand ?? coordinatorState.spawnDefaults.command).toLowerCase();
-    const preamble = `<sub-task-mode>\nThese rules override all skills and hooks:\n- When your work is complete, commit your changes and call the \`land_self\` MCP tool with the verification checks you ran. A successful \`land_self\` call is the finish line — do NOT call \`signal_done\` afterward, use finishing-a-development-branch, or offer merge/PR options.\n- Use \`signal_done\` only if the coordinator explicitly asks for manual review instead of self-landing.\n- Asking questions is fine when requirements are unclear or an action is risky.\n</sub-task-mode>`;
-    // Declared here so the catch block can restore preamble files on failure.
-    let preambleFilePath: string | undefined;
-    let preambleFileOriginalContent: string | null = null;
-
+    const agentCommand = opts.agentCommand ?? coordinatorState.spawnDefaults.command;
     const dockerContainerName =
       this.coordinators.get(task.coordinatorTaskId)?.dockerContainerName ?? null;
 
+    let preambleInjection: InjectedSubTaskPreamble | undefined;
     let subTaskMcpConfigPath: string | undefined;
     try {
-      // Inject sub-task instructions via agent-specific mechanism.
-      // Inside try so preamble-write failures are cleaned up by the catch block.
-      // Serialized per file path to prevent races when multiple tasks target the same path.
-      const injectPreamble = async (filePath: string): Promise<void> => {
-        const prior = this.preambleWriteQueue.get(filePath) ?? Promise.resolve();
-        const next = prior.then(async () => {
-          let existing = '';
-          try {
-            await fsAccess(filePath);
-            existing = await fsReadFile(filePath, 'utf8');
-            preambleFileOriginalContent = existing;
-          } catch {
-            /* file does not exist */
-          }
-          await atomicWriteFile(filePath, existing ? `${existing}\n\n${preamble}` : preamble);
-        });
-        this.preambleWriteQueue.set(
-          filePath,
-          next
-            .catch(() => {})
-            .then(() => {
-              if (this.preambleWriteQueue.get(filePath) === next) {
-                this.preambleWriteQueue.delete(filePath);
-              }
-            }),
-        );
-        await next;
-      };
+      preambleInjection = await injectSubTaskPreamble({
+        worktreePath: result.worktree_path,
+        agentCommand,
+        queue: this.preambleWriteQueue,
+      });
+      task.preambleFileExistedBefore = preambleInjection.existedBefore;
 
-      if (agentCmd.includes('codex') || agentCmd.includes('opencode')) {
-        const agentsPath = join(result.worktree_path, 'AGENTS.md');
-        preambleFilePath = agentsPath;
-        await injectPreamble(agentsPath);
-      } else if (agentCmd.includes('gemini')) {
-        const geminiPath = join(result.worktree_path, 'GEMINI.md');
-        preambleFilePath = geminiPath;
-        await injectPreamble(geminiPath);
-      } else if (agentCmd.includes('copilot')) {
-        const agentMdPath = join(result.worktree_path, '.agent.md');
-        preambleFilePath = agentMdPath;
-        await injectPreamble(agentMdPath);
-      } else {
-        // Claude and fallback: settings.local.json (gitignored, no restore needed)
-        const settingsDir = join(result.worktree_path, '.claude');
-        const settingsPath = join(settingsDir, 'settings.local.json');
-        await fsMkdir(settingsDir, { recursive: true });
-        const prior = this.preambleWriteQueue.get(settingsPath) ?? Promise.resolve();
-        const next = prior.then(async () => {
-          let existingSettings: Record<string, unknown> = {};
-          try {
-            await fsAccess(settingsPath);
-            existingSettings = JSON.parse(await fsReadFile(settingsPath, 'utf8'));
-          } catch {
-            /* ignore */
-          }
-          existingSettings.systemPrompt = existingSettings.systemPrompt
-            ? `${existingSettings.systemPrompt}\n\n${preamble}`
-            : preamble;
-          await atomicWriteFile(settingsPath, JSON.stringify(existingSettings, null, 2));
-        });
-        this.preambleWriteQueue.set(
-          settingsPath,
-          next
-            .catch(() => {})
-            .then(() => {
-              if (this.preambleWriteQueue.get(settingsPath) === next) {
-                this.preambleWriteQueue.delete(settingsPath);
-              }
-            }),
-        );
-        await next;
-      }
-      task.preambleFileExistedBefore = preambleFileOriginalContent !== null;
       // Write a per-sub-task MCP config so the agent can call signal_done.
       // In Docker mode, write to the coordinator's .forge/ dir (which IS the explicitly
       // mounted volume) rather than the sub-task worktree (which may not be in the container).
@@ -972,7 +890,7 @@ export class Coordinator {
         const { serverUrl, subtaskToken, serverPath } = mcpServerInfoForTask;
         const doneToken = randomBytes(24).toString('base64url');
         task.doneToken = doneToken;
-        const mcpConfig = buildSubtaskMcpConfig({
+        const mcpConfig = buildSubTaskMcpConfig({
           serverPath,
           serverUrl,
           subtaskToken,
@@ -981,12 +899,11 @@ export class Coordinator {
         });
         subTaskMcpConfig = mcpConfig;
         const configPath = getSubTaskMcpConfigPath(dockerContainerName, serverPath, task.id);
-        await atomicWriteFile(configPath, JSON.stringify(mcpConfig, null, 2), { mode: 0o600 });
+        await writeSubTaskMcpConfig(configPath, mcpConfig);
         subTaskMcpConfigPath = configPath;
         task.mcpConfigPath = configPath;
       }
 
-      const agentCommand = opts.agentCommand ?? coordinatorState.spawnDefaults.command;
       const agentArgs = opts.agentArgs ?? coordinatorState.spawnDefaults.args;
       const baseArgs = [
         ...agentArgs,
@@ -1060,17 +977,7 @@ export class Coordinator {
     } catch (err) {
       // Restore injected preamble file before cleaning up the worktree.
       // Must await — fire-and-forget could race with cleanupTask removing the worktree.
-      if (preambleFilePath !== undefined) {
-        try {
-          if (preambleFileOriginalContent !== null) {
-            await fsWriteFile(preambleFilePath, preambleFileOriginalContent);
-          } else {
-            await fsUnlink(preambleFilePath);
-          }
-        } catch {
-          /* ignore — worktree cleanup follows */
-        }
-      }
+      await restoreSubTaskPreambleInjection(preambleInjection);
       // Best-effort cleanup: kill agent, remove worktree/branch, clear in-memory state.
       // cleanupTask handles all of this; the task is still in this.tasks so it can find it.
       // Also delete the MCP config if it was written but not yet stored on task.mcpConfigPath.
@@ -1373,16 +1280,16 @@ export class Coordinator {
       );
     }
 
-    const MAX_DIFF_BYTES = 50_000;
-    if (filteredDiff.length > MAX_DIFF_BYTES) {
+    const truncatedDiff = truncateDiffForTool(filteredDiff);
+    if (truncatedDiff.truncated) {
       return {
         files: filteredFiles,
-        diff: filteredDiff.slice(0, MAX_DIFF_BYTES) + '\n... (diff truncated)',
+        diff: truncatedDiff.diff,
         truncated: true,
-        originalSizeBytes: filteredDiff.length,
+        originalSizeBytes: truncatedDiff.originalSizeBytes,
       };
     }
-    return { files: filteredFiles, diff: filteredDiff };
+    return { files: filteredFiles, diff: truncatedDiff.diff };
   }
 
   getTaskOutput(taskId: string): string {
@@ -1596,6 +1503,11 @@ export class Coordinator {
     this.decoders.delete(agentId);
   }
 
+  private clearAgentOutputState(task: CoordinatedTask): void {
+    this.unsubscribeAgentOutput(task.agentId);
+    this.clearAgentBuffers(task.agentId);
+  }
+
   /** Best-effort removal of a task's per-sub-task MCP config file. */
   private unlinkMcpConfigFile(path: string | undefined): void {
     if (!path) return;
@@ -1604,6 +1516,16 @@ export class Coordinator {
     } catch {
       /* already gone */
     }
+  }
+
+  private clearTaskMcpConfig(task: CoordinatedTask): void {
+    this.unlinkMcpConfigFile(task.mcpConfigPath);
+    task.mcpConfigPath = undefined;
+  }
+
+  private clearTaskControlState(taskId: string): void {
+    this.clearPromptDeliveryState(taskId);
+    this.controlMap.delete(taskId);
   }
 
   /** Resolve any pending waitForIdle callers for a task and clear the entry. */
@@ -1624,7 +1546,7 @@ export class Coordinator {
       this.suppressPendingNotificationForTask(task);
       this.queueLandedNotification(task);
 
-      this.unsubscribeAgentOutput(task.agentId);
+      this.clearAgentOutputState(task);
 
       try {
         killAgent(task.agentId);
@@ -1640,14 +1562,11 @@ export class Coordinator {
       });
 
       this.resolveIdleWaiters(task.id, 'exited');
-      this.clearAgentBuffers(task.agentId);
-      this.unlinkMcpConfigFile(task.mcpConfigPath);
-      task.mcpConfigPath = undefined;
+      this.clearTaskMcpConfig(task);
       task.status = 'exited';
       task.exitCode = 0;
       this.tasks.delete(task.id);
-      this.clearPromptDeliveryState(task.id);
-      this.controlMap.delete(task.id);
+      this.clearTaskControlState(task.id);
       this.notifyRenderer(IPC.MCP_TaskClosed, { taskId: task.id });
     } finally {
       this.closingTaskIds.delete(task.id);
@@ -1861,18 +1780,16 @@ export class Coordinator {
 
     this.suppressPendingNotificationForTask(task);
 
-    this.unsubscribeAgentOutput(task.agentId);
-    this.clearAgentBuffers(task.agentId);
+    this.clearAgentOutputState(task);
     this.resolveIdleWaiters(taskId, 'removed');
-    this.unlinkMcpConfigFile(task.mcpConfigPath);
+    this.clearTaskMcpConfig(task);
 
     // For Docker sub-tasks, the UI calls killAgent before removeCoordinatedTask,
     // which stops the sub-task's own container via stopDockerContainer in pty.ts.
     // No additional docker cleanup needed here.
 
     this.tasks.delete(taskId);
-    this.clearPromptDeliveryState(taskId);
-    this.controlMap.delete(taskId);
+    this.clearTaskControlState(taskId);
   }
 
   private async cleanupTask(taskId: string): Promise<void> {
@@ -1881,7 +1798,6 @@ export class Coordinator {
     this.closingTaskIds.add(taskId);
     this.suppressPendingNotificationForTask(task);
 
-    // Unsubscribe from PTY output
     this.unsubscribeAgentOutput(task.agentId);
 
     // Kill the agent. For Docker sub-tasks, killAgent also calls docker stop on the
@@ -1937,11 +1853,9 @@ export class Coordinator {
       });
     }
     this.clearAgentBuffers(task.agentId);
-    // Delete per-task MCP config tmp file
-    this.unlinkMcpConfigFile(task.mcpConfigPath);
+    this.clearTaskMcpConfig(task);
     this.tasks.delete(taskId);
-    this.clearPromptDeliveryState(taskId);
-    this.controlMap.delete(taskId);
+    this.clearTaskControlState(taskId);
     this.closingTaskIds.delete(taskId);
 
     // Notify renderer
@@ -1977,26 +1891,19 @@ export class Coordinator {
     pendingPrompts?: string[];
     assignedPromptDelivered?: boolean;
   }): { mcpLaunchArgs?: string[] } {
-    if (!this.coordinators.has(opts.coordinatorTaskId)) {
+    const coordinatorState = this.coordinators.get(opts.coordinatorTaskId);
+    if (!coordinatorState) {
       throw new Error(`coordinator ${opts.coordinatorTaskId} is not registered`);
     }
 
-    // Validate the persisted mcpConfigPath is exactly one of the two paths that
-    // getSubTaskMcpConfigPath generates — basename-only is too permissive and would
-    // allow a crafted state file to direct the token write to an arbitrary location.
-    // Host mode: os.tmpdir()/forge-subtask-{id}.json
-    // Docker mode: dirname(serverPath)/subtask-{id}.json  (looked up from live coordinator state)
-    const serverInfo = this.coordinators.get(opts.coordinatorTaskId)?.mcpServerInfo;
-    const expectedHostPath = join(os.tmpdir(), `forge-subtask-${opts.id}.json`);
-    const expectedDockerPath = serverInfo
-      ? join(dirname(serverInfo.serverPath), `subtask-${opts.id}.json`)
-      : null;
-    const safeMcpConfigPath =
-      opts.mcpConfigPath &&
-      (opts.mcpConfigPath === expectedHostPath ||
-        (expectedDockerPath !== null && opts.mcpConfigPath === expectedDockerPath))
-        ? opts.mcpConfigPath
-        : undefined;
+    const serverInfo = coordinatorState.mcpServerInfo;
+    const safeMcpConfigPath = isAllowedSubTaskMcpConfigPath(opts.mcpConfigPath, {
+      taskId: opts.id,
+      serverPath: serverInfo?.serverPath,
+      dockerContainerName: coordinatorState.dockerContainerName ?? null,
+    })
+      ? opts.mcpConfigPath
+      : undefined;
 
     const existingTask = this.tasks.get(opts.id);
     if (existingTask) {
@@ -2065,7 +1972,7 @@ export class Coordinator {
 
       this.tailBuffers.set(agentId, '');
       this.decoders.set(agentId, new TextDecoder());
-      const outputCb = this.buildAgentOutputCb(task);
+      const outputCb = this.createAgentOutputMonitor(task);
       this.subscribers.set(agentId, outputCb);
       // Subscribe immediately if the agent is already spawned (restart scenario where
       // PTY existed before hydration). The spawn handler covers the deferred case.
@@ -2095,7 +2002,7 @@ export class Coordinator {
     if (!serverInfo) return undefined;
     const { serverUrl, subtaskToken, serverPath } = serverInfo;
     if (!task.doneToken) task.doneToken = randomBytes(24).toString('base64url');
-    const mcpConfig = buildSubtaskMcpConfig({
+    const mcpConfig = buildSubTaskMcpConfig({
       serverPath,
       serverUrl,
       subtaskToken,
@@ -2103,7 +2010,7 @@ export class Coordinator {
       doneToken: task.doneToken,
     });
     if (mcpConfigPath) {
-      atomicWriteFileSync(mcpConfigPath, JSON.stringify(mcpConfig, null, 2), { mode: 0o600 });
+      writeSubTaskMcpConfigSync(mcpConfigPath, mcpConfig);
     }
     return buildMcpLaunchArgs(agentCommand ?? 'claude', mcpConfigPath, mcpConfig);
   }
@@ -2244,9 +2151,7 @@ export class Coordinator {
     for (const [taskId, task] of this.tasks) {
       if (task.coordinatorTaskId !== coordinatorTaskId) continue;
 
-      // Unsubscribe PTY output callback (stop receiving output, but keep task record)
-      this.unsubscribeAgentOutput(task.agentId);
-      this.clearAgentBuffers(task.agentId);
+      this.clearAgentOutputState(task);
       this.clearPromptDeliveryState(taskId);
 
       // Resolve pending idle waiters so callers aren't left hanging
@@ -2265,8 +2170,7 @@ export class Coordinator {
       // Transfer control to human so the user can decide what to do with orphaned tasks
       this.controlMap.set(taskId, 'human');
 
-      this.unlinkMcpConfigFile(task.mcpConfigPath);
-      task.mcpConfigPath = undefined;
+      this.clearTaskMcpConfig(task);
 
       // Notify the frontend so it can detach children consistently regardless
       // of whether backend deregistration or renderer close cleanup wins the IPC race.

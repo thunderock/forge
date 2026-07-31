@@ -4,6 +4,10 @@ import fs from 'fs';
 import path from 'path';
 import type { BrowserWindow } from 'electron';
 import { debug as logDebug } from '../log.js';
+import { appendGitInfoExcludeBlockAtPath, resolveGitInfoExcludePath } from './git-exclude.js';
+import type { ChangedFile, CommitInfo, FileDiffResult } from './shared-types.js';
+
+export type { ChangedFile, CommitInfo, FileDiffResult } from './shared-types.js';
 
 const _exec = promisify(execFile);
 
@@ -21,17 +25,6 @@ const execFileSync: typeof _execFileSync = ((cmd: string, args: string[], option
   if (cmd === 'git') logDebug('git', args.join(' '));
   return (_execFileSync as unknown as (...a: unknown[]) => unknown)(cmd, args, options);
 }) as typeof _execFileSync;
-
-// --- Types ---
-
-/** A file entry from a git diff with status and line counts. */
-export interface ChangedFile {
-  path: string;
-  lines_added: number;
-  lines_removed: number;
-  status: string;
-  committed: boolean;
-}
 
 // --- TTL Caches ---
 
@@ -581,10 +574,57 @@ function parseDiffRawNumstat(output: string): {
   return { statusMap, numstatMap };
 }
 
+export function changedFilesFromMaps(opts: {
+  statusMap: Map<string, string>;
+  numstatMap: Map<string, [number, number]>;
+  committed: boolean | ((filePath: string) => boolean);
+  sort?: boolean;
+}): ChangedFile[] {
+  const files: ChangedFile[] = [];
+  const seen = new Set<string>();
+  const committedFor = (filePath: string) =>
+    typeof opts.committed === 'function' ? opts.committed(filePath) : opts.committed;
+
+  for (const [p, [added, removed]] of opts.numstatMap) {
+    seen.add(p);
+    files.push({
+      path: p,
+      lines_added: added,
+      lines_removed: removed,
+      status: opts.statusMap.get(p) ?? 'M',
+      committed: committedFor(p),
+    });
+  }
+
+  for (const [p, status] of opts.statusMap) {
+    if (seen.has(p)) continue;
+    files.push({
+      path: p,
+      lines_added: 0,
+      lines_removed: 0,
+      status,
+      committed: committedFor(p),
+    });
+  }
+
+  if (opts.sort !== false) files.sort((a, b) => a.path.localeCompare(b.path));
+  return files;
+}
+
 function splitContentLines(content: string): string[] {
   if (content.length === 0) return [];
   const lines = content.split('\n');
   return content.endsWith('\n') ? lines.slice(0, -1) : lines;
+}
+
+export async function countReadableTextLines(filePath: string): Promise<number> {
+  try {
+    const stat = await fs.promises.stat(filePath);
+    if (!stat.isFile() || stat.size >= MAX_BUFFER) return 0;
+    return splitContentLines(await fs.promises.readFile(filePath, 'utf8')).length;
+  } catch {
+    return 0;
+  }
 }
 
 function parseConflictPath(line: string): string | null {
@@ -870,47 +910,15 @@ export function ensureClaudeSandboxFiles(worktreePath: string, repoRoot?: string
  * process lifetime.
  */
 export function ensureSandboxExcludes(worktreePath: string): void {
-  let commonDir: string;
-  try {
-    const out = execFileSync('git', ['rev-parse', '--git-common-dir'], {
-      cwd: worktreePath,
-      encoding: 'utf8',
-      timeout: 3000,
-    }).trim();
-    commonDir = path.isAbsolute(out) ? out : path.join(worktreePath, out);
-  } catch {
-    return;
-  }
-
-  if (seededSandboxExcludes.has(commonDir)) return;
-
-  const excludePath = path.join(commonDir, 'info', 'exclude');
-  let existing = '';
-  try {
-    existing = fs.readFileSync(excludePath, 'utf8');
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code !== 'ENOENT') {
-      console.warn(`Failed to read ${excludePath}:`, err);
-      return;
-    }
-    // File is absent — `.git/info/` itself is guaranteed by `git init`, so no mkdir needed.
-  }
-
-  if (existing.includes(SANDBOX_EXCLUDE_HEADER)) {
-    seededSandboxExcludes.add(commonDir);
-    return;
-  }
-
-  const prefix = existing.length > 0 && !existing.endsWith('\n') ? '\n' : '';
-  const block = prefix + SANDBOX_EXCLUDE_HEADER + '\n' + SANDBOX_EXCLUDE_PATTERNS.join('\n') + '\n';
-
-  try {
-    fs.appendFileSync(excludePath, block);
-    seededSandboxExcludes.add(commonDir);
-  } catch (err) {
-    console.warn(`Failed to append to ${excludePath}:`, err);
-  }
+  const excludePath = resolveGitInfoExcludePath(worktreePath, execFileSync);
+  if (!excludePath || seededSandboxExcludes.has(excludePath)) return;
+  const result = appendGitInfoExcludeBlockAtPath(
+    excludePath,
+    SANDBOX_EXCLUDE_HEADER,
+    `${SANDBOX_EXCLUDE_HEADER}\n${SANDBOX_EXCLUDE_PATTERNS.join('\n')}\n`,
+    (err) => console.warn(`Failed to append to ${excludePath}:`, err),
+  );
+  if (result === 'appended' || result === 'present') seededSandboxExcludes.add(excludePath);
 }
 
 /**
@@ -924,19 +932,8 @@ export function ensureSandboxExcludes(worktreePath: string): void {
 export function ensureSymlinkExcludes(worktreePath: string, symlinkNames: string[]): void {
   if (symlinkNames.length === 0) return;
 
-  let commonDir: string;
-  try {
-    const out = execFileSync('git', ['rev-parse', '--git-common-dir'], {
-      cwd: worktreePath,
-      encoding: 'utf8',
-      timeout: 3000,
-    }).trim();
-    commonDir = path.isAbsolute(out) ? out : path.join(worktreePath, out);
-  } catch {
-    return;
-  }
-
-  const excludePath = path.join(commonDir, 'info', 'exclude');
+  const excludePath = resolveGitInfoExcludePath(worktreePath);
+  if (!excludePath) return;
   let existing = '';
   try {
     existing = fs.readFileSync(excludePath, 'utf8');
@@ -957,15 +954,14 @@ export function ensureSymlinkExcludes(worktreePath: string, symlinkNames: string
   if (toAdd.length === 0) return;
 
   const needsHeader = !existing.includes(SYMLINK_EXCLUDE_HEADER);
-  const prefix = existing.length > 0 && !existing.endsWith('\n') ? '\n' : '';
   const header = needsHeader ? SYMLINK_EXCLUDE_HEADER + '\n' : '';
-  const block = prefix + header + toAdd.join('\n') + '\n';
-
-  try {
-    fs.appendFileSync(excludePath, block);
-  } catch (err) {
-    console.warn(`Failed to append to ${excludePath}:`, err);
-  }
+  appendGitInfoExcludeBlockAtPath(
+    excludePath,
+    toAdd[0],
+    `${header}${toAdd.join('\n')}\n`,
+    (err) => console.warn(`Failed to append to ${excludePath}:`, err),
+    existing,
+  );
 }
 
 /**
@@ -1129,43 +1125,21 @@ export async function getChangedFiles(
     if (p) untrackedPaths.add(p);
   }
 
-  const files: ChangedFile[] = [];
-  const seen = new Set<string>();
-
   const isCommitted = (p: string) =>
     !uncommittedNumstatMap.has(p) && !uncommittedStatusMap.has(p) && !untrackedPaths.has(p);
 
-  // Final file stats from merge-base -> working tree. This matches the diff body
-  // shown in all-changes mode, including committed work plus tracked local edits.
-  for (const [p, [added, removed]] of finalNumstatMap) {
-    const status = finalStatusMap.get(p) ?? 'M';
-    const committed = isCommitted(p);
-    seen.add(p);
-    files.push({ path: p, lines_added: added, lines_removed: removed, status, committed });
-  }
-
-  // Binary/special files (in statusMap but not numstatMap)
-  for (const [p, status] of finalStatusMap) {
-    if (seen.has(p)) continue;
-    const committed = isCommitted(p);
-    seen.add(p);
-    files.push({ path: p, lines_added: 0, lines_removed: 0, status, committed });
-  }
+  const files = changedFilesFromMaps({
+    statusMap: finalStatusMap,
+    numstatMap: finalNumstatMap,
+    committed: isCommitted,
+    sort: false,
+  });
+  const seen = new Set(files.map((file) => file.path));
 
   // Untracked (new) files: count all lines as added
   for (const p of untrackedPaths) {
     if (seen.has(p)) continue;
-    let added = 0;
-    const fullPath = path.join(worktreePath, p);
-    try {
-      const stat = await fs.promises.stat(fullPath);
-      if (stat.isFile() && stat.size < MAX_BUFFER) {
-        const content = await fs.promises.readFile(fullPath, 'utf8');
-        added = splitContentLines(content).length;
-      }
-    } catch {
-      /* ignore */
-    }
+    const added = await countReadableTextLines(path.join(worktreePath, p));
     files.push({ path: p, lines_added: added, lines_removed: 0, status: '?', committed: false });
   }
 
@@ -1243,18 +1217,7 @@ async function getUntrackedChangedFiles(
     if (!p || seen.has(p)) continue;
     seen.add(p);
 
-    let added = 0;
-    const fullPath = path.join(worktreePath, p);
-    try {
-      const stat = await fs.promises.stat(fullPath);
-      if (stat.isFile() && stat.size < MAX_BUFFER) {
-        const content = await fs.promises.readFile(fullPath, 'utf8');
-        added = splitContentLines(content).length;
-      }
-    } catch {
-      /* ignore */
-    }
-
+    const added = await countReadableTextLines(path.join(worktreePath, p));
     files.push({ path: p, lines_added: added, lines_removed: 0, status: '?', committed: false });
   }
   return files;
@@ -1331,20 +1294,8 @@ export async function getUncommittedChangedFiles(worktreePath: string): Promise<
   }
 
   const { statusMap, numstatMap } = parseDiffRawNumstat(diffStr);
-  const files: ChangedFile[] = [];
-  const seen = new Set<string>();
-
-  for (const [p, [added, removed]] of numstatMap) {
-    const status = statusMap.get(p) ?? 'M';
-    seen.add(p);
-    files.push({ path: p, lines_added: added, lines_removed: removed, status, committed: false });
-  }
-
-  for (const [p, status] of statusMap) {
-    if (seen.has(p)) continue;
-    seen.add(p);
-    files.push({ path: p, lines_added: 0, lines_removed: 0, status, committed: false });
-  }
+  const files = changedFilesFromMaps({ statusMap, numstatMap, committed: false, sort: false });
+  const seen = new Set(files.map((file) => file.path));
 
   files.push(...(await getUntrackedChangedFiles(worktreePath, seen)));
   files.sort((a, b) => a.path.localeCompare(b.path));
@@ -1366,12 +1317,6 @@ export async function getAllFileDiffsFromBranch(
   } catch {
     return '';
   }
-}
-
-interface FileDiffResult {
-  diff: string;
-  oldContent: string;
-  newContent: string;
 }
 
 export async function getFileDiff(
@@ -1813,21 +1758,7 @@ export async function getChangedFilesFromBranch(
 
   const { statusMap, numstatMap } = parseDiffRawNumstat(diffStr);
 
-  const files: ChangedFile[] = [];
-
-  for (const [p, [added, removed]] of numstatMap) {
-    const status = statusMap.get(p) ?? 'M';
-    files.push({ path: p, lines_added: added, lines_removed: removed, status, committed: true });
-  }
-
-  // Include files in statusMap but not in numstat (e.g. binary files)
-  for (const [p, status] of statusMap) {
-    if (numstatMap.has(p)) continue;
-    files.push({ path: p, lines_added: 0, lines_removed: 0, status, committed: true });
-  }
-
-  files.sort((a, b) => a.path.localeCompare(b.path));
-  return files;
+  return changedFilesFromMaps({ statusMap, numstatMap, committed: true });
 }
 
 export async function getFileDiffFromBranch(
@@ -1964,11 +1895,6 @@ export async function isGitRepo(dirPath: string): Promise<boolean> {
 
 // --- Per-commit operations ---
 
-export interface CommitInfo {
-  hash: string;
-  message: string;
-}
-
 export async function getBranchCommits(
   worktreePath: string,
   baseBranch?: string,
@@ -2060,18 +1986,7 @@ export async function getCommitChangedFiles(
 
   const { statusMap, numstatMap } = parseDiffRawNumstat(diffStr);
 
-  const files: ChangedFile[] = [];
-  for (const [p, [added, removed]] of numstatMap) {
-    const status = statusMap.get(p) ?? 'M';
-    files.push({ path: p, lines_added: added, lines_removed: removed, status, committed: true });
-  }
-  for (const [p, status] of statusMap) {
-    if (numstatMap.has(p)) continue;
-    files.push({ path: p, lines_added: 0, lines_removed: 0, status, committed: true });
-  }
-
-  files.sort((a, b) => a.path.localeCompare(b.path));
-  return files;
+  return changedFilesFromMaps({ statusMap, numstatMap, committed: true });
 }
 
 export async function getCommitDiffs(worktreePath: string, commitHash: string): Promise<string> {

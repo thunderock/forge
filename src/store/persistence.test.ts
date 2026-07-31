@@ -296,6 +296,80 @@ describe('PR URL persistence', () => {
   });
 });
 
+describe('AI terminal layout persistence', () => {
+  it('persists a task tabbed layout choice', async () => {
+    setStore('taskOrder', ['task-1']);
+    setStore('tasks', {
+      'task-1': {
+        id: 'task-1',
+        name: 'Task',
+        projectId: 'project-1',
+        branchName: 'task/task-1',
+        worktreePath: '/repo/.worktrees/task-1',
+        agentIds: [],
+        shellAgentIds: [],
+        notes: '',
+        lastPrompt: '',
+        gitIsolation: 'worktree',
+        aiTerminalLayout: 'tabs',
+      },
+    });
+    mockInvoke.mockResolvedValueOnce(undefined);
+
+    await saveState();
+
+    const saved = JSON.parse(mockInvoke.mock.calls[0][1].json);
+    expect(saved.tasks['task-1'].aiTerminalLayout).toBe('tabs');
+  });
+
+  it('restores a tabbed layout and defaults the rest to split (undefined)', async () => {
+    const def = agentDef();
+    mockInvoke.mockResolvedValueOnce(
+      JSON.stringify({
+        projects: [{ id: 'project-1', name: 'Repo', path: '/repo', color: 'hsl(0, 70%, 75%)' }],
+        lastProjectId: 'project-1',
+        lastAgentId: null,
+        taskOrder: ['task-1', 'task-2'],
+        collapsedTaskOrder: [],
+        tasks: {
+          'task-1': { ...persistedTask(def), aiTerminalLayout: 'tabs' },
+          'task-2': { ...persistedTask(def), id: 'task-2', aiTerminalLayout: 'nonsense' },
+        },
+        activeTaskId: 'task-1',
+        sidebarVisible: true,
+      }),
+    );
+
+    await loadState();
+
+    expect(store.tasks['task-1'].aiTerminalLayout).toBe('tabs');
+    // Unknown/absent values fall back to the default (split → undefined).
+    expect(store.tasks['task-2'].aiTerminalLayout).toBeUndefined();
+  });
+
+  it('restores a tabbed layout for a collapsed task', async () => {
+    const def = agentDef();
+    mockInvoke.mockResolvedValueOnce(
+      JSON.stringify({
+        projects: [{ id: 'project-1', name: 'Repo', path: '/repo', color: 'hsl(0, 70%, 75%)' }],
+        lastProjectId: 'project-1',
+        lastAgentId: null,
+        taskOrder: [],
+        collapsedTaskOrder: ['task-1'],
+        tasks: {
+          'task-1': { ...persistedTask(def), collapsed: true, aiTerminalLayout: 'tabs' },
+        },
+        activeTaskId: null,
+        sidebarVisible: true,
+      }),
+    );
+
+    await loadState();
+
+    expect(store.tasks['task-1'].aiTerminalLayout).toBe('tabs');
+  });
+});
+
 // Minimal valid payload — no theme fields — used as a base for theme migration tests.
 function basePayload(overrides: Record<string, unknown> = {}): string {
   return JSON.stringify({

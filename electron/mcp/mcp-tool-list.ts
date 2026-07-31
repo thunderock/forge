@@ -175,20 +175,6 @@ export const COORDINATOR_TOOLS: ToolDef[] = [
       required: [],
     },
   },
-  {
-    name: 'review_and_merge_task',
-    description:
-      'DEPRECATED: use get_task_diff → merge_task → close_task instead. This tool merges immediately without giving you a chance to review the diff first — the diff it returns is post-merge. Kept for backwards compatibility only.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        taskId: { type: 'string', description: 'Task ID' },
-        squash: { type: 'boolean', description: 'Squash merge (default: false)' },
-        message: { type: 'string', description: 'Custom merge commit message' },
-      },
-      required: ['taskId'],
-    },
-  },
 ];
 
 /**

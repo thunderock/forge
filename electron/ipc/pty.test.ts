@@ -100,6 +100,7 @@ vi.mock('../log.js', () => ({
 
 import {
   agentHomeDir,
+  buildPtySpawnEnv,
   buildDockerImage,
   cleanupAgentHome,
   DOCKER_CONTAINER_HOME,
@@ -232,6 +233,32 @@ afterEach(() => {
 describe('DOCKER_CONTAINER_HOME', () => {
   it('is a fixed, user-owned writable HOME off /tmp (bind-mounted per agent)', () => {
     expect(DOCKER_CONTAINER_HOME).toBe('/home/forge');
+  });
+});
+
+describe('buildPtySpawnEnv', () => {
+  it('applies safe renderer overrides and clears nested agent markers', () => {
+    vi.stubEnv('CLAUDECODE', '1');
+    vi.stubEnv('CLAUDE_CODE_SESSION', 'session');
+    vi.stubEnv('FORGE_MCP_TOKEN', 'host-token');
+
+    const env = buildPtySpawnEnv({
+      CUSTOM_ENV: 'ok',
+      PATH: '/tmp/bad-path',
+      HOME: '/tmp/bad-home',
+      NODE_OPTIONS: '--require bad',
+      FORGE_MCP_TOKEN: 'renderer-token',
+    });
+
+    expect(env.CUSTOM_ENV).toBe('ok');
+    expect(env.TERM).toBe('xterm-256color');
+    expect(env.COLORTERM).toBe('truecolor');
+    expect(env.PATH).not.toBe('/tmp/bad-path');
+    expect(env.HOME).not.toBe('/tmp/bad-home');
+    expect(env.NODE_OPTIONS).not.toBe('--require bad');
+    expect(env.FORGE_MCP_TOKEN).toBe('host-token');
+    expect(env.CLAUDECODE).toBeUndefined();
+    expect(env.CLAUDE_CODE_SESSION).toBeUndefined();
   });
 });
 

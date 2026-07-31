@@ -1,5 +1,6 @@
 // REST helpers for the mobile SPA. Data flows over the WebSocket (see ws.ts);
-// these cover the request/response actions: pairing and task creation.
+// these cover the request/response actions: pairing, task creation, and
+// reading/saving task notes.
 
 import { getToken, getPairedToken } from './auth';
 
@@ -74,4 +75,25 @@ export async function createTask(input: {
     token,
   });
   return r.taskId;
+}
+
+/** Fetch the notes for a task. Works with the base connection token. */
+export async function fetchNotes(taskId: string): Promise<string> {
+  const token = getToken();
+  if (!token) throw new ApiError('Not connected', 401);
+  const r = await request<{ notes: string }>(`/api/mobile/notes/${encodeURIComponent(taskId)}`, {
+    token,
+  });
+  return r.notes;
+}
+
+/** Save the notes for a task. Works with the base connection token. */
+export async function saveNotes(taskId: string, notes: string): Promise<void> {
+  const token = getToken();
+  if (!token) throw new ApiError('Not connected', 401);
+  await request<{ ok: boolean }>(`/api/mobile/notes/${encodeURIComponent(taskId)}`, {
+    method: 'PUT',
+    body: { notes },
+    token,
+  });
 }

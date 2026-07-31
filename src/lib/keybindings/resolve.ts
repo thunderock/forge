@@ -1,41 +1,54 @@
 import type { KeyBinding, KeybindingConfig, Modifiers } from './types';
 import { getPreset } from './presets';
-
-// Safe platform detection — navigator may not exist in test/SSR environments
-const isMac: boolean =
-  typeof navigator !== 'undefined' ? navigator.userAgent.includes('Mac') : false;
+import { isMacPlatform, modifiersMatch } from './match';
 
 function platformMatches(binding: KeyBinding): boolean {
   if (binding.platform === 'both') return true;
-  if (binding.platform === 'mac') return isMac;
-  if (binding.platform === 'linux') return !isMac;
+  if (binding.platform === 'mac') return isMacPlatform;
+  if (binding.platform === 'linux') return !isMacPlatform;
   return true;
 }
 
-/**
- * Semantically compare two modifier sets, accounting for platform equivalence.
- * On macOS: cmdOrCtrl and meta both mean "Cmd key" — they're equivalent.
- * On Linux: cmdOrCtrl and ctrl both mean "Ctrl key" — they're equivalent.
- */
-function modifiersMatch(a: Modifiers, b: Modifiers): boolean {
-  // Normalize: resolve cmdOrCtrl into the platform-specific modifier
-  const aCmd = isMac
-    ? (a.cmdOrCtrl ?? false) || (a.meta ?? false)
-    : (a.cmdOrCtrl ?? false) || (a.ctrl ?? false);
-  const bCmd = isMac
-    ? (b.cmdOrCtrl ?? false) || (b.meta ?? false)
-    : (b.cmdOrCtrl ?? false) || (b.ctrl ?? false);
+interface ResolvedBindingState {
+  binding: KeyBinding;
+  unbound: boolean;
+}
 
-  // On macOS, raw ctrl (without cmdOrCtrl) is a separate modifier
-  const aCtrl = isMac ? (a.ctrl ?? false) && !(a.cmdOrCtrl ?? false) : false;
-  const bCtrl = isMac ? (b.ctrl ?? false) && !(b.cmdOrCtrl ?? false) : false;
+function resolveOneBindingState(
+  binding: KeyBinding,
+  config: KeybindingConfig,
+): ResolvedBindingState | null {
+  if (!platformMatches(binding)) return null;
 
-  return (
-    aCmd === bCmd &&
-    aCtrl === bCtrl &&
-    (a.alt ?? false) === (b.alt ?? false) &&
-    (a.shift ?? false) === (b.shift ?? false)
-  );
+  const preset = getPreset(config.preset);
+  const userOverride = Object.prototype.hasOwnProperty.call(config.userOverrides, binding.id)
+    ? config.userOverrides[binding.id]
+    : undefined;
+
+  const presetOverride = Object.prototype.hasOwnProperty.call(preset.overrides, binding.id)
+    ? preset.overrides[binding.id]
+    : undefined;
+
+  const unbound = userOverride === null || (presetOverride === null && userOverride === undefined);
+
+  if (unbound) {
+    return { binding: { ...binding, unbound: true }, unbound: true };
+  }
+
+  const key = userOverride?.key ?? presetOverride?.key ?? binding.key;
+  const modifiers: Modifiers =
+    userOverride?.modifiers ?? presetOverride?.modifiers ?? binding.modifiers;
+
+  return { binding: { ...binding, key, modifiers }, unbound: false };
+}
+
+export function resolveOneBinding(
+  binding: KeyBinding,
+  config: KeybindingConfig,
+): KeyBinding | null {
+  const resolved = resolveOneBindingState(binding, config);
+  if (!resolved || resolved.unbound) return null;
+  return resolved.binding;
 }
 
 /**
@@ -46,33 +59,11 @@ function modifiersMatch(a: Modifiers, b: Modifiers): boolean {
  * A null override removes (unbinds) the binding.
  */
 export function resolveBindings(defaults: KeyBinding[], config: KeybindingConfig): KeyBinding[] {
-  const preset = getPreset(config.preset);
   const resolved: KeyBinding[] = [];
 
   for (const binding of defaults) {
-    // Filter by current platform
-    if (!platformMatches(binding)) continue;
-
-    const userOverride = Object.prototype.hasOwnProperty.call(config.userOverrides, binding.id)
-      ? config.userOverrides[binding.id]
-      : undefined;
-
-    const presetOverride = Object.prototype.hasOwnProperty.call(preset.overrides, binding.id)
-      ? preset.overrides[binding.id]
-      : undefined;
-
-    // User override of null always unbinds
-    if (userOverride === null) continue;
-
-    // Preset override of null unbinds unless the user has a non-null override
-    if (presetOverride === null && userOverride === undefined) continue;
-
-    // Apply overrides: user > preset > default
-    const key = userOverride?.key ?? presetOverride?.key ?? binding.key;
-    const modifiers: Modifiers =
-      userOverride?.modifiers ?? presetOverride?.modifiers ?? binding.modifiers;
-
-    resolved.push({ ...binding, key, modifiers });
+    const one = resolveOneBinding(binding, config);
+    if (one) resolved.push(one);
   }
 
   return resolved;
@@ -84,35 +75,11 @@ export function resolveBindings(defaults: KeyBinding[], config: KeybindingConfig
  * Used by the keybinding editor to show the full picture.
  */
 export function resolveAllBindings(defaults: KeyBinding[], config: KeybindingConfig): KeyBinding[] {
-  const preset = getPreset(config.preset);
   const result: KeyBinding[] = [];
 
   for (const binding of defaults) {
-    if (!platformMatches(binding)) continue;
-
-    const userOverride = Object.prototype.hasOwnProperty.call(config.userOverrides, binding.id)
-      ? config.userOverrides[binding.id]
-      : undefined;
-
-    const presetOverride = Object.prototype.hasOwnProperty.call(preset.overrides, binding.id)
-      ? preset.overrides[binding.id]
-      : undefined;
-
-    // Check if unbound
-    const isUnbound =
-      userOverride === null || (presetOverride === null && userOverride === undefined);
-
-    if (isUnbound) {
-      result.push({ ...binding, unbound: true });
-      continue;
-    }
-
-    // Apply overrides: user > preset > default
-    const key = userOverride?.key ?? presetOverride?.key ?? binding.key;
-    const modifiers: Modifiers =
-      userOverride?.modifiers ?? presetOverride?.modifiers ?? binding.modifiers;
-
-    result.push({ ...binding, key, modifiers });
+    const one = resolveOneBindingState(binding, config);
+    if (one) result.push(one.binding);
   }
 
   return result;

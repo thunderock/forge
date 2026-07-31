@@ -1,4 +1,4 @@
-import { For, Show, createMemo, createSignal, onMount } from 'solid-js';
+import { For, Show, createMemo, createSignal, createUniqueId, onMount } from 'solid-js';
 import { store, setActiveTask, getTaskDotStatus, uncollapseTask } from '../store/store';
 import { getCoordinatorChildren } from '../store/sidebar-order';
 import { invoke } from '../lib/ipc';
@@ -6,6 +6,8 @@ import { IPC } from '../../electron/ipc/channels';
 import { StatusDot } from './StatusDot';
 import { theme } from '../lib/theme';
 import { sf } from '../lib/fontScale';
+import { Dialog } from './Dialog';
+import { CheckIcon, CloseIcon } from './icons';
 
 interface SubTaskStripProps {
   coordinatorTaskId: string;
@@ -20,6 +22,7 @@ interface MCPLogEntry {
 function MCPLogModal(props: { onClose: () => void }) {
   const [logs, setLogs] = createSignal<MCPLogEntry[]>([]);
   const [loading, setLoading] = createSignal(true);
+  const titleId = createUniqueId();
 
   onMount(() => {
     void invoke<MCPLogEntry[]>(IPC.GetMCPLogs).then((entries) => {
@@ -29,118 +32,99 @@ function MCPLogModal(props: { onClose: () => void }) {
   });
 
   return (
-    <div
-      style={{
-        position: 'fixed',
-        inset: '0',
-        background: 'rgba(0,0,0,0.6)',
-        display: 'flex',
-        'align-items': 'center',
-        'justify-content': 'center',
-        'z-index': '1000',
+    <Dialog
+      open={true}
+      onClose={props.onClose}
+      width="680px"
+      labelledBy={titleId}
+      panelStyle={{
+        background: theme.bgElevated,
+        'border-radius': '8px',
+        padding: '16px',
+        'max-height': '60vh',
+        gap: '8px',
       }}
-      onClick={() => props.onClose()}
     >
+      <div style={{ display: 'flex', 'justify-content': 'space-between', 'align-items': 'center' }}>
+        <span id={titleId} style={{ 'font-size': sf(12), 'font-weight': '600', color: theme.fg }}>
+          MCP Logs
+        </span>
+        <button
+          style={{
+            background: 'none',
+            border: 'none',
+            cursor: 'pointer',
+            color: theme.fgSubtle,
+            'font-size': sf(14),
+          }}
+          onClick={() => props.onClose()}
+        >
+          <CloseIcon size={14} />
+        </button>
+      </div>
       <div
         style={{
-          background: theme.bgElevated,
-          border: `1px solid ${theme.border}`,
-          'border-radius': '8px',
-          padding: '16px',
-          width: '680px',
-          'max-height': '60vh',
-          display: 'flex',
-          'flex-direction': 'column',
-          gap: '8px',
+          'overflow-y': 'auto',
+          'font-family': "'JetBrains Mono', monospace",
+          'font-size': sf(11),
+          background: theme.bgInput,
+          'border-radius': '4px',
+          padding: '8px',
+          flex: '1',
+          'min-height': '0',
         }}
-        onClick={(e) => e.stopPropagation()}
       >
-        <div
-          style={{ display: 'flex', 'justify-content': 'space-between', 'align-items': 'center' }}
-        >
-          <span style={{ 'font-size': sf(12), 'font-weight': '600', color: theme.fg }}>
-            MCP Logs
-          </span>
-          <button
-            style={{
-              background: 'none',
-              border: 'none',
-              cursor: 'pointer',
-              color: theme.fgSubtle,
-              'font-size': sf(14),
-            }}
-            onClick={() => props.onClose()}
+        <Show when={!loading()} fallback={<span style={{ color: theme.fgSubtle }}>Loading…</span>}>
+          <Show
+            when={logs().length > 0}
+            fallback={<span style={{ color: theme.fgSubtle }}>No MCP log entries yet.</span>}
           >
-            ✕
-          </button>
-        </div>
-        <div
+            <For each={logs()}>
+              {(entry) => (
+                <div
+                  style={{
+                    color: entry.level === 'error' ? '#f87171' : theme.fgMuted,
+                    'margin-bottom': '2px',
+                  }}
+                >
+                  <span style={{ color: theme.fgSubtle }}>
+                    {new Date(entry.ts).toLocaleTimeString()}{' '}
+                  </span>
+                  <span style={{ color: entry.level === 'error' ? '#f87171' : theme.fg }}>
+                    [{entry.level}]{' '}
+                  </span>
+                  {entry.msg}
+                </div>
+              )}
+            </For>
+          </Show>
+        </Show>
+      </div>
+      <div style={{ 'font-size': sf(10), color: theme.fgSubtle }}>
+        Showing last 200 entries. Refresh to reload.
+        <button
           style={{
-            'overflow-y': 'auto',
-            'font-family': "'JetBrains Mono', monospace",
-            'font-size': sf(11),
-            background: theme.bgInput,
-            'border-radius': '4px',
-            padding: '8px',
-            flex: '1',
-            'min-height': '0',
+            'margin-left': '8px',
+            background: 'none',
+            border: `1px solid ${theme.border}`,
+            cursor: 'pointer',
+            color: theme.fgMuted,
+            'font-size': sf(10),
+            'border-radius': '3px',
+            padding: '1px 6px',
+          }}
+          onClick={() => {
+            setLoading(true);
+            void invoke<MCPLogEntry[]>(IPC.GetMCPLogs).then((entries) => {
+              setLogs(entries);
+              setLoading(false);
+            });
           }}
         >
-          <Show
-            when={!loading()}
-            fallback={<span style={{ color: theme.fgSubtle }}>Loading…</span>}
-          >
-            <Show
-              when={logs().length > 0}
-              fallback={<span style={{ color: theme.fgSubtle }}>No MCP log entries yet.</span>}
-            >
-              <For each={logs()}>
-                {(entry) => (
-                  <div
-                    style={{
-                      color: entry.level === 'error' ? '#f87171' : theme.fgMuted,
-                      'margin-bottom': '2px',
-                    }}
-                  >
-                    <span style={{ color: theme.fgSubtle }}>
-                      {new Date(entry.ts).toLocaleTimeString()}{' '}
-                    </span>
-                    <span style={{ color: entry.level === 'error' ? '#f87171' : theme.fg }}>
-                      [{entry.level}]{' '}
-                    </span>
-                    {entry.msg}
-                  </div>
-                )}
-              </For>
-            </Show>
-          </Show>
-        </div>
-        <div style={{ 'font-size': sf(10), color: theme.fgSubtle }}>
-          Showing last 200 entries. Refresh to reload.
-          <button
-            style={{
-              'margin-left': '8px',
-              background: 'none',
-              border: `1px solid ${theme.border}`,
-              cursor: 'pointer',
-              color: theme.fgMuted,
-              'font-size': sf(10),
-              'border-radius': '3px',
-              padding: '1px 6px',
-            }}
-            onClick={() => {
-              setLoading(true);
-              void invoke<MCPLogEntry[]>(IPC.GetMCPLogs).then((entries) => {
-                setLogs(entries);
-                setLoading(false);
-              });
-            }}
-          >
-            Refresh
-          </button>
-        </div>
+          Refresh
+        </button>
       </div>
-    </div>
+    </Dialog>
   );
 }
 
@@ -233,7 +217,11 @@ export function SubTaskStrip(props: SubTaskStripProps) {
                   when={taskTone(task)}
                   fallback={<StatusDot status={getTaskDotStatus(task.id)} size="sm" />}
                 >
-                  {(tone) => <span style={{ color: tone().color, 'font-size': sf(10) }}>✓</span>}
+                  {(tone) => (
+                    <span style={{ color: tone().color, display: 'inline-flex' }}>
+                      <CheckIcon size={10} />
+                    </span>
+                  )}
                 </Show>
                 <span style={{ overflow: 'hidden', 'text-overflow': 'ellipsis' }}>{task.name}</span>
               </button>

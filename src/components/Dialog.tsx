@@ -118,7 +118,8 @@ export function Dialog(props: DialogProps) {
               'flex-direction': 'column',
               gap: '16px',
               outline: 'none',
-              'box-shadow': '0 12px 48px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.03) inset',
+              'box-shadow':
+                '0 12px 48px rgba(0,0,0,0.5), 0 0 0 1px color-mix(in srgb, var(--fg) 3%, transparent) inset',
               ...props.panelStyle,
             }}
             onClick={(e) => e.stopPropagation()}

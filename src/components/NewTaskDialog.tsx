@@ -9,7 +9,10 @@ import {
   on,
   untrack,
 } from 'solid-js';
+import type { JSX } from 'solid-js';
 import { Dialog } from './Dialog';
+import { FolderIcon, GitBranchIcon } from './icons';
+import { ConfirmDialog } from './ConfirmDialog';
 import { errMessage } from '../lib/log';
 import { invoke } from '../lib/ipc';
 import { IPC } from '../../electron/ipc/channels';
@@ -64,8 +67,323 @@ interface NewTaskDialogProps {
   onClose: () => void;
 }
 
+export function CheckboxOption(props: {
+  label: JSX.Element;
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  title?: string;
+  disabled?: boolean;
+  paddingLeft?: string;
+}) {
+  return (
+    <label
+      title={props.title}
+      style={{
+        display: 'flex',
+        'align-items': 'center',
+        gap: '8px',
+        'font-size': '13px',
+        color: theme.fg,
+        cursor: props.disabled ? 'not-allowed' : 'pointer',
+        'padding-left': props.paddingLeft,
+      }}
+    >
+      <input
+        type="checkbox"
+        checked={props.checked}
+        disabled={props.disabled}
+        onChange={(e) => !props.disabled && props.onChange(e.currentTarget.checked)}
+        style={{
+          'accent-color': theme.accent,
+          cursor: props.disabled ? 'not-allowed' : 'inherit',
+          opacity: props.disabled ? '0.5' : '1',
+        }}
+      />
+      {props.label}
+    </label>
+  );
+}
+
+export function InlineBanner(props: { color: string; children: JSX.Element; fontSize?: string }) {
+  return (
+    <div
+      style={{
+        ...bannerStyle(props.color),
+        'font-size': props.fontSize ?? '13px',
+      }}
+    >
+      {props.children}
+    </div>
+  );
+}
+
+interface ProjectDockerfileInfo {
+  dockerfilePath: string;
+  imageTag: string;
+  buildContext: string;
+}
+
+function DockerTaskOptions(props: {
+  dockerMode: boolean;
+  setDockerMode: (enabled: boolean) => void;
+  coordinatorMode: boolean;
+  projectDockerfile: ProjectDockerfileInfo | null;
+  dockerImageReady: boolean | null;
+  dockerBuilding: boolean;
+  dockerBuildOutput: string;
+  dockerBuildError: string;
+  setBuildOutputRef: (el: HTMLPreElement) => void;
+  onBuildImage: () => void;
+}) {
+  return (
+    <Show when={store.dockerAvailable}>
+      <div
+        data-nav-field="docker-mode"
+        style={{ display: 'flex', 'flex-direction': 'column', gap: '8px' }}
+      >
+        <CheckboxOption
+          label="Run in Docker container"
+          checked={props.dockerMode}
+          onChange={props.setDockerMode}
+        />
+        <Show when={props.dockerMode}>
+          <InlineBanner color={theme.success ?? theme.accent}>
+            <>
+              The agent will run inside a Docker container. Only the project directory is mounted —
+              files outside the project are protected from accidental deletion.
+              <Show when={store.shareDockerAgentAuth}>
+                {' '}
+                Agent credentials are shared across containers.
+              </Show>
+            </>
+          </InlineBanner>
+          <Show when={props.coordinatorMode && isMac}>
+            <InlineBanner color={theme.warning} fontSize="12px">
+              Coordinator + Docker on macOS: the MCP server binds to all network interfaces so
+              sub-task containers can reach it via host.docker.internal. The port is reachable from
+              other hosts on your local network (token-protected).
+            </InlineBanner>
+          </Show>
+          <Show when={props.projectDockerfile}>
+            <div
+              style={{
+                'font-size': '12px',
+                color: theme.accent,
+                display: 'flex',
+                'align-items': 'center',
+                gap: '4px',
+              }}
+            >
+              <FolderIcon size={12} />
+              Using project Dockerfile:{' '}
+              <code style={{ 'font-family': "'JetBrains Mono', monospace" }}>
+                {PROJECT_DOCKERFILE_RELATIVE_PATH}
+              </code>
+            </div>
+          </Show>
+          <Show when={!props.projectDockerfile}>
+            <div style={{ display: 'flex', 'align-items': 'center', gap: '8px' }}>
+              <label style={{ 'font-size': '12px', color: theme.fgMuted, 'white-space': 'nowrap' }}>
+                Image:
+              </label>
+              <input
+                type="text"
+                value={store.dockerImage}
+                onInput={(e) => setDockerImage(e.currentTarget.value)}
+                placeholder={DEFAULT_DOCKER_IMAGE}
+                style={{
+                  flex: '1',
+                  background: theme.bgInput,
+                  border: `1px solid ${theme.border}`,
+                  'border-radius': '6px',
+                  padding: '5px 10px',
+                  color: theme.fg,
+                  'font-size': '13px',
+                  'font-family': "'JetBrains Mono', monospace",
+                  outline: 'none',
+                }}
+              />
+            </div>
+          </Show>
+          <Show when={props.dockerImageReady === false && !props.dockerBuilding}>
+            <div
+              style={{
+                display: 'flex',
+                'align-items': 'center',
+                gap: '8px',
+                'font-size': '12px',
+                color: theme.fgMuted,
+              }}
+            >
+              <span>Image not found locally.</span>
+              <Show
+                when={
+                  props.projectDockerfile ||
+                  store.dockerImage === DEFAULT_DOCKER_IMAGE ||
+                  !store.dockerImage
+                }
+              >
+                <button
+                  type="button"
+                  onClick={() => props.onBuildImage()}
+                  style={{
+                    background: theme.accent,
+                    color: theme.accentText,
+                    border: 'none',
+                    'border-radius': '4px',
+                    padding: '3px 10px',
+                    'font-size': '12px',
+                    cursor: 'pointer',
+                  }}
+                >
+                  Build Image
+                </button>
+              </Show>
+            </div>
+          </Show>
+          <Show when={props.dockerBuilding}>
+            <div
+              style={{
+                'font-size': '12px',
+                color: theme.fgMuted,
+                display: 'flex',
+                'align-items': 'center',
+                gap: '6px',
+              }}
+            >
+              <span class="inline-spinner" aria-hidden="true" />
+              Building image... this may take a few minutes.
+            </div>
+            <Show when={props.dockerBuildOutput}>
+              <pre
+                ref={props.setBuildOutputRef}
+                style={{
+                  'font-size': '11px',
+                  color: theme.fgSubtle,
+                  background: theme.bgInput,
+                  'border-radius': '4px',
+                  padding: '6px 8px',
+                  'max-height': '120px',
+                  'overflow-y': 'auto',
+                  'white-space': 'pre-wrap',
+                  'word-break': 'break-all',
+                  margin: '0',
+                }}
+              >
+                {props.dockerBuildOutput}
+              </pre>
+            </Show>
+          </Show>
+          <Show when={props.dockerBuildError}>
+            <div style={{ 'font-size': '12px', color: theme.error }}>
+              Build failed: {props.dockerBuildError}
+            </div>
+          </Show>
+          <Show when={props.dockerImageReady === true && !props.dockerBuilding}>
+            <div style={{ 'font-size': '12px', color: theme.success ?? theme.accent }}>
+              {props.projectDockerfile ? 'Project image ready.' : 'Image ready.'}
+            </div>
+          </Show>
+        </Show>
+      </div>
+    </Show>
+  );
+}
+
+function CoordinatorTaskOptions(props: {
+  coordinatorMode: boolean;
+  setCoordinatorMode: (enabled: boolean) => void;
+  hasActiveCoordinator: boolean;
+  agentSupportsSkipPermissions: boolean;
+  skipPermissions: boolean;
+  propagateSkipPermissions: boolean;
+  setPropagateSkipPermissions: (enabled: boolean) => void;
+  maxConcurrentTasks: number;
+  setMaxConcurrentTasks: (value: number) => void;
+}) {
+  return (
+    <Show when={store.coordinatorModeEnabled}>
+      <div
+        data-nav-field="coordinator-mode"
+        style={{ display: 'flex', 'flex-direction': 'column', gap: '8px' }}
+      >
+        <CheckboxOption
+          label="Coordinator mode"
+          checked={props.coordinatorMode}
+          disabled={props.hasActiveCoordinator}
+          onChange={props.setCoordinatorMode}
+          title={
+            props.hasActiveCoordinator
+              ? 'Only one coordinator per project can be active at a time'
+              : undefined
+          }
+        />
+        <Show when={props.coordinatorMode}>
+          <InlineBanner color={theme.warning} fontSize="12px">
+            This agent will be able to create tasks, send prompts, and merge branches automatically
+            via MCP tools. The remote server will be started automatically.
+          </InlineBanner>
+          <label
+            style={{
+              display: 'flex',
+              'align-items': 'center',
+              gap: '8px',
+              'font-size': '13px',
+              color: theme.fg,
+              'padding-left': '4px',
+            }}
+          >
+            Max concurrent sub-tasks:
+            <input
+              type="number"
+              min={MIN_COORDINATOR_CONCURRENT_TASKS}
+              max={MAX_COORDINATOR_CONCURRENT_TASKS}
+              value={props.maxConcurrentTasks}
+              onInput={(e) => {
+                const v = parseInt(e.currentTarget.value, 10);
+                if (!isNaN(v)) props.setMaxConcurrentTasks(clampCoordinatorConcurrentTasks(v));
+              }}
+              style={{
+                width: '60px',
+                background: theme.bgInput,
+                color: theme.fg,
+                border: `1px solid ${theme.border}`,
+                'border-radius': '6px',
+                padding: '4px 8px',
+                'font-size': '13px',
+              }}
+            />
+          </label>
+          <Show when={props.agentSupportsSkipPermissions && props.skipPermissions}>
+            <CheckboxOption
+              label="Propagate skip-permissions to sub-tasks"
+              checked={props.propagateSkipPermissions}
+              onChange={props.setPropagateSkipPermissions}
+              paddingLeft="4px"
+            />
+            <Show when={props.propagateSkipPermissions}>
+              <InlineBanner color={theme.warning} fontSize="12px">
+                <>
+                  All sub-tasks created by this coordinator will inherit{' '}
+                  <strong>--dangerously-skip-permissions</strong> and run without confirmation
+                  prompts.
+                </>
+              </InlineBanner>
+            </Show>
+          </Show>
+        </Show>
+      </div>
+    </Show>
+  );
+}
+
 export function NewTaskDialog(props: NewTaskDialogProps) {
   const [prompt, setPrompt] = createSignal('');
+  // Prompt/name values right after open/prefill — closing is only guarded when
+  // the user has typed something beyond them.
+  const [initialPrompt, setInitialPrompt] = createSignal('');
+  const [initialName, setInitialName] = createSignal('');
+  const [confirmDiscard, setConfirmDiscard] = createSignal(false);
   const [name, setName] = createSignal('');
   // Optional skill to invoke; rendered per-agent (`/name` claude/opencode, `$name` codex)
   // and prepended to the prompt at creation. Suggestions are best-effort autocomplete only.
@@ -203,88 +521,107 @@ export function NewTaskDialog(props: NewTaskDialogProps) {
     ),
   );
 
-  // Initialize remaining state each time the dialog opens
-  createEffect(() => {
-    if (!props.open) return;
+  // Initialize remaining state each time the dialog opens.  Same on()+untrack
+  // guard as the effect above: fire only on the props.open *transition* and
+  // untrack the body, so no store read — nor the prompt/name snapshot below —
+  // subscribes the effect. Otherwise a tracked read (e.g. the synchronous
+  // prompt()/name() reads when agents are cached, or store.availableAgents
+  // changing while open) would re-fire this effect and reset the fields via
+  // setPrompt('')/setName('') mid-typing.
+  createEffect(
+    on(
+      () => props.open,
+      (open) => {
+        if (!open) return;
+        untrack(() => {
+          // Reset signals for a fresh dialog
+          setPrompt('');
+          setInitialPrompt('');
+          setInitialName('');
+          setConfirmDiscard(false);
+          setName('');
+          setSkill('');
+          setError('');
+          setLoading(false);
+          setGitIsolation('worktree');
+          setDockerMode(false);
+          setDockerImageReady(null);
+          setDockerBuilding(false);
+          setDockerBuildOutput('');
+          setDockerBuildError('');
+          setProjectDockerfile(null);
+          setCoordinatorMode(false);
 
-    // Reset signals for a fresh dialog
-    setPrompt('');
-    setName('');
-    setSkill('');
-    setError('');
-    setLoading(false);
-    setGitIsolation('worktree');
-    setDockerMode(false);
-    setDockerImageReady(null);
-    setDockerBuilding(false);
-    setDockerBuildOutput('');
-    setDockerBuildError('');
-    setProjectDockerfile(null);
-    setCoordinatorMode(false);
+          void (async () => {
+            // Check Docker availability in background
+            invoke<boolean>(IPC.CheckDockerAvailable).then(
+              (available) => setDockerAvailable(available),
+              () => setDockerAvailable(false),
+            );
+            if (store.availableAgents.length === 0) {
+              await loadAgents();
+            }
+            // Best-effort skill suggestions for the Skill field autocomplete.
+            invoke<string[]>(IPC.ListAgentSkills).then(
+              (skills) => setSkillSuggestions(Array.isArray(skills) ? skills : []),
+              () => setSkillSuggestions([]),
+            );
+            // Default the fan-out selection to ALL installed agents (FAN-01).
+            setSelectedAgentIds(
+              new Set(store.availableAgents.filter((a) => a.available !== false).map((a) => a.id)),
+            );
+            // Prefill each agent's model choice from the global per-agent memory (MDL-05).
+            setModelSelections({ ...store.lastModelSelectionByAgentId });
 
-    void (async () => {
-      // Check Docker availability in background
-      invoke<boolean>(IPC.CheckDockerAvailable).then(
-        (available) => setDockerAvailable(available),
-        () => setDockerAvailable(false),
-      );
-      if (store.availableAgents.length === 0) {
-        await loadAgents();
-      }
-      // Best-effort skill suggestions for the Skill field autocomplete.
-      invoke<string[]>(IPC.ListAgentSkills).then(
-        (skills) => setSkillSuggestions(Array.isArray(skills) ? skills : []),
-        () => setSkillSuggestions([]),
-      );
-      // Default the fan-out selection to ALL installed agents (FAN-01).
-      setSelectedAgentIds(
-        new Set(store.availableAgents.filter((a) => a.available !== false).map((a) => a.id)),
-      );
-      // Prefill each agent's model choice from the global per-agent memory (MDL-05).
-      setModelSelections({ ...store.lastModelSelectionByAgentId });
+            // Pre-fill from drop data if present
+            const dropUrl = store.newTaskDropUrl;
+            const fallbackProjectId = store.lastProjectId ?? store.projects[0]?.id ?? null;
+            const defaults = dropUrl ? getGitHubDropDefaults(dropUrl) : null;
 
-      // Pre-fill from drop data if present
-      const dropUrl = store.newTaskDropUrl;
-      const fallbackProjectId = store.lastProjectId ?? store.projects[0]?.id ?? null;
-      const defaults = dropUrl ? getGitHubDropDefaults(dropUrl) : null;
+            if (dropUrl) setPrompt(`review ${dropUrl}`);
+            if (defaults) setName(defaults.name);
+            setSelectedProjectId(defaults?.projectId ?? fallbackProjectId);
 
-      if (dropUrl) setPrompt(`review ${dropUrl}`);
-      if (defaults) setName(defaults.name);
-      setSelectedProjectId(defaults?.projectId ?? fallbackProjectId);
+            // Pre-fill from arena comparison prompt
+            const prefill = store.newTaskPrefillPrompt;
+            if (prefill) {
+              setPrompt(prefill.prompt);
+              setName('Compare arena results');
+              if (prefill.projectId) setSelectedProjectId(prefill.projectId);
+            }
+            // Snapshot the post-prefill values as the close-guard baseline.
+            setInitialPrompt(prompt());
+            setInitialName(name());
 
-      // Pre-fill from arena comparison prompt
-      const prefill = store.newTaskPrefillPrompt;
-      if (prefill) {
-        setPrompt(prefill.prompt);
-        setName('Compare arena results');
-        if (prefill.projectId) setSelectedProjectId(prefill.projectId);
-      }
+            promptRef?.focus();
+          })();
 
-      promptRef?.focus();
-    })();
+          // Capture-phase handler for Alt+Arrow to navigate form sections / within fields
+          const handleAltArrow = (e: KeyboardEvent) => {
+            if (!e.altKey) return;
+            if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+              e.preventDefault();
+              e.stopImmediatePropagation();
+              navigateDialogFields(e.key === 'ArrowDown' ? 'down' : 'up');
+            } else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+              // Preserve native word-jump (Alt+Arrow) in text inputs
+              const tag = (document.activeElement as HTMLElement)?.tagName;
+              if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+              e.preventDefault();
+              e.stopImmediatePropagation();
+              navigateWithinField(e.key === 'ArrowRight' ? 'right' : 'left');
+            }
+          };
+          window.addEventListener('keydown', handleAltArrow, true);
 
-    // Capture-phase handler for Alt+Arrow to navigate form sections / within fields
-    const handleAltArrow = (e: KeyboardEvent) => {
-      if (!e.altKey) return;
-      if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
-        e.preventDefault();
-        e.stopImmediatePropagation();
-        navigateDialogFields(e.key === 'ArrowDown' ? 'down' : 'up');
-      } else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
-        // Preserve native word-jump (Alt+Arrow) in text inputs
-        const tag = (document.activeElement as HTMLElement)?.tagName;
-        if (tag === 'INPUT' || tag === 'TEXTAREA') return;
-        e.preventDefault();
-        e.stopImmediatePropagation();
-        navigateWithinField(e.key === 'ArrowRight' ? 'right' : 'left');
-      }
-    };
-    window.addEventListener('keydown', handleAltArrow, true);
-
-    onCleanup(() => {
-      window.removeEventListener('keydown', handleAltArrow, true);
-    });
-  });
+          onCleanup(() => {
+            window.removeEventListener('keydown', handleAltArrow, true);
+          });
+        });
+      },
+      { defer: true },
+    ),
+  );
 
   // Fetch gitignored dirs when project changes
   createEffect(() => {
@@ -737,10 +1074,22 @@ export function NewTaskDialog(props: NewTaskDialogProps) {
     }
   }
 
+  // Guard against a misclick on the overlay (or Escape/Cancel) silently
+  // discarding a typed prompt or task name — state is reset on next open.
+  function requestClose() {
+    const dirty =
+      prompt().trim() !== initialPrompt().trim() || name().trim() !== initialName().trim();
+    if (dirty) {
+      setConfirmDiscard(true);
+    } else {
+      props.onClose();
+    }
+  }
+
   return (
     <Dialog
       open={props.open}
-      onClose={props.onClose}
+      onClose={requestClose}
       width={store.availableAgents.length > 8 ? 'min(840px, calc(100vw - 48px))' : '560px'}
       labelledBy={titleId}
       panelStyle={{ padding: '0', overflow: 'hidden', gap: '0' }}
@@ -824,7 +1173,7 @@ export function NewTaskDialog(props: NewTaskDialogProps) {
                 padding: '10px 14px',
                 color: theme.fg,
                 'font-size': '14px',
-                'font-family': "'JetBrains Mono', monospace",
+                'font-family': 'var(--font-mono)',
                 outline: 'none',
                 resize: 'vertical',
               }}
@@ -901,27 +1250,11 @@ export function NewTaskDialog(props: NewTaskDialogProps) {
                 }}
               >
                 <span style={{ display: 'flex', 'align-items': 'center', gap: '6px' }}>
-                  <svg
-                    width="11"
-                    height="11"
-                    viewBox="0 0 16 16"
-                    fill="currentColor"
-                    style={{ 'flex-shrink': '0' }}
-                  >
-                    <path d="M5 3.25a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0Zm6.25 7.5a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5ZM5 7.75a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0Zm0 0h5.5a2.5 2.5 0 0 0 2.5-2.5v-.5a.75.75 0 0 0-1.5 0v.5a1 1 0 0 1-1 1H5a3.25 3.25 0 1 0 0 6.5h6.25a.75.75 0 0 0 0-1.5H5a1.75 1.75 0 1 1 0-3.5Z" />
-                  </svg>
+                  <GitBranchIcon size={11} style={{ 'flex-shrink': '0' }} />
                   main branch (detected on create)
                 </span>
                 <span style={{ display: 'flex', 'align-items': 'center', gap: '6px' }}>
-                  <svg
-                    width="11"
-                    height="11"
-                    viewBox="0 0 16 16"
-                    fill="currentColor"
-                    style={{ 'flex-shrink': '0' }}
-                  >
-                    <path d="M1.75 1A1.75 1.75 0 0 0 0 2.75v10.5C0 14.216.784 15 1.75 15h12.5A1.75 1.75 0 0 0 16 13.25v-8.5A1.75 1.75 0 0 0 14.25 3H7.5a.25.25 0 0 1-.2-.1l-.9-1.2C6.07 1.26 5.55 1 5 1H1.75Z" />
-                  </svg>
+                  <FolderIcon size={11} style={{ 'flex-shrink': '0' }} />
                   {selectedProjectPath()}
                 </span>
               </div>
@@ -1071,63 +1404,30 @@ export function NewTaskDialog(props: NewTaskDialogProps) {
 
           {/* Checkboxes group */}
           <div style={{ display: 'flex', 'flex-direction': 'column', gap: '10px' }}>
-            {/* Steps tracking toggle */}
             <div data-nav-field="steps-enabled">
-              <label
+              <CheckboxOption
                 title="Instructs the agent to append progress entries to .claude/steps.json. Each entry is shown live in the Steps panel as the agent works."
-                style={{
-                  display: 'flex',
-                  'align-items': 'center',
-                  gap: '8px',
-                  'font-size': '13px',
-                  color: theme.fg,
-                  cursor: 'pointer',
-                }}
-              >
-                <input
-                  type="checkbox"
-                  checked={stepsEnabled()}
-                  onChange={(e) => setStepsEnabled(e.currentTarget.checked)}
-                  style={{ 'accent-color': theme.accent, cursor: 'inherit' }}
-                />
-                Steps tracking
-              </label>
+                label="Steps tracking"
+                checked={stepsEnabled()}
+                onChange={setStepsEnabled}
+              />
             </div>
 
-            {/* Skip permissions toggle */}
             <Show when={agentSupportsSkipPermissions()}>
               <div
                 data-nav-field="skip-permissions"
                 style={{ display: 'flex', 'flex-direction': 'column', gap: '8px' }}
               >
-                <label
-                  style={{
-                    display: 'flex',
-                    'align-items': 'center',
-                    gap: '8px',
-                    'font-size': '13px',
-                    color: theme.fg,
-                    cursor: 'pointer',
-                  }}
-                >
-                  <input
-                    type="checkbox"
-                    checked={skipPermissions()}
-                    onChange={(e) => setSkipPermissions(e.currentTarget.checked)}
-                    style={{ 'accent-color': theme.accent, cursor: 'inherit' }}
-                  />
-                  Dangerously skip all confirms
-                </label>
+                <CheckboxOption
+                  label="Dangerously skip all confirms"
+                  checked={skipPermissions()}
+                  onChange={setSkipPermissions}
+                />
                 <Show when={skipPermissions()}>
-                  <div
-                    style={{
-                      ...bannerStyle(theme.warning),
-                      'font-size': '13px',
-                    }}
-                  >
+                  <InlineBanner color={theme.warning}>
                     The agent will run without asking for confirmation. It can read, write, and
                     delete files, and execute commands without your approval.
-                  </div>
+                  </InlineBanner>
                   <Show when={!dockerMode() && store.dockerAvailable}>
                     <div style={{ 'font-size': '12px', color: theme.fgMuted }}>
                       Tip: Enable Docker isolation to limit the blast radius of skip-permissions
@@ -1143,309 +1443,36 @@ export function NewTaskDialog(props: NewTaskDialogProps) {
               </div>
             </Show>
 
-            {/* Docker isolation toggle */}
-            <Show when={store.dockerAvailable}>
-              <div
-                data-nav-field="docker-mode"
-                style={{ display: 'flex', 'flex-direction': 'column', gap: '8px' }}
-              >
-                <label
-                  style={{
-                    display: 'flex',
-                    'align-items': 'center',
-                    gap: '8px',
-                    'font-size': '13px',
-                    color: theme.fg,
-                    cursor: 'pointer',
-                  }}
-                >
-                  <input
-                    type="checkbox"
-                    checked={dockerMode()}
-                    onChange={(e) => setDockerMode(e.currentTarget.checked)}
-                    style={{ 'accent-color': theme.accent, cursor: 'inherit' }}
-                  />
-                  Run in Docker container
-                </label>
-                <Show when={dockerMode()}>
-                  <div
-                    style={{
-                      'font-size': '13px',
-                      color: theme.success ?? theme.accent,
-                      background: `color-mix(in srgb, ${theme.success ?? theme.accent} 8%, transparent)`,
-                      padding: '8px 12px',
-                      'border-radius': '8px',
-                      border: `1px solid color-mix(in srgb, ${theme.success ?? theme.accent} 20%, transparent)`,
-                    }}
-                  >
-                    The agent will run inside a Docker container. Only the project directory is
-                    mounted — files outside the project are protected from accidental deletion.
-                    <Show when={store.shareDockerAgentAuth}>
-                      {' '}
-                      Agent credentials are shared across containers.
-                    </Show>
-                  </div>
-                  <Show when={coordinatorMode() && isMac}>
-                    <div style={{ ...bannerStyle(theme.warning), 'font-size': '12px' }}>
-                      Coordinator + Docker on macOS: the MCP server binds to all network interfaces
-                      so sub-task containers can reach it via host.docker.internal. The port is
-                      reachable from other hosts on your local network (token-protected).
-                    </div>
-                  </Show>
-                  <Show when={projectDockerfile()}>
-                    <div
-                      style={{
-                        'font-size': '12px',
-                        color: theme.accent,
-                        display: 'flex',
-                        'align-items': 'center',
-                        gap: '4px',
-                      }}
-                    >
-                      <span aria-hidden="true">📁</span>
-                      Using project Dockerfile:{' '}
-                      <code style={{ 'font-family': "'JetBrains Mono', monospace" }}>
-                        {PROJECT_DOCKERFILE_RELATIVE_PATH}
-                      </code>
-                    </div>
-                  </Show>
-                  <Show when={!projectDockerfile()}>
-                    <div style={{ display: 'flex', 'align-items': 'center', gap: '8px' }}>
-                      <label
-                        style={{
-                          'font-size': '12px',
-                          color: theme.fgMuted,
-                          'white-space': 'nowrap',
-                        }}
-                      >
-                        Image:
-                      </label>
-                      <input
-                        type="text"
-                        value={store.dockerImage}
-                        onInput={(e) => setDockerImage(e.currentTarget.value)}
-                        placeholder={DEFAULT_DOCKER_IMAGE}
-                        style={{
-                          flex: '1',
-                          background: theme.bgInput,
-                          border: `1px solid ${theme.border}`,
-                          'border-radius': '6px',
-                          padding: '5px 10px',
-                          color: theme.fg,
-                          'font-size': '13px',
-                          'font-family': "'JetBrains Mono', monospace",
-                          outline: 'none',
-                        }}
-                      />
-                    </div>
-                  </Show>
-                  <Show when={dockerImageReady() === false && !dockerBuilding()}>
-                    <div
-                      style={{
-                        display: 'flex',
-                        'align-items': 'center',
-                        gap: '8px',
-                        'font-size': '12px',
-                        color: theme.fgMuted,
-                      }}
-                    >
-                      <span>Image not found locally.</span>
-                      <Show
-                        when={
-                          projectDockerfile() ||
-                          store.dockerImage === DEFAULT_DOCKER_IMAGE ||
-                          !store.dockerImage
-                        }
-                      >
-                        <button
-                          type="button"
-                          onClick={handleBuildImage}
-                          style={{
-                            background: theme.accent,
-                            color: theme.accentText,
-                            border: 'none',
-                            'border-radius': '4px',
-                            padding: '3px 10px',
-                            'font-size': '12px',
-                            cursor: 'pointer',
-                          }}
-                        >
-                          Build Image
-                        </button>
-                      </Show>
-                    </div>
-                  </Show>
-                  <Show when={dockerBuilding()}>
-                    <div
-                      style={{
-                        'font-size': '12px',
-                        color: theme.fgMuted,
-                        display: 'flex',
-                        'align-items': 'center',
-                        gap: '6px',
-                      }}
-                    >
-                      <span class="inline-spinner" aria-hidden="true" />
-                      Building image... this may take a few minutes.
-                    </div>
-                    <Show when={dockerBuildOutput()}>
-                      <pre
-                        ref={buildOutputRef}
-                        style={{
-                          'font-size': '11px',
-                          color: theme.fgSubtle,
-                          background: theme.bgInput,
-                          'border-radius': '4px',
-                          padding: '6px 8px',
-                          'max-height': '120px',
-                          'overflow-y': 'auto',
-                          'white-space': 'pre-wrap',
-                          'word-break': 'break-all',
-                          margin: '0',
-                        }}
-                      >
-                        {dockerBuildOutput()}
-                      </pre>
-                    </Show>
-                  </Show>
-                  <Show when={dockerBuildError()}>
-                    <div style={{ 'font-size': '12px', color: theme.error }}>
-                      Build failed: {dockerBuildError()}
-                    </div>
-                  </Show>
-                  <Show when={dockerImageReady() === true && !dockerBuilding()}>
-                    <div style={{ 'font-size': '12px', color: theme.success ?? theme.accent }}>
-                      {projectDockerfile() ? 'Project image ready.' : 'Image ready.'}
-                    </div>
-                  </Show>
-                </Show>
-              </div>
-            </Show>
+            <DockerTaskOptions
+              dockerMode={dockerMode()}
+              setDockerMode={setDockerMode}
+              coordinatorMode={coordinatorMode()}
+              projectDockerfile={projectDockerfile()}
+              dockerImageReady={dockerImageReady()}
+              dockerBuilding={dockerBuilding()}
+              dockerBuildOutput={dockerBuildOutput()}
+              dockerBuildError={dockerBuildError()}
+              setBuildOutputRef={(el) => {
+                buildOutputRef = el;
+              }}
+              onBuildImage={handleBuildImage}
+            />
           </div>
           {/* end checkboxes group */}
 
           {/* Coordinator mode toggle — below skip-permissions so enabling skip-perms
               doesn't cause items to appear above the checkbox you just clicked */}
-          <Show when={store.coordinatorModeEnabled}>
-            <div
-              data-nav-field="coordinator-mode"
-              style={{ display: 'flex', 'flex-direction': 'column', gap: '8px' }}
-            >
-              <label
-                style={{
-                  display: 'flex',
-                  'align-items': 'center',
-                  gap: '8px',
-                  'font-size': '13px',
-                  color: theme.fg,
-                  cursor: 'pointer',
-                }}
-              >
-                <input
-                  type="checkbox"
-                  checked={coordinatorMode()}
-                  disabled={hasActiveCoordinator()}
-                  onChange={(e) =>
-                    !hasActiveCoordinator() && setCoordinatorMode(e.currentTarget.checked)
-                  }
-                  style={{
-                    'accent-color': theme.accent,
-                    cursor: hasActiveCoordinator() ? 'not-allowed' : 'inherit',
-                    opacity: hasActiveCoordinator() ? '0.5' : '1',
-                  }}
-                  title={
-                    hasActiveCoordinator()
-                      ? 'Only one coordinator per project can be active at a time'
-                      : undefined
-                  }
-                />
-                Coordinator mode
-              </label>
-              <Show when={coordinatorMode()}>
-                <div
-                  style={{
-                    'font-size': '12px',
-                    color: theme.warning,
-                    background: `color-mix(in srgb, ${theme.warning} 8%, transparent)`,
-                    padding: '8px 12px',
-                    'border-radius': '8px',
-                    border: `1px solid color-mix(in srgb, ${theme.warning} 20%, transparent)`,
-                  }}
-                >
-                  This agent will be able to create tasks, send prompts, and merge branches
-                  automatically via MCP tools. The remote server will be started automatically.
-                </div>
-                <label
-                  style={{
-                    display: 'flex',
-                    'align-items': 'center',
-                    gap: '8px',
-                    'font-size': '13px',
-                    color: theme.fg,
-                    'padding-left': '4px',
-                  }}
-                >
-                  Max concurrent sub-tasks:
-                  <input
-                    type="number"
-                    min={MIN_COORDINATOR_CONCURRENT_TASKS}
-                    max={MAX_COORDINATOR_CONCURRENT_TASKS}
-                    value={maxConcurrentTasks()}
-                    onInput={(e) => {
-                      const v = parseInt(e.currentTarget.value, 10);
-                      if (!isNaN(v)) setMaxConcurrentTasks(clampCoordinatorConcurrentTasks(v));
-                    }}
-                    style={{
-                      width: '60px',
-                      background: theme.bgInput,
-                      color: theme.fg,
-                      border: `1px solid ${theme.border}`,
-                      'border-radius': '6px',
-                      padding: '4px 8px',
-                      'font-size': '13px',
-                    }}
-                  />
-                </label>
-                <Show when={agentSupportsSkipPermissions() && skipPermissions()}>
-                  <label
-                    style={{
-                      display: 'flex',
-                      'align-items': 'center',
-                      gap: '8px',
-                      'font-size': '13px',
-                      color: theme.fg,
-                      cursor: 'pointer',
-                      'padding-left': '4px',
-                    }}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={propagateSkipPermissions()}
-                      onChange={(e) => setPropagateSkipPermissions(e.currentTarget.checked)}
-                      style={{ 'accent-color': theme.accent, cursor: 'inherit' }}
-                    />
-                    Propagate skip-permissions to sub-tasks
-                  </label>
-                  <Show when={propagateSkipPermissions()}>
-                    <div
-                      style={{
-                        'font-size': '12px',
-                        color: theme.warning,
-                        background: `color-mix(in srgb, ${theme.warning} 8%, transparent)`,
-                        padding: '8px 12px',
-                        'border-radius': '8px',
-                        border: `1px solid color-mix(in srgb, ${theme.warning} 20%, transparent)`,
-                      }}
-                    >
-                      All sub-tasks created by this coordinator will inherit{' '}
-                      <strong>--dangerously-skip-permissions</strong> and run without confirmation
-                      prompts.
-                    </div>
-                  </Show>
-                </Show>
-              </Show>
-            </div>
-          </Show>
+          <CoordinatorTaskOptions
+            coordinatorMode={coordinatorMode()}
+            setCoordinatorMode={setCoordinatorMode}
+            hasActiveCoordinator={hasActiveCoordinator()}
+            agentSupportsSkipPermissions={agentSupportsSkipPermissions()}
+            skipPermissions={skipPermissions()}
+            propagateSkipPermissions={propagateSkipPermissions()}
+            setPropagateSkipPermissions={setPropagateSkipPermissions}
+            maxConcurrentTasks={maxConcurrentTasks()}
+            setMaxConcurrentTasks={setMaxConcurrentTasks}
+          />
 
           <Show when={ignoredDirs().length > 0 && gitIsolation() === 'worktree'}>
             <SymlinkDirPicker
@@ -1487,7 +1514,7 @@ export function NewTaskDialog(props: NewTaskDialogProps) {
           <button
             type="button"
             class="btn-secondary"
-            onClick={() => props.onClose()}
+            onClick={() => requestClose()}
             style={{
               padding: '9px 18px',
               background: theme.bgInput,
@@ -1526,6 +1553,21 @@ export function NewTaskDialog(props: NewTaskDialogProps) {
           </button>
         </div>
       </form>
+      <ConfirmDialog
+        open={confirmDiscard()}
+        title="Discard draft?"
+        message="Closing will discard what you typed."
+        confirmLabel="Discard"
+        danger
+        onConfirm={() => {
+          setConfirmDiscard(false);
+          props.onClose();
+        }}
+        onCancel={() => {
+          setConfirmDiscard(false);
+          promptRef?.focus();
+        }}
+      />
     </Dialog>
   );
 }

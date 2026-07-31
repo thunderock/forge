@@ -1,5 +1,13 @@
 import type { BrowserWindow } from 'electron';
 import { debug as logDebug } from '../log.js';
+import {
+  AskCodeSession,
+  ASK_CODE_MAX_CONCURRENT,
+  ASK_CODE_TIMEOUT_MS,
+  RequestRegistry,
+  assertCanStart,
+  assertPromptWithinLimit,
+} from './request-registry.js';
 
 interface MinimaxAskCodeRequest {
   requestId: string;
@@ -7,14 +15,13 @@ interface MinimaxAskCodeRequest {
   prompt: string;
 }
 
-const MAX_PROMPT_LENGTH = 50_000;
-const MAX_CONCURRENT = 5;
-const TIMEOUT_MS = 120_000;
 const MINIMAX_API_URL = 'https://api.minimax.io/v1/chat/completions';
 export const MINIMAX_MODEL = 'MiniMax-M2.7';
 
-const activeRequests = new Map<string, AbortController>();
-const activeTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const activeRequests = new RequestRegistry<AbortController>({
+  maxConcurrent: ASK_CODE_MAX_CONCURRENT,
+  timeoutMs: ASK_CODE_TIMEOUT_MS,
+});
 
 /** Main-process storage for the MiniMax API key. Never sent back to the renderer. */
 let storedApiKey = '';
@@ -31,17 +38,12 @@ export function askAboutCodeMinimax(win: BrowserWindow, args: MinimaxAskCodeRequ
     throw new Error('MiniMax API key is not set. Please configure it in Settings.');
   }
 
-  if (prompt.length > MAX_PROMPT_LENGTH) {
-    throw new Error(`Prompt too long (${prompt.length} chars, max ${MAX_PROMPT_LENGTH})`);
-  }
-  if (activeRequests.size >= MAX_CONCURRENT) {
-    throw new Error('Too many concurrent ask-about-code requests');
-  }
+  assertPromptWithinLimit(prompt);
+  assertCanStart(activeRequests, requestId);
 
   cancelAskAboutCodeMinimax(requestId);
 
   const controller = new AbortController();
-  activeRequests.set(requestId, controller);
 
   const send = (msg: unknown) => {
     if (!win.isDestroyed()) {
@@ -49,28 +51,9 @@ export function askAboutCodeMinimax(win: BrowserWindow, args: MinimaxAskCodeRequ
     }
   };
 
-  let finished = false;
-
-  function cleanup() {
-    activeRequests.delete(requestId);
-    const timer = activeTimers.get(requestId);
-    if (timer) {
-      clearTimeout(timer);
-      activeTimers.delete(requestId);
-    }
-  }
-
-  // Safety timeout: kill after 2 minutes
-  const timer = setTimeout(() => {
-    activeTimers.delete(requestId);
-    if (activeRequests.has(requestId)) {
-      finished = true;
-      send({ type: 'error', text: 'Request timed out after 2 minutes.' });
-      cancelAskAboutCodeMinimax(requestId);
-      send({ type: 'done', exitCode: 1 });
-    }
-  }, TIMEOUT_MS);
-  activeTimers.set(requestId, timer);
+  const session = AskCodeSession.start(activeRequests, requestId, controller, send, (request) =>
+    request.abort(),
+  );
 
   fetch(MINIMAX_API_URL, {
     method: 'POST',
@@ -140,16 +123,14 @@ export function askAboutCodeMinimax(win: BrowserWindow, args: MinimaxAskCodeRequ
         controller.signal.removeEventListener('abort', onAbort);
       }
 
-      cleanup();
-      if (!finished) {
-        finished = true;
+      session.cleanup();
+      if (session.complete()) {
         send({ type: 'done', exitCode: 0, cancelled: aborted });
       }
     })
     .catch((err: unknown) => {
-      cleanup();
-      if (!finished) {
-        finished = true;
+      session.cleanup();
+      if (session.complete()) {
         if (err instanceof Error && err.name === 'AbortError') {
           // request was cancelled — send done without error, neutral exit code
           send({ type: 'done', exitCode: 0, cancelled: true });
@@ -162,16 +143,7 @@ export function askAboutCodeMinimax(win: BrowserWindow, args: MinimaxAskCodeRequ
 }
 
 export function cancelAskAboutCodeMinimax(requestId: string): void {
-  const controller = activeRequests.get(requestId);
-  if (controller) {
-    controller.abort();
-    activeRequests.delete(requestId);
-  }
-  const timer = activeTimers.get(requestId);
-  if (timer) {
-    clearTimeout(timer);
-    activeTimers.delete(requestId);
-  }
+  activeRequests.cancel(requestId);
 }
 
 export function isMinimaxRequestActive(requestId: string): boolean {

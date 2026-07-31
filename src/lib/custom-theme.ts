@@ -28,6 +28,10 @@ export const CSS_VARS = [
   '--island-radius',
   '--task-container-bg',
   '--task-panel-bg',
+  '--diff-add-bg',
+  '--diff-remove-bg',
+  '--search-match',
+  '--search-match-active',
 ] as const;
 
 export type CssVar = (typeof CSS_VARS)[number];
@@ -51,6 +55,34 @@ function isAllowedCssValue(varName: string, value: string): boolean {
   if (DANGEROUS_CSS_RE.test(value)) return false;
   if (varName === '--island-radius') return /^\d+px$|^0$/.test(value);
   return true;
+}
+
+export function isHexTerminalBackground(value: string): boolean {
+  return /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(value.trim());
+}
+
+export function collectAllowedVars(
+  entries: Iterable<[string, unknown]>,
+  options?: { validateValues?: boolean },
+): Partial<Record<CssVar, string>> {
+  const vars: Partial<Record<CssVar, string>> = {};
+  for (const [key, value] of entries) {
+    if (!CSS_VAR_SET.has(key) || typeof value !== 'string') continue;
+    if (options?.validateValues && !isAllowedCssValue(key, value)) continue;
+    vars[key as CssVar] = value;
+  }
+  return vars;
+}
+
+export function formatVarLines(
+  vars: Partial<Record<CssVar, string>>,
+  options?: { ordered?: boolean },
+): string {
+  const entries =
+    options?.ordered === false
+      ? Object.entries(vars)
+      : CSS_VARS.filter((v) => v in vars).map((v) => [v, vars[v]] as const);
+  return entries.map(([k, v]) => `  ${k}: ${v};`).join('\n');
 }
 
 const CSS_VAR_DESCRIPTIONS: Record<CssVar, string> = {
@@ -82,6 +114,10 @@ const CSS_VAR_DESCRIPTIONS: Record<CssVar, string> = {
   '--task-container-bg': 'Background of the task list container within an island',
   '--task-panel-bg':
     'Content panel backgrounds inside tasks (conceptually matches terminalBackground)',
+  '--diff-add-bg': 'Background tint for added diff lines',
+  '--diff-remove-bg': 'Background tint for removed diff lines',
+  '--search-match': 'Background color for search matches',
+  '--search-match-active': 'Background color for the active search match',
 };
 
 export function validateCustomTheme(input: unknown): Omit<CustomTheme, 'id'> {
@@ -98,18 +134,13 @@ export function validateCustomTheme(input: unknown): Omit<CustomTheme, 'id'> {
     throw new Error('"vars" must be a mapping of CSS variable names to values');
 
   const rawVars = obj['vars'] as Record<string, unknown>;
-  const vars: Partial<Record<CssVar, string>> = {};
-  for (const [key, value] of Object.entries(rawVars)) {
-    if (CSS_VAR_SET.has(key) && typeof value === 'string') {
-      vars[key as CssVar] = value;
-    }
-  }
+  const vars = collectAllowedVars(Object.entries(rawVars));
 
   if (Object.keys(vars).length === 0)
     throw new Error('"vars" must contain at least one recognized CSS variable');
 
   const terminalBackground = (obj['terminalBackground'] as string).trim();
-  if (!/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(terminalBackground))
+  if (!isHexTerminalBackground(terminalBackground))
     throw new Error('"terminalBackground" must be a 3- or 6-digit hex color (e.g. #1a1a2e)');
 
   const description = typeof obj['description'] === 'string' ? obj['description'].trim() : '';
@@ -195,9 +226,7 @@ export function parseThemeCss(cssString: string): Omit<CustomTheme, 'id'> {
     while ((declMatch = declRe.exec(blockContent)) !== null) {
       const key = declMatch[1];
       const value = declMatch[2].trim();
-      if (CSS_VAR_SET.has(key) && value && isAllowedCssValue(key, value)) {
-        vars[key as CssVar] = value;
-      }
+      Object.assign(vars, collectAllowedVars([[key, value]], { validateValues: true }));
     }
     // Advance rootStartRe past the block we just processed
     rootStartRe.lastIndex = i;
@@ -209,7 +238,7 @@ export function parseThemeCss(cssString: string): Omit<CustomTheme, 'id'> {
     );
   }
 
-  if (!/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(terminalBackground)) {
+  if (!isHexTerminalBackground(terminalBackground)) {
     throw new Error(
       '"terminalBackground" must be a 3- or 6-digit hex color (e.g. #1a1a2e) — rgb(), hsl(), and gradients are not allowed',
     );
@@ -237,9 +266,7 @@ export function themeToCss(
   terminalBackground: string,
   vars: Partial<Record<CssVar, string>>,
 ): string {
-  const varLines = CSS_VARS.filter((v) => v in vars)
-    .map((v) => `  ${v}: ${vars[v]};`)
-    .join('\n');
+  const varLines = formatVarLines(vars);
   const descLine = description ? `\n  description: ${description}` : '';
   return `/*\n  name: ${name}${descLine}\n  terminalBackground: ${terminalBackground}\n*/\n\n:root {\n${varLines}\n}\n`;
 }
@@ -247,7 +274,7 @@ export function themeToCss(
 export function buildCustomThemeCss(theme: CustomTheme): string {
   const entries = Object.entries(theme.vars);
   if (entries.length === 0) return '';
-  const body = entries.map(([k, v]) => `  ${k}: ${v};`).join('\n');
+  const body = formatVarLines(theme.vars, { ordered: false });
   return `html[data-custom-theme='${theme.id}'] {\n${body}\n}`;
 }
 
@@ -264,6 +291,7 @@ export interface ContrastWarning {
 const CONTRAST_PAIRS: [CssVar, CssVar, number][] = [
   ['--fg', '--bg-elevated', 4.5],
   ['--fg-muted', '--bg-elevated', 3.0],
+  ['--fg-subtle', '--bg-elevated', 3.0],
   ['--fg', '--bg-selected', 4.5],
   ['--accent-text', '--accent', 4.5],
 ];

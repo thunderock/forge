@@ -22,11 +22,16 @@ jobs:
       - name: Check (compile + typecheck + lint + format)
         run: npm run check
 
-      - name: Lint (architecture)
-        run: npm run lint:arch
+      - name: Check static (typecheck + lint + dead code + architecture)
+        run: npm run check:static
 
-      - name: Lint (dead code)
-        run: npm run lint:dead
+      - name: Install Semgrep
+        run: |
+          pipx install semgrep
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Test security rules
+        run: npm run test:security-rules
 
       - name: Test
         run: npm test

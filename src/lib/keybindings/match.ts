@@ -1,8 +1,43 @@
 import type { KeyBinding } from './types';
+import type { Modifiers } from './types';
 
 // Safe platform detection — navigator may not exist in test/SSR environments
-const isMac: boolean =
+export const isMacPlatform: boolean =
   typeof navigator !== 'undefined' ? navigator.userAgent.includes('Mac') : false;
+
+export interface NormalizedModifiers {
+  ctrl: boolean;
+  meta: boolean;
+  alt: boolean;
+  shift: boolean;
+}
+
+export function normalizeModifiers(
+  modifiers: Modifiers,
+  isMac: boolean = isMacPlatform,
+): NormalizedModifiers {
+  return {
+    ctrl: !!modifiers.ctrl || (!isMac && !!modifiers.cmdOrCtrl),
+    meta: !!modifiers.meta || (isMac && !!modifiers.cmdOrCtrl),
+    alt: !!modifiers.alt,
+    shift: !!modifiers.shift,
+  };
+}
+
+export function modifiersMatch(
+  a: Modifiers,
+  b: Modifiers,
+  isMac: boolean = isMacPlatform,
+): boolean {
+  const normalizedA = normalizeModifiers(a, isMac);
+  const normalizedB = normalizeModifiers(b, isMac);
+  return (
+    normalizedA.ctrl === normalizedB.ctrl &&
+    normalizedA.meta === normalizedB.meta &&
+    normalizedA.alt === normalizedB.alt &&
+    normalizedA.shift === normalizedB.shift
+  );
+}
 
 /**
  * Check whether a KeyboardEvent matches a KeyBinding's key + modifiers.
@@ -11,17 +46,11 @@ const isMac: boolean =
  */
 export function matchesKeyEvent(e: KeyboardEvent, binding: KeyBinding): boolean {
   if (e.key.toLowerCase() !== binding.key.toLowerCase()) return false;
-  const m = binding.modifiers;
+  const expected = normalizeModifiers(binding.modifiers);
 
-  // Normalize modifier expectations so matching is exact on every platform.
-  // cmdOrCtrl contributes Cmd on macOS and Ctrl elsewhere. Explicit meta/ctrl
-  // flags remain additive so bindings that intentionally require both still work.
-  const expectedMeta = !!m.meta || (isMac && !!m.cmdOrCtrl);
-  const expectedCtrl = !!m.ctrl || (!isMac && !!m.cmdOrCtrl);
-
-  if (e.metaKey !== expectedMeta) return false;
-  if (e.ctrlKey !== expectedCtrl) return false;
-  if (!!m.alt !== e.altKey) return false;
-  if (!!m.shift !== e.shiftKey) return false;
+  if (e.metaKey !== expected.meta) return false;
+  if (e.ctrlKey !== expected.ctrl) return false;
+  if (e.altKey !== expected.alt) return false;
+  if (e.shiftKey !== expected.shift) return false;
   return true;
 }

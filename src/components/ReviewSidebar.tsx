@@ -48,7 +48,7 @@ function SidebarAnnotationItem(props: {
         'margin-bottom': '6px',
         'border-left': `3px solid ${theme.warning}`,
         'border-radius': '0 4px 4px 0',
-        background: 'rgba(255,255,255,0.03)',
+        background: 'color-mix(in srgb, var(--fg) 3%, transparent)',
         cursor: 'pointer',
         position: 'relative',
       }}

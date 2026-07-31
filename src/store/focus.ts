@@ -1,6 +1,7 @@
 import { batch } from 'solid-js';
 import { store, setStore } from './core';
 import { setActiveTask } from './navigation';
+import { showNotification } from './notification';
 import { computeSidebarTaskOrder } from './sidebar-order';
 import { uncollapseTask } from './tasks';
 import {
@@ -480,6 +481,15 @@ export function navigateTask(direction: 'left' | 'right'): void {
 export function setPendingAction(
   action: { type: 'close' | 'merge' | 'push'; taskId: string } | null,
 ): void {
+  if (action && (action.type === 'merge' || action.type === 'push')) {
+    const task = store.tasks[action.taskId];
+    if (task && task.gitIsolation !== 'worktree') {
+      const label = action.type === 'merge' ? 'Merge' : 'Push';
+      showNotification(`${label} is only available for worktree tasks`);
+      return;
+    }
+  }
+
   setStore('pendingAction', action);
 }
 

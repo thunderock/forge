@@ -3,6 +3,19 @@ import { promisify } from 'util';
 import { Notification, type BrowserWindow } from 'electron';
 import { stat } from 'fs/promises';
 import { IPC } from './channels.js';
+import type {
+  PrCheckBucket,
+  PrCheckRun,
+  PrChecksOverall,
+  PrChecksUpdatePayload,
+} from './shared-types.js';
+
+export type {
+  PrCheckBucket,
+  PrCheckRun,
+  PrChecksOverall,
+  PrChecksUpdatePayload,
+} from './shared-types.js';
 
 const exec = promisify(execFile);
 
@@ -11,25 +24,6 @@ const SETTLED_REFRESH_MS = 5 * 60_000;
 const POST_PUSH_REFRESH_GRACE_MS = 2 * 60_000;
 const GH_TIMEOUT_MS = 15_000;
 const GH_MAX_BUFFER = 4 * 1024 * 1024;
-
-export type PrCheckBucket = 'pass' | 'fail' | 'pending' | 'skipping' | 'cancel';
-export type PrChecksOverall = 'pending' | 'success' | 'failure' | 'none';
-
-export interface PrCheckRun {
-  name: string;
-  bucket: PrCheckBucket;
-}
-
-export interface PrChecksUpdatePayload {
-  taskId: string;
-  overall: PrChecksOverall;
-  passing: number;
-  pending: number;
-  failing: number;
-  checks: PrCheckRun[];
-  checkedAt: string;
-  cleared: boolean;
-}
 
 interface TaskEntry {
   taskId: string;

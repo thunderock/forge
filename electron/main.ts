@@ -81,17 +81,28 @@ fixEnv();
 
 // Verify that preload.cjs ALLOWED_CHANNELS stays in sync with the IPC enum.
 // Logs a warning in dev if they drift — catches mismatches before they hit users.
+//
+// preload.cjs uses an inline ALLOWED_CHANNELS literal because sandboxed
+// preloads cannot require arbitrary local JSON. Keep that literal in sync
+// with the shared channel manifest that backs the IPC export.
 function verifyPreloadAllowlist(): void {
   try {
     const preloadPath = path.join(__dirname, '..', 'electron', 'preload.cjs');
     const preloadSrc = fs.readFileSync(preloadPath, 'utf8');
+    const allowlistMatch = /new Set\(\[([\s\S]*?)\]\)/.exec(preloadSrc);
+    if (!allowlistMatch) {
+      console.warn('[preload-sync] preload.cjs ALLOWED_CHANNELS literal not found');
+      return;
+    }
+    const preloadValues = new Set(
+      [...allowlistMatch[1].matchAll(/'([^']+)'/g)].map((match) => match[1]),
+    );
     const enumValues = new Set(Object.values(IPC));
-    const hasChannel = (channel: string) =>
-      preloadSrc.includes(`'${channel}'`) || preloadSrc.includes(`"${channel}"`);
-    const missing = [...enumValues].filter((v) => !hasChannel(v));
-    if (missing.length > 0) {
+    const missing = [...enumValues].filter((v) => !preloadValues.has(v));
+    const extra = [...preloadValues].filter((v) => !enumValues.has(v));
+    if (missing.length > 0 || extra.length > 0) {
       console.warn(
-        `[preload-sync] IPC channels missing from preload.cjs ALLOWED_CHANNELS: ${missing.join(', ')}`,
+        `[preload-sync] preload.cjs ALLOWED_CHANNELS drift: missing=${missing.join(', ')} extra=${extra.join(', ')}`,
       );
     }
   } catch {

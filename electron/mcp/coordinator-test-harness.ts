@@ -111,7 +111,7 @@ vi.mock('./atomic.js', () => ({
   atomicWriteFile: mocks.mockAtomicWriteFile,
 }));
 
-vi.mock('./prompt-detect.js', () => ({
+vi.mock('../shared/prompt-detect.js', () => ({
   stripAnsi: (s: string) =>
     s.replace(
       // eslint-disable-next-line no-control-regex

@@ -13,6 +13,13 @@ interface CloseTaskDialogProps {
   onDone: () => void;
 }
 
+export function shouldDisableCloseTaskConfirm(
+  task: Pick<Task, 'gitIsolation' | 'externalWorktree'>,
+  worktreeStatusLoading: boolean,
+): boolean {
+  return worktreeStatusLoading && task.gitIsolation === 'worktree' && !task.externalWorktree;
+}
+
 export function CloseTaskDialog(props: CloseTaskDialogProps) {
   const [worktreeStatus] = createResource(
     () =>
@@ -21,6 +28,8 @@ export function CloseTaskDialog(props: CloseTaskDialogProps) {
         : null,
     (path) => invoke<WorktreeStatus>(IPC.GetWorktreeStatus, { worktreePath: path }),
   );
+  const confirmWaitingForStatus = () =>
+    shouldDisableCloseTaskConfirm(props.task, worktreeStatus.loading);
 
   return (
     <ConfirmDialog
@@ -140,6 +149,10 @@ export function CloseTaskDialog(props: CloseTaskDialogProps) {
       confirmLabel={
         props.task.gitIsolation !== 'worktree' || props.task.externalWorktree ? 'Close' : 'Delete'
       }
+      // Don't allow deleting before the dirty-worktree check resolves — the
+      // uncommitted/unmerged warnings above only render once it has.
+      confirmDisabled={confirmWaitingForStatus()}
+      confirmLoading={confirmWaitingForStatus()}
       danger={props.task.gitIsolation === 'worktree' && !props.task.externalWorktree}
       onConfirm={() => {
         props.onDone();

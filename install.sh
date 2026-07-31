@@ -10,7 +10,7 @@ case "$OS" in
     Darwin)
         echo "Building release for macOS..."
         rm -f "$SCRIPT_DIR"/release/*.dmg
-        npm run build:frontend && npm run compile && npx electron-builder --config.mac.identity=null
+        npm run build:frontend && npm run build:remote && npm run compile && npm run build:mcp && npx electron-builder --config.mac.identity=null
 
         DMG_FILE=$(find "$SCRIPT_DIR/release" -name '*.dmg' -type f | head -1)
 

@@ -17,6 +17,7 @@ import {
   isPanelFocusedPrefix,
 } from '../store/store';
 import { TerminalView } from './TerminalView';
+import { CloseIcon } from './icons';
 import { theme } from '../lib/theme';
 import { sf } from '../lib/fontScale';
 import { mod } from '../lib/platform';
@@ -249,9 +250,7 @@ export function TaskShellSection(props: TaskShellSectionProps) {
                       'font-size': '15px',
                     }}
                   >
-                    <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
-                      <path d="M3.72 3.72a.75.75 0 0 1 1.06 0L8 6.94l3.22-3.22a.75.75 0 1 1 1.06 1.06L9.06 8l3.22 3.22a.75.75 0 1 1-1.06 1.06L8 9.06l-3.22 3.22a.75.75 0 0 1-1.06-1.06L6.94 8 3.72 4.78a.75.75 0 0 1 0-1.06Z" />
-                    </svg>
+                    <CloseIcon size={12} />
                   </button>
                   <Show when={shellExits[shellId]}>
                     <div

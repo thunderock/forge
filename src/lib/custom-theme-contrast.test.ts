@@ -1,9 +1,8 @@
 /**
  * Contrast audit for all built-in themes.
  * Parses styles.css, extracts CSS variable values per theme, and runs
- * checkThemeContrast() against each. Prints a full report — failures are
- * logged but the test does NOT fail, so this acts as an audit rather than
- * a hard gate (some themes may have intentional low-contrast secondary text).
+ * checkThemeContrast() against each. Any warning fails the test so built-in
+ * presets cannot regress below the supported contrast thresholds.
  */
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
@@ -13,14 +12,27 @@ import type { CssVar } from './custom-theme';
 import { CSS_VARS } from './custom-theme';
 
 const CSS_VAR_SET = new Set<string>(CSS_VARS);
+const VAR_RE = /^\s*(--[\w-]+)\s*:\s*(.+?)\s*;?\s*$/;
+
+function parseVars(body: string): Partial<Record<CssVar, string>> {
+  const vars: Partial<Record<CssVar, string>> = {};
+  for (const line of body.split('\n')) {
+    const match = VAR_RE.exec(line);
+    if (match && CSS_VAR_SET.has(match[1])) {
+      vars[match[1] as CssVar] = match[2].trim();
+    }
+  }
+  return vars;
+}
 
 function parseThemesFromCss(css: string): Record<string, Partial<Record<CssVar, string>>> {
   const themes: Record<string, Partial<Record<CssVar, string>>> = {};
+  const rootMatch = /:root\s*\{([^}]*)\}/.exec(css);
+  const rootVars = rootMatch ? parseVars(rootMatch[1]) : {};
 
   // Match blocks like: html[data-look='name'] { ... } or html[data-look='a'], html[data-look='b'] { ... }
   const blockRe = /(html\[data-look='[^']+'\](?:\s*,\s*html\[data-look='[^']+'\])*)\s*\{([^}]*)\}/g;
   const nameRe = /data-look='([^']+)'/g;
-  const varRe = /^\s*(--[\w-]+)\s*:\s*(.+?)\s*;?\s*$/;
 
   let blockMatch: RegExpExecArray | null;
   while ((blockMatch = blockRe.exec(css)) !== null) {
@@ -36,17 +48,11 @@ function parseThemesFromCss(css: string): Record<string, Partial<Record<CssVar, 
     }
 
     // Parse CSS variable declarations from the block body
-    const vars: Partial<Record<CssVar, string>> = {};
-    for (const line of body.split('\n')) {
-      const m = varRe.exec(line);
-      if (m && CSS_VAR_SET.has(m[1])) {
-        vars[m[1] as CssVar] = m[2].trim();
-      }
-    }
+    const vars = parseVars(body);
 
     // Assign vars to each named theme (later blocks override earlier ones)
     for (const name of names) {
-      themes[name] = { ...(themes[name] ?? {}), ...vars };
+      themes[name] = { ...rootVars, ...(themes[name] ?? {}), ...vars };
     }
   }
 
@@ -62,6 +68,12 @@ describe('built-in theme contrast audit', () => {
     expect(Object.keys(themes).length).toBeGreaterThanOrEqual(10);
   });
 
+  it('applies root defaults to every parsed theme', () => {
+    for (const vars of Object.values(themes)) {
+      expect(CSS_VARS.every((name) => vars[name] !== undefined)).toBe(true);
+    }
+  });
+
   for (const [name, vars] of Object.entries(themes)) {
     it(`${name} — contrast check`, () => {
       const warnings = checkThemeContrast(vars);
@@ -73,8 +85,7 @@ describe('built-in theme contrast audit', () => {
           );
         }
       }
-      // Not a hard failure — this is an audit. Remove the expect() below to make it hard.
-      expect(warnings).toBeDefined();
+      expect(warnings).toEqual([]);
     });
   }
 });

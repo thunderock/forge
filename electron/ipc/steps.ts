@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import type { BrowserWindow } from 'electron';
 import { IPC } from './channels.js';
+import { appendGitInfoExcludeBlock } from './git-exclude.js';
 import {
   debug as logDebug,
   info as logInfo,
@@ -75,13 +76,43 @@ function applyTimestamps(steps: unknown[], stepsFile: string, taskId: string): v
   }
 }
 
-/** Reads and parses `.claude/steps.json`. Returns the array or null. */
+function isStepObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+/**
+ * Parses the canonical JSON array plus the single-object / JSONL forms that
+ * append-oriented agents commonly produce. The watcher normalizes supported
+ * alternatives back to an array when it adds host timestamps.
+ */
+export function parseStepsContent(raw: string): unknown[] | null {
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed;
+    return isStepObject(parsed) ? [parsed] : null;
+  } catch {
+    const lines = raw
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    if (lines.length === 0) return null;
+
+    try {
+      const entries: unknown[] = lines.map((line) => JSON.parse(line) as unknown);
+      return entries.every(isStepObject) ? entries : null;
+    } catch {
+      return null;
+    }
+  }
+}
+
+/** Reads and parses `.claude/steps.json`. Returns the entries or null. */
 function readStepsFile(stepsFile: string): unknown[] | null {
   try {
     const raw = fs.readFileSync(stepsFile, 'utf-8');
-    const parsed: unknown = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return null;
-    return parsed as unknown[];
+    const steps = parseStepsContent(raw);
+    if (!steps) logWarn('steps', 'invalid steps file format', { stepsFile });
+    return steps;
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code !== 'ENOENT') {
       // Non-ENOENT read failures (corrupt file, permissions, etc.)
@@ -96,45 +127,10 @@ function readStepsFile(stepsFile: string): unknown[] | null {
  * Resolves the path to the git exclude file for a given worktree.
  * For linked worktrees, .git is a file pointing to the actual git dir.
  */
-function getGitExcludePath(worktreePath: string): string | null {
-  const gitPath = path.join(worktreePath, '.git');
-  try {
-    const stat = fs.statSync(gitPath);
-    if (stat.isDirectory()) {
-      return path.join(gitPath, 'info', 'exclude');
-    }
-    // Linked worktree: .git is a file "gitdir: /path/to/.git/worktrees/<name>"
-    const content = fs.readFileSync(gitPath, 'utf-8').trim();
-    const match = /^gitdir: (.+)$/.exec(content);
-    if (!match) return null;
-    return path.join(match[1], 'info', 'exclude');
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Ensures `.claude/steps.json` is excluded from git via the worktree's
- * `.git/info/exclude` (local, never committed) so the file never shows up
- * in the user's diff.
- */
 function ensureStepsIgnored(worktreePath: string): void {
-  const excludePath = getGitExcludePath(worktreePath);
-  if (!excludePath) return;
-  const entry = '.claude/steps.json';
-  try {
-    let content = '';
-    if (fs.existsSync(excludePath)) {
-      content = fs.readFileSync(excludePath, 'utf-8');
-      if (content.split('\n').some((line) => line.trim() === entry)) return;
-    } else {
-      fs.mkdirSync(path.dirname(excludePath), { recursive: true });
-    }
-    const prefix = content.length > 0 && !content.endsWith('\n') ? '\n' : '';
-    fs.appendFileSync(excludePath, `${prefix}${entry}\n`, 'utf-8');
-  } catch (err) {
+  appendGitInfoExcludeBlock(worktreePath, '.claude/steps.json', '.claude/steps.json\n', (err) => {
     logWarn('steps', 'failed to update git exclude', { err: errMessage(err) });
-  }
+  });
 }
 
 /**

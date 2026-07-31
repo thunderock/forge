@@ -1,10 +1,8 @@
 const { contextBridge, ipcRenderer, webFrame, webUtils } = require('electron');
 
-// Allowlist of valid IPC channels.
-// IMPORTANT: This list MUST stay in sync with the IPC enum in electron/ipc/channels.ts.
-// The main process verifies this at startup — a mismatch will log a warning in dev.
+// Keep this literal list in sync with electron/ipc/channel-manifest.json.
+// Electron sandboxed preloads cannot require arbitrary local JSON files.
 const ALLOWED_CHANNELS = new Set([
-  // Agent/PTY
   'spawn_agent',
   'write_to_agent',
   'resize_agent',
@@ -18,30 +16,20 @@ const ALLOWED_CHANNELS = new Set([
   'list_codex_models',
   'resolve_claude_models',
   'list_agent_skills',
-  // Task
   'create_task',
   'delete_task',
-  // Git
   'get_changed_files',
   'get_changed_files_from_branch',
-  'get_file_diff',
-  'get_file_diff_from_branch',
   'get_all_file_diffs',
   'get_all_file_diffs_from_branch',
+  'get_file_diff',
+  'get_file_diff_from_branch',
   'get_gitignored_dirs',
   'list_importable_worktrees',
   'get_worktree_status',
-  'commit_all',
-  'discard_uncommitted',
   'check_merge_status',
   'merge_task',
   'get_branch_log',
-  'get_branch_commits',
-  'get_commit_changed_files',
-  'get_commit_diffs',
-  'get_uncommitted_changed_files',
-  'get_uncommitted_file_diffs',
-  'get_coverage_summary',
   'push_task',
   'rebase_task',
   'get_main_branch',
@@ -49,22 +37,28 @@ const ALLOWED_CHANNELS = new Set([
   'checkout_branch',
   'get_branches',
   'check_is_git_repo',
-  // Persistence
+  'commit_all',
+  'discard_uncommitted',
+  'get_branch_commits',
+  'get_commit_changed_files',
+  'get_commit_diffs',
+  'get_uncommitted_changed_files',
+  'get_uncommitted_file_diffs',
+  'get_coverage_summary',
   'save_app_state',
   'load_app_state',
   'load_custom_themes',
   'save_custom_theme',
   'delete_custom_theme',
-  // Keybindings
   'load_keybindings',
   'save_keybindings',
-  // Window
   '__window_is_focused',
   '__window_is_maximized',
   '__window_minimize',
   '__window_toggle_maximize',
   '__window_close',
   '__window_force_close',
+  '__window_close_handling',
   '__window_hide',
   '__window_maximize',
   '__window_unmaximize',
@@ -77,74 +71,60 @@ const ALLOWED_CHANNELS = new Set([
   '__window_resized',
   '__window_moved',
   '__window_close_requested',
-  '__window_close_handling',
-  // Dialog
   '__dialog_confirm',
   '__dialog_choice',
   '__dialog_open',
-  // Shell
   '__shell_reveal',
   '__shell_open_file',
   '__shell_open_in_editor',
   '__shell_open_external',
-  // Arena
   'save_arena_data',
   'load_arena_data',
   'create_arena_worktree',
   'remove_arena_worktree',
   'check_path_exists',
-  // Remote access
   'start_remote_server',
   'stop_remote_server',
   'get_remote_status',
   'generate_pairing_pin',
   'remote_get_projects_request',
   'remote_create_task_request',
+  'remote_get_notes_request',
+  'remote_set_notes_request',
+  'remote_update_task_status',
   'remote_renderer_reply',
-  // Plan
   'plan_content',
   'read_plan_content',
   'stop_plan_watcher',
-  // Steps
   'steps_content',
   'read_steps_content',
   'stop_steps_watcher',
-  // Docker
+  'ask_about_code',
+  'cancel_ask_about_code',
+  'set_minimax_api_key',
   'check_docker_available',
   'check_docker_image_exists',
   'build_docker_image',
   'resolve_project_dockerfile',
-  // Ask about code
-  'ask_about_code',
-  'cancel_ask_about_code',
-  'set_minimax_api_key',
-  // System
   'get_system_fonts',
-  // File links
   'open_path',
   'read_file_text',
-  // Clipboard
   'resolve_clipboard_paste',
   'save_dropped_image',
-  // Notifications
   'show_notification',
   'notification_clicked',
   'notification_failed',
-  // PR CI status
   'start_pr_checks_watcher',
   'stop_pr_checks_watcher',
   'detect_pr_for_branch',
   'refresh_pr_checks_watcher',
   'pr_checks_update',
-  // Logging
   'log_from_renderer',
-  // Auto-update
   'check_for_updates',
   'download_update',
   'quit_and_install_update',
   'get_update_status',
   'update_status_changed',
-  // MCP / Coordinating agent
   'set_coordinator_mode_enabled',
   'start_mcp_server',
   'stop_mcp_server',

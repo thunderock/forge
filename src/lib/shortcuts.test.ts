@@ -40,7 +40,7 @@ describe('registerFromRegistry — jump-to-task bindings', () => {
     vi.unstubAllGlobals();
   });
 
-  it('fires jumpToTask:1 handler on Cmd+1 (key="1")', () => {
+  it('fires jumpToTask:1 handler on Ctrl+1 (key="1") on non-Mac platforms', () => {
     const handler = vi.fn();
     const cleanupRegistry = registerFromRegistry(DEFAULT_BINDINGS, { 'jumpToTask:1': handler });
     const cleanupShortcuts = initShortcuts();
@@ -57,8 +57,8 @@ describe('registerFromRegistry — jump-to-task bindings', () => {
       | 'stopPropagation'
     > = {
       key: '1',
-      ctrlKey: false,
-      metaKey: true,
+      ctrlKey: true,
+      metaKey: false,
       altKey: false,
       shiftKey: false,
       target: null,
@@ -74,7 +74,7 @@ describe('registerFromRegistry — jump-to-task bindings', () => {
     cleanupRegistry();
   });
 
-  it('fires jumpToTask handler on Cmd+Shift+1 via registerJumpToTaskShortcuts (AZERTY)', () => {
+  it('fires jumpToTask handler on Ctrl+Shift+1 via registerJumpToTaskShortcuts (AZERTY)', () => {
     const handler = vi.fn();
     const cleanupJump = registerJumpToTaskShortcuts(handler);
     const cleanupShortcuts = initShortcuts();
@@ -91,8 +91,8 @@ describe('registerFromRegistry — jump-to-task bindings', () => {
       | 'stopPropagation'
     > = {
       key: '1',
-      ctrlKey: false,
-      metaKey: true,
+      ctrlKey: true,
+      metaKey: false,
       altKey: false,
       shiftKey: true,
       target: null,
@@ -107,6 +107,30 @@ describe('registerFromRegistry — jump-to-task bindings', () => {
 
     cleanupShortcuts();
     cleanupJump();
+  });
+
+  it('does NOT fire cmdOrCtrl bindings for Meta on non-Mac platforms', () => {
+    const handler = vi.fn();
+    const cleanupRegistry = registerFromRegistry(DEFAULT_BINDINGS, { 'jumpToTask:1': handler });
+    const cleanupShortcuts = initShortcuts();
+
+    const event: KeyboardEventStub = {
+      key: '1',
+      ctrlKey: false,
+      metaKey: true,
+      altKey: false,
+      shiftKey: false,
+      target: null,
+      preventDefault: vi.fn(),
+      stopPropagation: vi.fn(),
+    };
+
+    keydownHandler?.(event as KeyboardEvent);
+
+    expect(handler).not.toHaveBeenCalled();
+
+    cleanupShortcuts();
+    cleanupRegistry();
   });
 
   it('does NOT fire when key is "Digit1" (old broken binding format)', () => {

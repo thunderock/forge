@@ -36,6 +36,11 @@ describe('selectTools — role-based tool list', () => {
     }
   });
 
+  it('does not advertise deprecated review_and_merge_task', () => {
+    const names = selectTools('', 'coordinator-xyz').map((t: ToolDef) => t.name);
+    expect(names).not.toContain('review_and_merge_task');
+  });
+
   it('plain agent (neither taskId nor coordinatorId) gets coordinator tools', () => {
     const tools = selectTools('', '');
     expect(tools).toEqual(COORDINATOR_TOOLS);

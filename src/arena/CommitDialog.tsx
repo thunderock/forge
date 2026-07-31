@@ -1,4 +1,5 @@
-import { Show, createSignal, untrack } from 'solid-js';
+import { Show, createSignal, createUniqueId, untrack } from 'solid-js';
+import { Dialog } from '../components/Dialog';
 import { arenaStore } from './store';
 import type { BattleCompetitor } from './types';
 
@@ -11,6 +12,7 @@ interface CommitDialogProps {
 }
 
 export function CommitDialog(props: CommitDialogProps) {
+  const titleId = createUniqueId();
   const promptSnippet = () => {
     const p = arenaStore.prompt;
     return p.slice(0, 50) + (p.length > 50 ? '...' : '');
@@ -20,9 +22,23 @@ export function CommitDialog(props: CommitDialogProps) {
   );
 
   return (
-    <div class="arena-commit-overlay" onClick={() => props.onCancel()}>
-      <div class="arena-commit-dialog" onClick={(e) => e.stopPropagation()}>
-        <div class="arena-commit-title">{props.target.name} has uncommitted changes</div>
+    <Dialog
+      open={true}
+      onClose={props.onCancel}
+      width="420px"
+      labelledBy={titleId}
+      panelStyle={{
+        background: 'transparent',
+        border: 'none',
+        'box-shadow': 'none',
+        padding: '0',
+        overflow: 'visible',
+      }}
+    >
+      <div class="arena-commit-dialog">
+        <div id={titleId} class="arena-commit-title">
+          {props.target.name} has uncommitted changes
+        </div>
         <label class="arena-commit-label">
           Commit message
           <input
@@ -54,6 +70,6 @@ export function CommitDialog(props: CommitDialogProps) {
           </button>
         </div>
       </div>
-    </div>
+    </Dialog>
   );
 }

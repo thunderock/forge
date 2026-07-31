@@ -1,10 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { mockExecFileSync, mockReadFileSync, mockAppendFileSync } = vi.hoisted(() => ({
-  mockExecFileSync: vi.fn(),
-  mockReadFileSync: vi.fn(),
-  mockAppendFileSync: vi.fn(),
-}));
+const { mockExecFileSync, mockReadFileSync, mockAppendFileSync, mockMkdirSync } = vi.hoisted(
+  () => ({
+    mockExecFileSync: vi.fn(),
+    mockReadFileSync: vi.fn(),
+    mockAppendFileSync: vi.fn(),
+    mockMkdirSync: vi.fn(),
+  }),
+);
 
 vi.mock('child_process', async () => {
   const actual = await vi.importActual<typeof import('child_process')>('child_process');
@@ -26,6 +29,7 @@ vi.mock('fs', async () => {
     ...actual,
     default: {
       ...actual,
+      mkdirSync: mockMkdirSync,
       readFileSync: mockReadFileSync,
       appendFileSync: mockAppendFileSync,
       promises: actual.promises,

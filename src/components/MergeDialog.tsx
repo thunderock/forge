@@ -1,9 +1,18 @@
 import { Show, For, createSignal, createResource, createEffect } from 'solid-js';
 import { invoke } from '../lib/ipc';
 import { IPC } from '../../electron/ipc/channels';
-import { store, getProject, mergeTask, sendPrompt, updateTaskBranch } from '../store/store';
+import {
+  store,
+  getProject,
+  getPrChecks,
+  mergeTask,
+  sendPrompt,
+  updateTaskBranch,
+} from '../store/store';
 import { ConfirmDialog } from './ConfirmDialog';
 import { ChangedFilesList } from './ChangedFilesList';
+import { MergeReadinessPanel } from './MergeReadinessPanel';
+import { buildMergeReadiness } from './merge-readiness';
 import { theme, bannerStyle } from '../lib/theme';
 import type { Task } from '../store/types';
 import type { ChangedFile, MergeStatus, WorktreeStatus } from '../ipc/types';
@@ -73,6 +82,16 @@ export function MergeDialog(props: MergeDialogProps) {
     // null means detached HEAD — also a mismatch
     return current === null || current !== props.task.branchName;
   };
+  const mergeReadiness = () =>
+    buildMergeReadiness({
+      expectedBranch: props.task.branchName,
+      mergeStatus: mergeStatus(),
+      mergeStatusLoading: mergeStatus.loading,
+      worktreeStatus: worktreeStatus(),
+      worktreeStatusLoading: worktreeStatus.loading,
+      verification: props.task.verification,
+      prChecks: getPrChecks(props.task.id),
+    });
 
   createEffect(() => {
     if (props.open) {
@@ -107,6 +126,7 @@ export function MergeDialog(props: MergeDialogProps) {
       autoFocusCancel
       message={
         <div>
+          <MergeReadinessPanel readiness={mergeReadiness()} />
           <Show when={hasBranchMismatch()}>
             <div
               style={{

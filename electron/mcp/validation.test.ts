@@ -68,7 +68,7 @@ describe('validateBranchName', () => {
   });
 
   it('rejects @{ sequence', () => {
-    expect(() => validateBranchName('foo@{bar}')).toThrow();
+    expect(() => validateBranchName('foo@{bar}')).toThrow('must not contain "@{"');
   });
 
   it('rejects path component starting with dot', () => {

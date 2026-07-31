@@ -31,6 +31,10 @@
   --success: #2fd198;
   --error: #ff5f73;
   --warning: #ffc569;
+  --diff-add-bg: rgba(47, 209, 152, 0.1);
+  --diff-remove-bg: rgba(255, 95, 115, 0.1);
+  --search-match: #ffd54f;
+  --search-match-active: #ff8a00;
 
   --island-bg: #192028;
   --island-border: #2e3e50;
@@ -65,31 +69,28 @@ body.font-smoothing {
   text-rendering: geometricPrecision;
 }
 
-/* Visible keyboard focus indicators inside dialogs.
-   Scoped to .dialog-panel (a class hook) so it works through Solid <Portal>
-   mounting, where descendant selectors rooted at the app shell would not
-   match. The selector list mirrors the spec's interactive-role enumeration
-   so icon buttons, toggles, and ARIA widgets all pick up the indicator. */
-.dialog-panel
-  :is(
-    button,
-    input,
-    select,
-    textarea,
-    a[href],
-    [tabindex]:not([tabindex='-1']),
-    [role='button'],
-    [role='switch'],
-    [role='checkbox'],
-    [role='link'],
-    [role='menuitem'],
-    [role='menuitemradio'],
-    [role='menuitemcheckbox'],
-    [role='tab'],
-    [role='option'],
-    [role='combobox'],
-    [role='radio']
-  ):focus-visible {
+/* Visible keyboard focus indicators for interactive controls. The selector
+   includes native elements and ARIA widgets so keyboard focus remains visible
+   across the app, including content mounted through Solid <Portal>. */
+:where(
+  button,
+  input,
+  select,
+  textarea,
+  a[href],
+  [tabindex]:not([tabindex='-1']),
+  [role='button'],
+  [role='switch'],
+  [role='checkbox'],
+  [role='link'],
+  [role='menuitem'],
+  [role='menuitemradio'],
+  [role='menuitemcheckbox'],
+  [role='tab'],
+  [role='option'],
+  [role='combobox'],
+  [role='radio']
+):focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
@@ -168,7 +169,7 @@ html[data-look='classic'] {
   --border-focus: #4267ff;
   --fg: #cccdd2;
   --fg-muted: #8b8d93;
-  --fg-subtle: #6d7076;
+  --fg-subtle: #767980;
   --accent: #4267ff;
   --accent-hover: #3a5bff;
   --accent-text: #ffffff;
@@ -460,6 +461,10 @@ html[data-look='islands-light'] {
   --success: #369650;
   --error: #d62b40;
   --warning: #a98708;
+  --diff-add-bg: rgba(54, 150, 80, 0.14);
+  --diff-remove-bg: rgba(214, 43, 64, 0.12);
+  --search-match: #d39e00;
+  --search-match-active: #f57c00;
   --island-bg: #ffffff;
   --island-border: #d3d5db;
   --island-radius: 12px;
@@ -974,12 +979,6 @@ textarea::placeholder {
   overflow: hidden;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .projects-collapser {
-    transition: none;
-  }
-}
-
 .tiling-layout-shell {
   position: relative;
   flex: 1;
@@ -1360,7 +1359,6 @@ textarea::placeholder {
 
 .dialog-overlay {
   animation: fadeIn 0.16s ease;
-  background: color-mix(in srgb, #000 44%, transparent);
   backdrop-filter: saturate(1.15);
 }
 
@@ -1440,6 +1438,7 @@ textarea::placeholder {
 }
 
 .inline-spinner {
+  /* Rotation is the loading cue, so functional spinners remain animated under reduced motion. */
   display: inline-block;
   box-sizing: border-box;
   width: 12px;
@@ -1501,10 +1500,6 @@ textarea::placeholder {
     border-color 0.15s ease,
     color 0.15s ease,
     background 0.15s ease;
-}
-
-.new-task-placeholder:focus-visible {
-  outline: none;
 }
 
 .new-task-placeholder:hover {
@@ -1906,81 +1901,52 @@ body.dragging-task * {
   -webkit-backdrop-filter: none;
 }
 
-/* Frameless resize handles */
-.window-resize-handles {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  z-index: 2500;
+.keybinding-migration-notice {
+  position: fixed;
+  top: 46px;
+  left: 50%;
+  z-index: 1900;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  box-sizing: border-box;
+  width: min(560px, calc(100vw - 32px));
+  padding: 12px 14px;
+  transform: translateX(-50%);
+  border: 1px solid var(--island-border);
+  border-radius: 8px;
+  background: var(--island-bg);
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+  color: var(--fg);
+  font-size: 13px;
+  line-height: 1.45;
 }
 
-.window-resize-handle {
-  position: absolute;
-  pointer-events: auto;
+.keybinding-migration-notice-action,
+.keybinding-migration-notice-close {
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
 }
 
-.window-resize-handle.n {
-  top: 0;
-  left: 8px;
-  right: 8px;
-  height: 4px;
-  cursor: ns-resize;
+.keybinding-migration-notice-action {
+  padding: 0;
+  text-decoration: underline;
 }
 
-.window-resize-handle.s {
-  bottom: 0;
-  left: 8px;
-  right: 8px;
-  height: 4px;
-  cursor: ns-resize;
+.keybinding-migration-notice-action.secondary,
+.keybinding-migration-notice-close {
+  color: var(--fg-muted);
 }
 
-.window-resize-handle.e {
-  top: 8px;
-  right: 0;
-  bottom: 8px;
-  width: 4px;
-  cursor: ew-resize;
-}
-
-.window-resize-handle.w {
-  top: 8px;
-  left: 0;
-  bottom: 8px;
-  width: 4px;
-  cursor: ew-resize;
-}
-
-.window-resize-handle.ne {
-  top: 0;
-  right: 0;
-  width: 8px;
-  height: 8px;
-  cursor: nesw-resize;
-}
-
-.window-resize-handle.nw {
-  top: 0;
-  left: 0;
-  width: 8px;
-  height: 8px;
-  cursor: nwse-resize;
-}
-
-.window-resize-handle.se {
-  right: 0;
-  bottom: 0;
-  width: 8px;
-  height: 8px;
-  cursor: nwse-resize;
-}
-
-.window-resize-handle.sw {
-  left: 0;
-  bottom: 0;
-  width: 8px;
-  height: 8px;
-  cursor: nesw-resize;
+.keybinding-migration-notice-close {
+  flex: 0 0 auto;
+  padding: 0 4px;
+  font-size: 16px;
+  line-height: 1;
 }
 
 /* Monaco diff: hidden unchanged regions — make the collapse bar obvious and clickable */
@@ -2094,7 +2060,7 @@ body.dragging-task * {
 /* ── Plan markdown: dialog (enhanced readability) ── */
 .plan-markdown-dialog {
   max-width: 720px;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  font-family: var(--font-ui);
   font-size: 18px;
   line-height: 1.7;
 }
@@ -2150,7 +2116,7 @@ body.dragging-task * {
 
 /* Inline code — monospace stands out from proportional prose */
 .plan-markdown-dialog code {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: var(--font-mono);
   font-size: 0.85em;
   background: color-mix(in srgb, var(--fg) 8%, transparent);
   padding: 0.15em 0.4em;
@@ -2160,7 +2126,7 @@ body.dragging-task * {
 
 /* Code blocks — keep monospace, more padding */
 .plan-markdown-dialog pre {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: var(--font-mono);
   font-size: 15px;
   line-height: 1.5;
   margin: 0.8em 0;
@@ -2267,5 +2233,32 @@ body.dragging-task * {
   }
   50% {
     opacity: 0.3;
+  }
+}
+
+/* Keep reduced-motion overrides last so class-based rules win by source order. */
+@media (prefers-reduced-motion: reduce) {
+  .projects-collapser {
+    transition: none;
+  }
+
+  .task-appearing,
+  .task-item-appearing,
+  .task-removing,
+  .task-item-removing,
+  .status-dot-pulse {
+    animation: none;
+  }
+
+  /* Preserve a static busy-state distinction after removing the pulse. */
+  .status-dot-ring {
+    outline: 1px solid var(--fg-muted);
+    outline-offset: 2px;
+  }
+
+  /* These animations are declared inline and require an important override. */
+  .askcode-loading-pulse,
+  .keybinding-key {
+    animation: none !important;
   }
 }

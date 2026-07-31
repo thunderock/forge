@@ -78,20 +78,11 @@ export function WindowTitleBar() {
     void syncMaximizedState();
   };
 
-  const handleDragStart = (event: MouseEvent) => {
-    if (event.button !== 0) return;
-    event.preventDefault();
-    void appWindow.startDragging().catch((error) => {
-      console.warn('Failed to start dragging window', error);
-    });
-  };
-
   return (
     <div class={`window-titlebar${isFocused() ? '' : ' unfocused'}`}>
       <div
         data-tauri-drag-region
         class="window-drag-region"
-        onMouseDown={handleDragStart}
         onDblClick={() => void handleToggleMaximize()}
       >
         <svg

@@ -6,6 +6,7 @@ import { InfoBar } from './InfoBar';
 import { theme } from '../lib/theme';
 import { isMac } from '../lib/platform';
 import { parseGitHubUrl } from '../lib/github-url';
+import { abbreviateHomePath } from '../lib/path';
 import type { Task } from '../store/types';
 
 const infoBarBtnStyle: JSX.CSSProperties = {
@@ -46,6 +47,7 @@ export function TaskBranchInfoBar(props: TaskBranchInfoBarProps) {
     store.editorCommand
       ? `Click to open in ${store.editorCommand} · ${mod}+Click to reveal in file manager · ${mod}+Shift+Click to open the project root in ${store.editorCommand}`
       : `Click to reveal in file manager · ${mod}+Shift+Click to reveal the project root`;
+  const worktreeTitle = () => `${props.task.worktreePath}\n${editorTitle()}`;
 
   const handleOpenInEditor = (e: MouseEvent) => {
     const modKey = e.ctrlKey || e.metaKey;
@@ -97,28 +99,6 @@ export function TaskBranchInfoBar(props: TaskBranchInfoBarProps) {
           </Show>
         );
       })()}
-      <Show when={sourceLinkUrl()}>
-        {(url) => (
-          <button
-            type="button"
-            onClick={() => window.open(url(), '_blank')}
-            title={url()}
-            style={{ ...infoBarBtnStyle, 'margin-right': '8px', color: theme.accent }}
-          >
-            <span style={{ color: theme.fgMuted, 'font-weight': '600' }}>Source</span>
-            <svg
-              width="12"
-              height="12"
-              viewBox="0 0 16 16"
-              fill="currentColor"
-              style={{ 'flex-shrink': '0' }}
-            >
-              <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8Z" />
-            </svg>
-            {githubLabel(url())}
-          </button>
-        )}
-      </Show>
       <Show when={prLinkUrl()}>
         {(url) => {
           const pr = () => getPrChecks(props.task.id);
@@ -195,6 +175,28 @@ export function TaskBranchInfoBar(props: TaskBranchInfoBarProps) {
           );
         }}
       </Show>
+      <Show when={sourceLinkUrl()}>
+        {(url) => (
+          <button
+            type="button"
+            onClick={() => window.open(url(), '_blank')}
+            title={url()}
+            style={{ ...infoBarBtnStyle, 'margin-right': '8px', color: theme.accent }}
+          >
+            <span style={{ color: theme.fgMuted, 'font-weight': '600' }}>Source</span>
+            <svg
+              width="12"
+              height="12"
+              viewBox="0 0 16 16"
+              fill="currentColor"
+              style={{ 'flex-shrink': '0' }}
+            >
+              <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8Z" />
+            </svg>
+            {githubLabel(url())}
+          </button>
+        )}
+      </Show>
       <Show when={props.task.gitIsolation !== 'none'}>
         <button
           type="button"
@@ -231,9 +233,9 @@ export function TaskBranchInfoBar(props: TaskBranchInfoBarProps) {
       </Show>
       <button
         type="button"
-        title={editorTitle()}
+        title={worktreeTitle()}
         onClick={handleOpenInEditor}
-        style={{ ...infoBarBtnStyle, opacity: 0.6 }}
+        style={{ ...infoBarBtnStyle, opacity: 0.6, 'min-width': '0', overflow: 'hidden' }}
       >
         <svg
           width="12"
@@ -244,7 +246,16 @@ export function TaskBranchInfoBar(props: TaskBranchInfoBarProps) {
         >
           <path d="M1.75 1A1.75 1.75 0 0 0 0 2.75v10.5C0 14.216.784 15 1.75 15h12.5A1.75 1.75 0 0 0 16 13.25v-8.5A1.75 1.75 0 0 0 14.25 3H7.5a.25.25 0 0 1-.2-.1l-.9-1.2C6.07 1.26 5.55 1 5 1H1.75Z" />
         </svg>
-        {props.task.worktreePath}
+        <span
+          style={{
+            overflow: 'hidden',
+            'text-overflow': 'ellipsis',
+            'white-space': 'nowrap',
+            'min-width': '0',
+          }}
+        >
+          {abbreviateHomePath(props.task.worktreePath)}
+        </span>
       </button>
       <Show when={props.task.externalWorktree}>
         <span

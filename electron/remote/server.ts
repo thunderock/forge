@@ -18,10 +18,15 @@ import {
   getAgentCols,
   onPtyEvent,
 } from '../ipc/pty.js';
-import { parseClientMessage, type ServerMessage, type RemoteAgent } from './protocol.js';
+import {
+  parseClientMessage,
+  type ServerMessage,
+  type RemoteAgent,
+  type RemoteAttentionState,
+} from './protocol.js';
 import type { Coordinator } from '../mcp/coordinator.js';
 import { validateBranchName } from '../mcp/validation.js';
-import type { LandSelfInput, SubtaskVerification } from '../mcp/types.js';
+import type { ApiTaskDetail, LandSelfInput, SubtaskVerification } from '../mcp/types.js';
 
 // --- MCP log ring buffer ---
 export interface MCPLogEntry {
@@ -33,6 +38,7 @@ export interface MCPLogEntry {
 const MAX_LOG_ENTRIES = 200;
 const REST_COORDINATOR_SENTINEL = 'api';
 const MAX_REST_PROMPT_BYTES = 16 * 1024;
+const MAX_NOTES_BYTES = 100 * 1024;
 // Device pairing: a mobile client proves it can see the desktop by entering a
 // short-lived PIN, which elevates it to a "paired" token allowed to create tasks.
 const PAIRING_PIN_TTL_MS = 5 * 60_000;
@@ -210,6 +216,7 @@ function buildAgentList(
     exitCode: number | null;
     lastLine: string;
   },
+  getTaskAttention: (taskId: string) => RemoteAttentionState,
 ): RemoteAgent[] {
   const byTask = new Map<string, RemoteAgent>();
   for (const agentId of getActiveAgentIds()) {
@@ -225,6 +232,7 @@ function buildAgentList(
       status: info.status,
       exitCode: info.exitCode,
       lastLine: info.lastLine,
+      attention: getTaskAttention(meta.taskId),
     };
     // Prefer running agents over exited ones for the same task
     const existing = byTask.get(meta.taskId);
@@ -249,7 +257,9 @@ function readJsonBody(
       size += chunk.length;
       if (size > maxBytes) {
         tooLarge = true;
-        req.destroy();
+        // Reject but keep draining: destroying the socket here would tear down
+        // the connection before the caller's error reply (e.g. 413) can be
+        // written, and the client would see a reset instead of the response.
         reject(new Error('Body too large'));
         return;
       }
@@ -270,6 +280,376 @@ function readJsonBody(
   });
 }
 
+export type JsonReply = (status: number, body: unknown) => void;
+
+type TokenClass = 'coordinator' | 'subtask' | 'mobile' | 'paired';
+
+export function createJsonReply(
+  res: ServerResponse,
+  securityHeaders: Record<string, string>,
+): JsonReply {
+  return (status: number, body: unknown) => {
+    if (res.headersSent) return;
+    res.writeHead(status, { ...securityHeaders, 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(body));
+  };
+}
+
+export async function readCoordinatorBody(
+  req: IncomingMessage,
+  jsonReply: JsonReply,
+): Promise<Record<string, unknown>> {
+  try {
+    return await readJsonBody(req, 1_000_000);
+  } catch (err) {
+    if (err instanceof Error && err.message === 'Body too large') {
+      jsonReply(413, { error: 'Request body too large' });
+    }
+    throw err;
+  }
+}
+
+export function requireOwnedTask(
+  orch: Coordinator,
+  taskId: string,
+  callerCoordinatorId: string | undefined,
+  jsonReply: JsonReply,
+): ApiTaskDetail | null {
+  const detail = orch.getTaskStatus(taskId);
+  if (!detail) {
+    jsonReply(404, { error: 'task not found' });
+    return null;
+  }
+  if (callerCoordinatorId && detail.coordinatorTaskId !== callerCoordinatorId) {
+    jsonReply(403, { error: 'forbidden' });
+    return null;
+  }
+  return detail;
+}
+
+/** Shared per-request context passed to every coordinator route handler. */
+interface CoordinatorRouteContext {
+  orch: Coordinator;
+  tokenClass: TokenClass | null;
+  callerCoordinatorId: string | undefined;
+  jsonReply: JsonReply;
+  readBody: () => Promise<Record<string, unknown>>;
+  requireTask: (taskId: string) => ApiTaskDetail | null;
+  hasMatchingDoneToken: (taskId: string) => boolean;
+}
+
+function handleWaitSignal(ctx: CoordinatorRouteContext): void {
+  ctx
+    .readBody()
+    .then(async (body) => {
+      // Use the verified header coordinator ID exclusively — any caller with
+      // a valid coordinator token must supply X-Coordinator-Id (enforced above).
+      // Ignoring the body field matches the create_task pattern and prevents
+      // an unscoped body value from flowing unchecked to waitForSignalDone.
+      const coordinatorTaskId = ctx.callerCoordinatorId ?? REST_COORDINATOR_SENTINEL;
+      if (
+        body.timeoutMs !== undefined &&
+        (typeof body.timeoutMs !== 'number' || !Number.isFinite(body.timeoutMs))
+      )
+        return ctx.jsonReply(400, { error: 'timeoutMs must be a finite number' });
+      const requestId = typeof body.requestId === 'string' ? body.requestId : undefined;
+      mcpLog('info', `wait_for_signal_done coordinator=${coordinatorTaskId}`);
+      const result = await ctx.orch.waitForSignalDone(
+        coordinatorTaskId,
+        body.timeoutMs as number | undefined,
+        requestId,
+      );
+      mcpLog(
+        'info',
+        `wait_for_signal_done OK taskId=${result.taskId} remaining=${result.remaining}`,
+      );
+      ctx.jsonReply(200, result);
+    })
+    .catch((err) => {
+      mcpLog('error', `wait_for_signal_done FAIL: ${String(err)}`);
+      ctx.jsonReply(500, { error: String(err) });
+    });
+}
+
+function handleCreateTask(ctx: CoordinatorRouteContext): void {
+  ctx
+    .readBody()
+    .then(async (body) => {
+      if (typeof body.name !== 'string' || !body.name)
+        return ctx.jsonReply(400, { error: 'name must be a non-empty string' });
+      if (body.name.length > 200)
+        return ctx.jsonReply(400, { error: 'name must be 200 characters or fewer' });
+      // Strip control characters to prevent prompt injection via task name
+      // appearing verbatim in coordinator notification messages.
+      // eslint-disable-next-line no-control-regex
+      body.name = (body.name as string).replace(/[\x00-\x1f\x7f]/g, ' ').trim();
+      if (!body.name) return ctx.jsonReply(400, { error: 'name must be a non-empty string' });
+      const prompt = validateRestPrompt(body.prompt, true);
+      if (typeof prompt !== 'string') return ctx.jsonReply(400, prompt);
+      if (body.projectId !== undefined && typeof body.projectId !== 'string')
+        return ctx.jsonReply(400, { error: 'projectId must be a string' });
+      if (body.gitIsolation !== undefined)
+        return ctx.jsonReply(400, {
+          error: 'gitIsolation is not supported; only worktree isolation is implemented',
+        });
+      let baseBranch: string | undefined;
+      if (body.baseBranch !== undefined) {
+        try {
+          baseBranch = validateBranchName(body.baseBranch, 'baseBranch');
+        } catch (e) {
+          return ctx.jsonReply(400, { error: String(e) });
+        }
+      }
+      // For coordinator-token callers, the authoritative coordinator ID is
+      // the verified X-Coordinator-Id header (callerCoordinatorId). Reject
+      // any body value that tries to create a task under a different coordinator,
+      // since that would let coordinator A impersonate coordinator B.
+      if (
+        ctx.callerCoordinatorId &&
+        typeof body.coordinatorTaskId === 'string' &&
+        body.coordinatorTaskId !== ctx.callerCoordinatorId
+      ) {
+        return ctx.jsonReply(403, {
+          error: 'coordinatorTaskId in body does not match X-Coordinator-Id header',
+        });
+      }
+      const coordinatorTaskId = ctx.callerCoordinatorId ?? REST_COORDINATOR_SENTINEL;
+      mcpLog(
+        'info',
+        `create_task name=${body.name} baseBranch=${baseBranch ?? 'default'} promptBytes=${Buffer.byteLength(prompt, 'utf8')}`,
+      );
+      const result = await ctx.orch.createTask({
+        name: body.name as string,
+        prompt,
+        coordinatorTaskId,
+        projectId: body.projectId as string | undefined,
+        baseBranch,
+      });
+      mcpLog('info', `create_task OK id=${result.id}`);
+      ctx.jsonReply(201, ctx.orch.getTaskStatus(result.id));
+    })
+    .catch((err) => {
+      mcpLog('error', `create_task FAIL: ${String(err)}`);
+      ctx.jsonReply(500, { error: String(err) });
+    });
+}
+
+function handleListTasks(ctx: CoordinatorRouteContext): void {
+  mcpLog('info', 'list_tasks');
+  const all = ctx.orch.listTasks();
+  const tasks = ctx.callerCoordinatorId
+    ? all.filter((t) => t.coordinatorTaskId === ctx.callerCoordinatorId)
+    : all;
+  ctx.jsonReply(200, tasks);
+}
+
+function handleGetTaskStatus(ctx: CoordinatorRouteContext, taskId: string): void {
+  mcpLog('info', `get_task_status id=${taskId}`);
+  const detail = ctx.requireTask(taskId);
+  if (detail) ctx.jsonReply(200, detail);
+}
+
+function handleSendPrompt(ctx: CoordinatorRouteContext, taskId: string): void {
+  ctx
+    .readBody()
+    .then(async (body) => {
+      const prompt = validateRestPrompt(body.prompt, true);
+      if (!prompt || typeof prompt !== 'string') return ctx.jsonReply(400, prompt);
+      if (!ctx.requireTask(taskId)) return;
+      mcpLog('info', `send_prompt id=${taskId}`);
+      const result = await ctx.orch.sendPrompt(taskId, prompt);
+      ctx.jsonReply(200, { ok: true, ...result });
+    })
+    .catch((err) => {
+      mcpLog('error', `send_prompt FAIL: ${String(err)}`);
+      ctx.jsonReply(500, { error: String(err) });
+    });
+}
+
+function handleWaitForIdle(ctx: CoordinatorRouteContext, taskId: string): void {
+  ctx
+    .readBody()
+    .then(async (body) => {
+      if (
+        body.timeoutMs !== undefined &&
+        (typeof body.timeoutMs !== 'number' || !Number.isFinite(body.timeoutMs))
+      )
+        return ctx.jsonReply(400, { error: 'timeoutMs must be a finite number' });
+      if (!ctx.requireTask(taskId)) return;
+      mcpLog('info', `wait_for_idle id=${taskId}`);
+      const idleResult = await ctx.orch.waitForIdle(taskId, body.timeoutMs as number | undefined);
+      const status = ctx.orch.getTaskStatus(taskId);
+      mcpLog(
+        'info',
+        `wait_for_idle OK id=${taskId} status=${status?.status} reason=${idleResult.reason}`,
+      );
+      ctx.jsonReply(200, { status: status?.status ?? 'unknown', reason: idleResult.reason });
+    })
+    .catch((err) => {
+      mcpLog('error', `wait_for_idle FAIL: ${String(err)}`);
+      ctx.jsonReply(500, { error: String(err) });
+    });
+}
+
+function handleReviewAndMerge(ctx: CoordinatorRouteContext, taskId: string): void {
+  ctx
+    .readBody()
+    .then(async (body) => {
+      if (body.squash !== undefined && typeof body.squash !== 'boolean')
+        return ctx.jsonReply(400, { error: 'squash must be a boolean' });
+      if (body.message !== undefined && typeof body.message !== 'string')
+        return ctx.jsonReply(400, { error: 'message must be a string' });
+      if (!ctx.requireTask(taskId)) return;
+      mcpLog('info', `review_and_merge_task id=${taskId}`);
+      const result = await ctx.orch.reviewAndMergeTask(taskId, {
+        squash: body.squash as boolean | undefined,
+        message: body.message as string | undefined,
+      });
+      mcpLog('info', `review_and_merge_task OK id=${taskId}`);
+      ctx.jsonReply(200, result);
+    })
+    .catch((err) => {
+      mcpLog('error', `review_and_merge_task FAIL: ${String(err)}`);
+      ctx.jsonReply(500, { error: String(err) });
+    });
+}
+
+function handleGetTaskDiff(ctx: CoordinatorRouteContext, taskId: string): void {
+  if (!ctx.requireTask(taskId)) return;
+  mcpLog('info', `get_task_diff id=${taskId}`);
+  ctx.orch
+    .getTaskDiff(taskId)
+    .then((result) => ctx.jsonReply(200, result))
+    .catch((err) => {
+      mcpLog('error', `get_task_diff FAIL: ${String(err)}`);
+      ctx.jsonReply(500, { error: String(err) });
+    });
+}
+
+function handleGetTaskOutput(ctx: CoordinatorRouteContext, taskId: string): void {
+  if (!ctx.requireTask(taskId)) return;
+  mcpLog('info', `get_task_output id=${taskId}`);
+  try {
+    const output = ctx.orch.getTaskOutput(taskId);
+    ctx.jsonReply(200, { output });
+  } catch (err) {
+    mcpLog('error', `get_task_output FAIL: ${String(err)}`);
+    ctx.jsonReply(500, { error: String(err) });
+  }
+}
+
+function handleSignalDone(ctx: CoordinatorRouteContext, taskId: string): void {
+  if (!ctx.requireTask(taskId)) return;
+  // Subtask callers must provide the per-task X-Done-Token header so a compromised
+  // sub-task cannot signal completion for tasks it doesn't own.
+  // Coordinator-class callers are intentionally exempt: a coordinator token is
+  // scoped to its own sub-tasks via callerCoordinatorId (enforced above), and
+  // trusting coordinators to call signal_done on their children matches the
+  // intended authority model. The done-token is a sub-task ownership proof, not
+  // a coordinator authority proof.
+  if (ctx.tokenClass === 'subtask') {
+    if (!ctx.hasMatchingDoneToken(taskId)) {
+      return ctx.jsonReply(403, { error: 'forbidden' });
+    }
+  }
+  mcpLog('info', `signal_done id=${taskId}`);
+  ctx.orch.signalDone(taskId);
+  ctx.jsonReply(200, { ok: true });
+}
+
+function handleLandSelf(ctx: CoordinatorRouteContext, taskId: string): void {
+  ctx
+    .readBody()
+    .then(async (body) => {
+      const landDetail = ctx.orch.getTaskStatus(taskId);
+      if (!landDetail) return ctx.jsonReply(404, { error: 'task not found' });
+      if (ctx.tokenClass !== 'subtask') return ctx.jsonReply(403, { error: 'forbidden' });
+      if (!ctx.hasMatchingDoneToken(taskId)) return ctx.jsonReply(403, { error: 'forbidden' });
+
+      const parsed = parseLandSelfInput(body);
+      if (typeof parsed === 'string') return ctx.jsonReply(400, { error: parsed });
+
+      mcpLog('info', `land_self id=${taskId}`);
+      const result = await ctx.orch.landSelf(taskId, parsed);
+      mcpLog('info', `land_self OK id=${taskId}`);
+      ctx.jsonReply(200, result);
+    })
+    .catch((err) => {
+      mcpLog('error', `land_self FAIL: ${String(err)}`);
+      ctx.jsonReply(500, { error: String(err) });
+    });
+}
+
+function handleMergeTask(ctx: CoordinatorRouteContext, taskId: string): void {
+  ctx
+    .readBody()
+    .then(async (body) => {
+      if (body.squash !== undefined && typeof body.squash !== 'boolean')
+        return ctx.jsonReply(400, { error: 'squash must be a boolean' });
+      if (body.message !== undefined && typeof body.message !== 'string')
+        return ctx.jsonReply(400, { error: 'message must be a string' });
+      if (body.cleanup !== undefined && typeof body.cleanup !== 'boolean')
+        return ctx.jsonReply(400, { error: 'cleanup must be a boolean' });
+      if (!ctx.requireTask(taskId)) return;
+      mcpLog('info', `merge_task id=${taskId} squash=${body.squash ?? false}`);
+      const result = await ctx.orch.mergeTask(taskId, {
+        squash: body.squash as boolean | undefined,
+        message: body.message as string | undefined,
+        cleanup: body.cleanup as boolean | undefined,
+      });
+      mcpLog('info', `merge_task OK id=${taskId}`);
+      ctx.jsonReply(200, result);
+    })
+    .catch((err) => {
+      mcpLog('error', `merge_task FAIL: ${String(err)}`);
+      ctx.jsonReply(500, { error: String(err) });
+    });
+}
+
+function handleCloseTask(ctx: CoordinatorRouteContext, taskId: string): void {
+  if (!ctx.requireTask(taskId)) return;
+  mcpLog('info', `close_task id=${taskId}`);
+  ctx.orch
+    .closeTask(taskId)
+    .then(() => {
+      mcpLog('info', `close_task OK id=${taskId}`);
+      ctx.jsonReply(200, { ok: true });
+    })
+    .catch((err) => {
+      mcpLog('error', `close_task FAIL: ${String(err)}`);
+      ctx.jsonReply(500, { error: String(err) });
+    });
+}
+
+/** Routes with no task ID in the path: list/create tasks, wait-signal. */
+const COORDINATOR_ROOT_ROUTES: Array<{
+  pathname: string;
+  method: string;
+  handler: (ctx: CoordinatorRouteContext) => void;
+}> = [
+  { pathname: '/api/wait-signal', method: 'POST', handler: handleWaitSignal },
+  { pathname: '/api/tasks', method: 'POST', handler: handleCreateTask },
+  { pathname: '/api/tasks', method: 'GET', handler: handleListTasks },
+];
+
+/** Routes scoped to `/api/tasks/:taskId[/subpath]`, keyed by subpath + method. */
+const COORDINATOR_TASK_ROUTES: Array<{
+  subpath: string | null;
+  method: string;
+  handler: (ctx: CoordinatorRouteContext, taskId: string) => void;
+}> = [
+  { subpath: null, method: 'GET', handler: handleGetTaskStatus },
+  { subpath: 'prompt', method: 'POST', handler: handleSendPrompt },
+  { subpath: 'wait', method: 'POST', handler: handleWaitForIdle },
+  { subpath: 'review-merge', method: 'POST', handler: handleReviewAndMerge },
+  { subpath: 'diff', method: 'GET', handler: handleGetTaskDiff },
+  { subpath: 'output', method: 'GET', handler: handleGetTaskOutput },
+  { subpath: 'done', method: 'POST', handler: handleSignalDone },
+  { subpath: 'land', method: 'POST', handler: handleLandSelf },
+  { subpath: 'merge', method: 'POST', handler: handleMergeTask },
+  { subpath: null, method: 'DELETE', handler: handleCloseTask },
+];
+
 export function startRemoteServer(opts: {
   port: number;
   host?: string;
@@ -289,7 +669,18 @@ export function startRemoteServer(opts: {
     name: string;
     prompt: string;
   }) => Promise<{ taskId: string }>;
+  /** Read a task's notes (renderer-backed). */
+  getTaskNotes?: (taskId: string) => Promise<string>;
+  /** Persist a task's notes (renderer-backed). */
+  setTaskNotes?: (taskId: string, notes: string) => Promise<void>;
+  /** Renderer-derived task attention state (needs input, working, ready, …). */
+  getTaskAttention?: (taskId: string) => RemoteAttentionState;
 }): Promise<RemoteServer> {
+  // Defensive default for the optional signature: every real caller wires
+  // attention via mobileTaskBridge, so 'idle' is only used if a future caller
+  // omits it.
+  const getTaskAttention: (taskId: string) => RemoteAttentionState =
+    opts.getTaskAttention ?? (() => 'idle');
   const token = randomBytes(24).toString('base64url');
   const subtaskToken = randomBytes(24).toString('base64url');
   const mobileToken = randomBytes(24).toString('base64url');
@@ -305,8 +696,6 @@ export function startRemoteServer(opts: {
   const pairedTokenBufs: Buffer[] = [];
   // At most one pending PIN at a time — a fresh mint replaces any prior one.
   let pairing: { pinBuf: Buffer; expiresAt: number; attemptsLeft: number } | null = null;
-
-  type TokenClass = 'coordinator' | 'subtask' | 'mobile' | 'paired';
 
   function isPairedToken(buf: Buffer): boolean {
     // Timing-safe membership check; length guard avoids timingSafeEqual throwing.
@@ -452,6 +841,64 @@ export function startRemoteServer(opts: {
         return jsonEnd(405, { error: 'method not allowed' });
       }
 
+      // --- Task notes (mobile + paired) ---
+      // Read/write the notes textarea shown on the desktop task panel. Available
+      // to the read-only mobile token too: editing notes is low-risk and mirrors
+      // the "interact with your terminals" capability the mobile token already has.
+      const notesMatch = url.pathname.match(/^\/api\/mobile\/notes\/([^/]+)$/);
+      if (notesMatch) {
+        if (tokenClass !== 'mobile' && tokenClass !== 'paired')
+          return jsonEnd(403, { error: 'forbidden' });
+        // decodeURIComponent throws URIError on a malformed escape (e.g. "%").
+        // This handler has no outer try/catch, so an unguarded throw here would
+        // take down the main process — reject with 400 instead.
+        let taskId: string;
+        try {
+          taskId = decodeURIComponent(notesMatch[1]);
+        } catch {
+          return jsonEnd(400, { error: 'invalid task id' });
+        }
+        // Reject prototype-chain keys at the boundary. The renderer also guards
+        // with Object.hasOwn, but blocking here keeps a mobile-token request
+        // from ever reaching a setStore path with a dangerous key.
+        if (taskId === '__proto__' || taskId === 'constructor' || taskId === 'prototype') {
+          return jsonEnd(400, { error: 'invalid task id' });
+        }
+
+        if (req.method === 'GET') {
+          if (!opts.getTaskNotes) return jsonEnd(503, { error: 'notes unavailable' });
+          opts
+            .getTaskNotes(taskId)
+            .then((notes) => jsonEnd(200, { notes }))
+            .catch((err) => jsonEnd(500, { error: String(err) }));
+          return;
+        }
+
+        if (req.method === 'PUT') {
+          const setTaskNotes = opts.setTaskNotes;
+          if (!setTaskNotes) return jsonEnd(503, { error: 'notes unavailable' });
+          // Cap the body generously above MAX_NOTES_BYTES so the precise byte
+          // check below is the effective limit (readJsonBody's 64 KB default
+          // would otherwise reject valid large notes with a generic "Body too
+          // large"). The 2x headroom covers JSON escaping of quotes/newlines in
+          // a full-size note; the exact limit is enforced on the decoded string.
+          readJsonBody(req, MAX_NOTES_BYTES * 2 + 4096)
+            .then((body) => {
+              if (typeof body.notes !== 'string')
+                return jsonEnd(400, { error: 'notes must be a string' });
+              if (Buffer.byteLength(body.notes, 'utf8') > MAX_NOTES_BYTES)
+                return jsonEnd(400, { error: `notes must be ${MAX_NOTES_BYTES} bytes or fewer` });
+              setTaskNotes(taskId, body.notes)
+                .then(() => jsonEnd(200, { ok: true }))
+                .catch((err) => jsonEnd(500, { error: String(err) }));
+            })
+            .catch(() => jsonEnd(400, { error: 'bad request' }));
+          return;
+        }
+
+        return jsonEnd(405, { error: 'method not allowed' });
+      }
+
       if (tokenClass === 'subtask') {
         const allowed =
           req.method === 'POST' && /^\/api\/tasks\/[^/]+\/(?:done|land)$/.test(url.pathname);
@@ -480,7 +927,7 @@ export function startRemoteServer(opts: {
       }
 
       if (url.pathname === '/api/agents' && req.method === 'GET') {
-        const list = buildAgentList(opts.getTaskName, opts.getAgentStatus);
+        const list = buildAgentList(opts.getTaskName, opts.getAgentStatus, getTaskAttention);
         res.writeHead(200, { ...SECURITY_HEADERS, 'Content-Type': 'application/json' });
         res.end(JSON.stringify(list));
         return;
@@ -521,33 +968,8 @@ export function startRemoteServer(opts: {
         return;
       }
       if (orch) {
-        // Helper to read JSON body
-        const jsonReply = (status: number, body: unknown) => {
-          if (res.headersSent) return;
-          res.writeHead(status, { ...SECURITY_HEADERS, 'Content-Type': 'application/json' });
-          res.end(JSON.stringify(body));
-        };
-
-        const readBody = (): Promise<Record<string, unknown>> =>
-          new Promise((resolve, reject) => {
-            let data = '';
-            req.on('data', (chunk: Buffer) => {
-              data += chunk.toString();
-              if (data.length > 1_000_000) {
-                jsonReply(413, { error: 'Request body too large' });
-                reject(new Error('Body too large'));
-                req.destroy();
-              }
-            });
-            req.on('end', () => {
-              try {
-                resolve(data ? (JSON.parse(data) as Record<string, unknown>) : {});
-              } catch {
-                resolve({});
-              }
-            });
-            req.on('error', reject);
-          });
+        const jsonReply = createJsonReply(res, SECURITY_HEADERS);
+        const readBody = () => readCoordinatorBody(req, jsonReply);
 
         // Extract the coordinator ID from the header (set by MCP coordinator clients).
         // Only honor it if it is a registered coordinator — prevents a caller from
@@ -567,23 +989,8 @@ export function startRemoteServer(opts: {
           return;
         }
 
-        const ownedByCallerOrUnscoped = (taskCoordinatorId: string): boolean =>
-          !callerCoordinatorId || taskCoordinatorId === callerCoordinatorId;
-
-        // Fetch a task by id, replying 404 (missing) or 403 (not owned) and
-        // returning null in those cases. Centralizes the per-route ownership gate.
-        const requireOwnedTask = (taskId: string) => {
-          const detail = orch.getTaskStatus(taskId);
-          if (!detail) {
-            jsonReply(404, { error: 'task not found' });
-            return null;
-          }
-          if (!ownedByCallerOrUnscoped(detail.coordinatorTaskId)) {
-            jsonReply(403, { error: 'forbidden' });
-            return null;
-          }
-          return detail;
-        };
+        const requireTask = (taskId: string) =>
+          requireOwnedTask(orch, taskId, callerCoordinatorId, jsonReply);
 
         const hasMatchingDoneToken = (taskId: string): boolean => {
           const expected = orch.getTaskDoneToken(taskId);
@@ -598,306 +1005,34 @@ export function startRemoteServer(opts: {
 
         const taskIdMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)(?:\/(.+))?$/);
 
-        if (url.pathname === '/api/wait-signal' && req.method === 'POST') {
-          readBody()
-            .then(async (body) => {
-              // Use the verified header coordinator ID exclusively — any caller with
-              // a valid coordinator token must supply X-Coordinator-Id (enforced above).
-              // Ignoring the body field matches the create_task pattern and prevents
-              // an unscoped body value from flowing unchecked to waitForSignalDone.
-              const coordinatorTaskId = callerCoordinatorId ?? REST_COORDINATOR_SENTINEL;
-              if (
-                body.timeoutMs !== undefined &&
-                (typeof body.timeoutMs !== 'number' || !Number.isFinite(body.timeoutMs))
-              )
-                return jsonReply(400, { error: 'timeoutMs must be a finite number' });
-              const requestId = typeof body.requestId === 'string' ? body.requestId : undefined;
-              mcpLog('info', `wait_for_signal_done coordinator=${coordinatorTaskId}`);
-              const result = await orch.waitForSignalDone(
-                coordinatorTaskId,
-                body.timeoutMs as number | undefined,
-                requestId,
-              );
-              mcpLog(
-                'info',
-                `wait_for_signal_done OK taskId=${result.taskId} remaining=${result.remaining}`,
-              );
-              jsonReply(200, result);
-            })
-            .catch((err) => {
-              mcpLog('error', `wait_for_signal_done FAIL: ${String(err)}`);
-              jsonReply(500, { error: String(err) });
-            });
+        const routeCtx: CoordinatorRouteContext = {
+          orch,
+          tokenClass,
+          callerCoordinatorId,
+          jsonReply,
+          readBody,
+          requireTask,
+          hasMatchingDoneToken,
+        };
+
+        const rootRoute = COORDINATOR_ROOT_ROUTES.find(
+          (route) => route.pathname === url.pathname && route.method === req.method,
+        );
+        if (rootRoute) {
+          rootRoute.handler(routeCtx);
           return;
         }
 
-        if (url.pathname === '/api/tasks' && req.method === 'POST') {
-          readBody()
-            .then(async (body) => {
-              if (typeof body.name !== 'string' || !body.name)
-                return jsonReply(400, { error: 'name must be a non-empty string' });
-              if (body.name.length > 200)
-                return jsonReply(400, { error: 'name must be 200 characters or fewer' });
-              // Strip control characters to prevent prompt injection via task name
-              // appearing verbatim in coordinator notification messages.
-              // eslint-disable-next-line no-control-regex
-              body.name = (body.name as string).replace(/[\x00-\x1f\x7f]/g, ' ').trim();
-              if (!body.name) return jsonReply(400, { error: 'name must be a non-empty string' });
-              const prompt = validateRestPrompt(body.prompt, true);
-              if (typeof prompt !== 'string') return jsonReply(400, prompt);
-              if (body.projectId !== undefined && typeof body.projectId !== 'string')
-                return jsonReply(400, { error: 'projectId must be a string' });
-              if (body.gitIsolation !== undefined)
-                return jsonReply(400, {
-                  error: 'gitIsolation is not supported; only worktree isolation is implemented',
-                });
-              let baseBranch: string | undefined;
-              if (body.baseBranch !== undefined) {
-                try {
-                  baseBranch = validateBranchName(body.baseBranch, 'baseBranch');
-                } catch (e) {
-                  return jsonReply(400, { error: String(e) });
-                }
-              }
-              // For coordinator-token callers, the authoritative coordinator ID is
-              // the verified X-Coordinator-Id header (callerCoordinatorId). Reject
-              // any body value that tries to create a task under a different coordinator,
-              // since that would let coordinator A impersonate coordinator B.
-              if (
-                callerCoordinatorId &&
-                typeof body.coordinatorTaskId === 'string' &&
-                body.coordinatorTaskId !== callerCoordinatorId
-              ) {
-                return jsonReply(403, {
-                  error: 'coordinatorTaskId in body does not match X-Coordinator-Id header',
-                });
-              }
-              const coordinatorTaskId = callerCoordinatorId ?? REST_COORDINATOR_SENTINEL;
-              mcpLog(
-                'info',
-                `create_task name=${body.name} baseBranch=${baseBranch ?? 'default'} promptBytes=${Buffer.byteLength(prompt, 'utf8')}`,
-              );
-              const result = await orch.createTask({
-                name: body.name as string,
-                prompt,
-                coordinatorTaskId,
-                projectId: body.projectId as string | undefined,
-                baseBranch,
-              });
-              mcpLog('info', `create_task OK id=${result.id}`);
-              jsonReply(201, orch.getTaskStatus(result.id));
-            })
-            .catch((err) => {
-              mcpLog('error', `create_task FAIL: ${String(err)}`);
-              jsonReply(500, { error: String(err) });
-            });
-          return;
-        }
-
-        if (url.pathname === '/api/tasks' && req.method === 'GET') {
-          mcpLog('info', 'list_tasks');
-          const all = orch.listTasks();
-          const tasks = callerCoordinatorId
-            ? all.filter((t) => t.coordinatorTaskId === callerCoordinatorId)
-            : all;
-          jsonReply(200, tasks);
-          return;
-        }
-
-        if (taskIdMatch && !taskIdMatch[2] && req.method === 'GET') {
+        if (taskIdMatch) {
           const taskId = decodeURIComponent(taskIdMatch[1]);
-          mcpLog('info', `get_task_status id=${taskId}`);
-          const detail = requireOwnedTask(taskId);
-          if (detail) jsonReply(200, detail);
-          return;
-        }
-
-        if (taskIdMatch && taskIdMatch[2] === 'prompt' && req.method === 'POST') {
-          readBody()
-            .then(async (body) => {
-              const taskId = decodeURIComponent(taskIdMatch[1]);
-              const prompt = validateRestPrompt(body.prompt, true);
-              if (!prompt || typeof prompt !== 'string') return jsonReply(400, prompt);
-              if (!requireOwnedTask(taskId)) return;
-              mcpLog('info', `send_prompt id=${taskId}`);
-              const result = await orch.sendPrompt(taskId, prompt);
-              jsonReply(200, { ok: true, ...result });
-            })
-            .catch((err) => {
-              mcpLog('error', `send_prompt FAIL: ${String(err)}`);
-              jsonReply(500, { error: String(err) });
-            });
-          return;
-        }
-
-        if (taskIdMatch && taskIdMatch[2] === 'wait' && req.method === 'POST') {
-          readBody()
-            .then(async (body) => {
-              const taskId = decodeURIComponent(taskIdMatch[1]);
-              if (
-                body.timeoutMs !== undefined &&
-                (typeof body.timeoutMs !== 'number' || !Number.isFinite(body.timeoutMs))
-              )
-                return jsonReply(400, { error: 'timeoutMs must be a finite number' });
-              if (!requireOwnedTask(taskId)) return;
-              mcpLog('info', `wait_for_idle id=${taskId}`);
-              const idleResult = await orch.waitForIdle(
-                taskId,
-                body.timeoutMs as number | undefined,
-              );
-              const status = orch.getTaskStatus(taskId);
-              mcpLog(
-                'info',
-                `wait_for_idle OK id=${taskId} status=${status?.status} reason=${idleResult.reason}`,
-              );
-              jsonReply(200, { status: status?.status ?? 'unknown', reason: idleResult.reason });
-            })
-            .catch((err) => {
-              mcpLog('error', `wait_for_idle FAIL: ${String(err)}`);
-              jsonReply(500, { error: String(err) });
-            });
-          return;
-        }
-
-        if (taskIdMatch && taskIdMatch[2] === 'review-merge' && req.method === 'POST') {
-          readBody()
-            .then(async (body) => {
-              const taskId = decodeURIComponent(taskIdMatch[1]);
-              if (body.squash !== undefined && typeof body.squash !== 'boolean')
-                return jsonReply(400, { error: 'squash must be a boolean' });
-              if (body.message !== undefined && typeof body.message !== 'string')
-                return jsonReply(400, { error: 'message must be a string' });
-              if (!requireOwnedTask(taskId)) return;
-              mcpLog('info', `review_and_merge_task id=${taskId}`);
-              const result = await orch.reviewAndMergeTask(taskId, {
-                squash: body.squash as boolean | undefined,
-                message: body.message as string | undefined,
-              });
-              mcpLog('info', `review_and_merge_task OK id=${taskId}`);
-              jsonReply(200, result);
-            })
-            .catch((err) => {
-              mcpLog('error', `review_and_merge_task FAIL: ${String(err)}`);
-              jsonReply(500, { error: String(err) });
-            });
-          return;
-        }
-
-        if (taskIdMatch && taskIdMatch[2] === 'diff' && req.method === 'GET') {
-          const taskId = decodeURIComponent(taskIdMatch[1]);
-          if (!requireOwnedTask(taskId)) return;
-          mcpLog('info', `get_task_diff id=${taskId}`);
-          orch
-            .getTaskDiff(taskId)
-            .then((result) => jsonReply(200, result))
-            .catch((err) => {
-              mcpLog('error', `get_task_diff FAIL: ${String(err)}`);
-              jsonReply(500, { error: String(err) });
-            });
-          return;
-        }
-
-        if (taskIdMatch && taskIdMatch[2] === 'output' && req.method === 'GET') {
-          const taskId = decodeURIComponent(taskIdMatch[1]);
-          if (!requireOwnedTask(taskId)) return;
-          mcpLog('info', `get_task_output id=${taskId}`);
-          try {
-            const output = orch.getTaskOutput(taskId);
-            jsonReply(200, { output });
-          } catch (err) {
-            mcpLog('error', `get_task_output FAIL: ${String(err)}`);
-            jsonReply(500, { error: String(err) });
+          const subpath = taskIdMatch[2] ?? null;
+          const taskRoute = COORDINATOR_TASK_ROUTES.find(
+            (route) => route.subpath === subpath && route.method === req.method,
+          );
+          if (taskRoute) {
+            taskRoute.handler(routeCtx, taskId);
+            return;
           }
-          return;
-        }
-
-        if (taskIdMatch && taskIdMatch[2] === 'done' && req.method === 'POST') {
-          const taskId = decodeURIComponent(taskIdMatch[1]);
-          if (!requireOwnedTask(taskId)) return;
-          // Subtask callers must provide the per-task X-Done-Token header so a compromised
-          // sub-task cannot signal completion for tasks it doesn't own.
-          // Coordinator-class callers are intentionally exempt: a coordinator token is
-          // scoped to its own sub-tasks via callerCoordinatorId (enforced above), and
-          // trusting coordinators to call signal_done on their children matches the
-          // intended authority model. The done-token is a sub-task ownership proof, not
-          // a coordinator authority proof.
-          if (tokenClass === 'subtask') {
-            if (!hasMatchingDoneToken(taskId)) {
-              return jsonReply(403, { error: 'forbidden' });
-            }
-          }
-          mcpLog('info', `signal_done id=${taskId}`);
-          orch.signalDone(taskId);
-          jsonReply(200, { ok: true });
-          return;
-        }
-
-        if (taskIdMatch && taskIdMatch[2] === 'land' && req.method === 'POST') {
-          readBody()
-            .then(async (body) => {
-              const taskId = decodeURIComponent(taskIdMatch[1]);
-              const landDetail = orch.getTaskStatus(taskId);
-              if (!landDetail) return jsonReply(404, { error: 'task not found' });
-              if (tokenClass !== 'subtask') return jsonReply(403, { error: 'forbidden' });
-              if (!hasMatchingDoneToken(taskId)) return jsonReply(403, { error: 'forbidden' });
-
-              const parsed = parseLandSelfInput(body);
-              if (typeof parsed === 'string') return jsonReply(400, { error: parsed });
-
-              mcpLog('info', `land_self id=${taskId}`);
-              const result = await orch.landSelf(taskId, parsed);
-              mcpLog('info', `land_self OK id=${taskId}`);
-              jsonReply(200, result);
-            })
-            .catch((err) => {
-              mcpLog('error', `land_self FAIL: ${String(err)}`);
-              jsonReply(500, { error: String(err) });
-            });
-          return;
-        }
-
-        if (taskIdMatch && taskIdMatch[2] === 'merge' && req.method === 'POST') {
-          readBody()
-            .then(async (body) => {
-              const taskId = decodeURIComponent(taskIdMatch[1]);
-              if (body.squash !== undefined && typeof body.squash !== 'boolean')
-                return jsonReply(400, { error: 'squash must be a boolean' });
-              if (body.message !== undefined && typeof body.message !== 'string')
-                return jsonReply(400, { error: 'message must be a string' });
-              if (body.cleanup !== undefined && typeof body.cleanup !== 'boolean')
-                return jsonReply(400, { error: 'cleanup must be a boolean' });
-              if (!requireOwnedTask(taskId)) return;
-              mcpLog('info', `merge_task id=${taskId} squash=${body.squash ?? false}`);
-              const result = await orch.mergeTask(taskId, {
-                squash: body.squash as boolean | undefined,
-                message: body.message as string | undefined,
-                cleanup: body.cleanup as boolean | undefined,
-              });
-              mcpLog('info', `merge_task OK id=${taskId}`);
-              jsonReply(200, result);
-            })
-            .catch((err) => {
-              mcpLog('error', `merge_task FAIL: ${String(err)}`);
-              jsonReply(500, { error: String(err) });
-            });
-          return;
-        }
-
-        if (taskIdMatch && !taskIdMatch[2] && req.method === 'DELETE') {
-          const taskId = decodeURIComponent(taskIdMatch[1]);
-          if (!requireOwnedTask(taskId)) return;
-          mcpLog('info', `close_task id=${taskId}`);
-          orch
-            .closeTask(taskId)
-            .then(() => {
-              mcpLog('info', `close_task OK id=${taskId}`);
-              jsonReply(200, { ok: true });
-            })
-            .catch((err) => {
-              mcpLog('error', `close_task FAIL: ${String(err)}`);
-              jsonReply(500, { error: String(err) });
-            });
-          return;
         }
       }
 
@@ -986,12 +1121,12 @@ export function startRemoteServer(opts: {
   }
 
   const unsubSpawn = onPtyEvent('spawn', () => {
-    const list = buildAgentList(opts.getTaskName, opts.getAgentStatus);
+    const list = buildAgentList(opts.getTaskName, opts.getAgentStatus, getTaskAttention);
     broadcast({ type: 'agents', list });
   });
 
   const unsubListChanged = onPtyEvent('list-changed', () => {
-    const list = buildAgentList(opts.getTaskName, opts.getAgentStatus);
+    const list = buildAgentList(opts.getTaskName, opts.getAgentStatus, getTaskAttention);
     broadcast({ type: 'agents', list });
   });
 
@@ -1003,7 +1138,7 @@ export function startRemoteServer(opts: {
       clientSubs.get(client)?.delete(agentId);
     }
     setTimeout(() => {
-      const list = buildAgentList(opts.getTaskName, opts.getAgentStatus);
+      const list = buildAgentList(opts.getTaskName, opts.getAgentStatus, getTaskAttention);
       broadcast({ type: 'agents', list });
     }, 100);
   });
@@ -1016,7 +1151,7 @@ export function startRemoteServer(opts: {
     if (classifyToken(req) === 'coordinator') {
       authenticatedClients.add(ws);
       clientTokenTypes.set(ws, 'coordinator');
-      const list = buildAgentList(opts.getTaskName, opts.getAgentStatus);
+      const list = buildAgentList(opts.getTaskName, opts.getAgentStatus, getTaskAttention);
       ws.send(JSON.stringify({ type: 'agents', list } satisfies ServerMessage));
     } else {
       // Close unauthenticated connections after 5 seconds
@@ -1041,7 +1176,7 @@ export function startRemoteServer(opts: {
           clientTokenTypes.set(ws, tokenType);
           const timer = authTimers.get(ws);
           if (timer) clearTimeout(timer);
-          const list = buildAgentList(opts.getTaskName, opts.getAgentStatus);
+          const list = buildAgentList(opts.getTaskName, opts.getAgentStatus, getTaskAttention);
           ws.send(JSON.stringify({ type: 'agents', list } satisfies ServerMessage));
         } else {
           ws.close(4001, 'Unauthorized');

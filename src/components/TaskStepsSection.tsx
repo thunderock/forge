@@ -3,6 +3,7 @@ import { theme } from '../lib/theme';
 import { sf } from '../lib/fontScale';
 import { useFocusRegistration } from '../lib/focus-registration';
 import { setTaskFocusedPanel, isPanelFocused } from '../store/store';
+import { CheckIcon, CopyIcon } from './icons';
 import type { Task } from '../store/types';
 import type { StepEntry } from '../ipc/types';
 import { warn as logWarn } from '../lib/log';
@@ -228,7 +229,7 @@ function CopyButton(props: { text: string; visible: boolean; label: string }) {
         'line-height': '1',
       }}
     >
-      {copied() ? '✓' : '⧉'}
+      {copied() ? <CheckIcon size={11} /> : <CopyIcon size={11} />}
     </button>
   );
 }

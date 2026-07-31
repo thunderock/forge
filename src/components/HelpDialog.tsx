@@ -3,7 +3,7 @@ import { Dialog } from './Dialog';
 import { confirm as appConfirm } from '../lib/dialog';
 import { theme } from '../lib/theme';
 import { isMac } from '../lib/platform';
-import { PRESETS } from '../lib/keybindings';
+import { PRESETS, formatKeyCombo } from '../lib/keybindings';
 import type { KeyBinding, Modifiers } from '../lib/keybindings';
 import { store } from '../store/store';
 import {
@@ -18,29 +18,6 @@ import {
 interface HelpDialogProps {
   open: boolean;
   onClose: () => void;
-}
-
-function formatKeyCombo(binding: KeyBinding): string {
-  const parts: string[] = [];
-  const m = binding.modifiers;
-  if (m.cmdOrCtrl) parts.push(isMac ? 'Cmd' : 'Ctrl');
-  if (m.ctrl && !m.cmdOrCtrl) parts.push('Ctrl');
-  if (m.meta && !m.cmdOrCtrl) parts.push(isMac ? 'Cmd' : 'Super');
-  if (m.alt) parts.push(isMac ? 'Opt' : 'Alt');
-  if (m.shift) parts.push('Shift');
-
-  let keyName = binding.key;
-  if (keyName === 'ArrowLeft') keyName = '\u2190';
-  if (keyName === 'ArrowRight') keyName = '\u2192';
-  if (keyName === 'ArrowUp') keyName = '\u2191';
-  if (keyName === 'ArrowDown') keyName = '\u2193';
-  if (keyName === 'Backspace') keyName = '\u232B';
-  if (keyName === 'Enter') keyName = '\u21B5';
-  if (keyName === 'Escape') keyName = 'Esc';
-  if (keyName.length === 1) keyName = keyName.toUpperCase();
-
-  parts.push(keyName);
-  return parts.join(' + ');
 }
 
 function escapeSequenceName(seq: string): string {
@@ -387,6 +364,7 @@ export function HelpDialog(props: HelpDialogProps) {
                           </button>
                         </Show>
                         <kbd
+                          class="keybinding-key"
                           role="button"
                           tabIndex={0}
                           aria-label={

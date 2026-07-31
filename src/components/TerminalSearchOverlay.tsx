@@ -1,4 +1,5 @@
 import { onMount, type JSX } from 'solid-js';
+import { CloseIcon } from './icons';
 
 export interface TerminalSearchOverlayProps {
   query: string;
@@ -147,7 +148,7 @@ export function TerminalSearchOverlay(props: TerminalSearchOverlayProps): JSX.El
         onClick={() => props.onClose()}
         style={ICON_BUTTON_STYLE}
       >
-        ✕
+        <CloseIcon size={13} />
       </button>
     </div>
   );

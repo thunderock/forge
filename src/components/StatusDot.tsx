@@ -49,7 +49,7 @@ export function StatusDot(props: {
   const isPulsing = () => props.attention === 'active' || props.status === 'busy';
   return (
     <span
-      class={isPulsing() ? 'status-dot-pulse' : undefined}
+      class={isPulsing() ? 'status-dot-pulse status-dot-ring' : undefined}
       title={getDotTooltip(props.status, props.attention)}
       style={{
         display: 'inline-block',

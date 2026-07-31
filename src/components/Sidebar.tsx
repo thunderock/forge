@@ -1,10 +1,9 @@
 import { createSignal, createEffect, createMemo, onMount, onCleanup, For, Show } from 'solid-js';
+import type { JSX } from 'solid-js';
 import { errMessage } from '../lib/log';
 import {
   store,
   pickAndAddProject,
-  removeProject,
-  removeProjectWithTasks,
   toggleNewTaskDialog,
   toggleBroadcastDialog,
   setActiveTask,
@@ -35,19 +34,22 @@ import {
   isCoordinatedChild,
 } from '../store/sidebar-order';
 import { ConnectPhoneModal } from './ConnectPhoneModal';
-import { ConfirmDialog } from './ConfirmDialog';
+import { RemoveProjectConfirm } from './RemoveProjectConfirm';
 import { EditProjectDialog } from './EditProjectDialog';
 import { ImportWorktreesDialog } from './ImportWorktreesDialog';
 import { SidebarFooter } from './SidebarFooter';
 import { IconButton } from './IconButton';
 import { UpdateButton } from './UpdateButton';
 import { StatusDot, getDotTooltip } from './StatusDot';
+import { TaskCurrentStateLine } from './TaskCurrentStateLine';
 import { theme } from '../lib/theme';
 import { sf } from '../lib/fontScale';
 import { mod } from '../lib/platform';
+import { abbreviateHomePath } from '../lib/path';
 import { invoke } from '../lib/ipc';
 import { IPC } from '../../electron/ipc/channels';
 import type { ImportableWorktree } from '../ipc/types';
+import { shouldAnimateTaskAppearance } from '../lib/reducedMotion';
 
 const DRAG_THRESHOLD = 5;
 const SIDEBAR_DEFAULT_WIDTH = 240;
@@ -115,6 +117,101 @@ function CoordinatorIcon() {
   );
 }
 
+function DirectBranchBadge(props: { branchName: string }) {
+  return (
+    <span
+      style={{
+        'font-size': sf(10),
+        'font-weight': '600',
+        padding: '1px 5px',
+        'border-radius': '3px',
+        background: `color-mix(in srgb, ${theme.warning} 12%, transparent)`,
+        color: theme.warning,
+        'flex-shrink': '0',
+        'line-height': '1.5',
+      }}
+    >
+      {props.branchName}
+    </span>
+  );
+}
+
+function taskAttentionStyles(
+  taskId: string,
+  offscreenAttention: ReturnType<typeof createOffscreenAttentionState>,
+): Pick<JSX.CSSProperties, 'background' | 'border' | 'color' | 'font-weight'> {
+  const activeOrAttention = store.activeTaskId === taskId || offscreenAttention.hasAttention();
+  return {
+    background: offscreenAttention.hasAttention()
+      ? `color-mix(in srgb, ${offscreenAttention.color()} 10%, transparent)`
+      : 'transparent',
+    color: activeOrAttention ? theme.fg : theme.fgMuted,
+    'font-weight': activeOrAttention ? '500' : '400',
+    border:
+      store.sidebarFocused && store.sidebarFocusedTaskId === taskId
+        ? `1.5px solid var(--border-focus)`
+        : offscreenAttention.hasAttention()
+          ? `1.5px solid color-mix(in srgb, ${offscreenAttention.color()} 38%, transparent)`
+          : '1.5px solid transparent',
+  };
+}
+
+export function TaskRowShell(props: {
+  taskId: string;
+  class: string;
+  taskIndex?: number;
+  sidebarTaskId?: string;
+  role?: JSX.HTMLAttributes<HTMLDivElement>['role'];
+  tabIndex?: number;
+  title?: string;
+  onClick: () => void;
+  onKeyDown?: (event: KeyboardEvent) => void;
+  paddingLeft?: string;
+  fontSize: string;
+  cursor: string;
+  opacity: string;
+  style?: JSX.CSSProperties;
+  children: JSX.Element;
+}) {
+  const className = () =>
+    shouldAnimateTaskAppearance()
+      ? props.class
+      : props.class
+          .split(/\s+/)
+          .filter((className) => className !== 'task-item-appearing')
+          .join(' ');
+
+  return (
+    <div
+      class={className()}
+      role={props.role}
+      tabIndex={props.tabIndex}
+      data-task-index={props.taskIndex}
+      data-sidebar-task-id={props.sidebarTaskId}
+      title={props.title}
+      onClick={() => props.onClick()}
+      onKeyDown={(event) => props.onKeyDown?.(event)}
+      style={{
+        padding: '7px 10px',
+        'padding-left': props.paddingLeft ?? '10px',
+        'border-radius': '6px',
+        'font-size': props.fontSize,
+        cursor: props.cursor,
+        'white-space': 'nowrap',
+        overflow: 'hidden',
+        'text-overflow': 'ellipsis',
+        opacity: props.opacity,
+        display: 'flex',
+        'flex-direction': 'column',
+        gap: '1px',
+        ...props.style,
+      }}
+    >
+      {props.children}
+    </div>
+  );
+}
+
 export function Sidebar() {
   const [confirmRemove, setConfirmRemove] = createSignal<string | null>(null);
   const [editingProject, setEditingProject] = createSignal<Project | null>(null);
@@ -127,6 +224,7 @@ export function Sidebar() {
   const [dragFromTaskId, setDragFromTaskId] = createSignal<string | null>(null);
   const [dropTargetIndex, setDropTargetIndex] = createSignal<number | null>(null);
   const [resizing, setResizing] = createSignal(false);
+  const [nowMs, setNowMs] = createSignal(Date.now());
   let taskListRef: HTMLDivElement | undefined;
 
   const sidebarWidth = () => getPanelUserSize(SIDEBAR_SIZE_KEY) ?? SIDEBAR_DEFAULT_WIDTH;
@@ -182,6 +280,9 @@ export function Sidebar() {
   }
 
   onMount(() => {
+    const freshnessTimer = window.setInterval(() => setNowMs(Date.now()), 30_000);
+    onCleanup(() => clearInterval(freshnessTimer));
+
     const el = taskListRef;
     if (el) {
       const handler = (e: MouseEvent) => {
@@ -325,19 +426,6 @@ export function Sidebar() {
 
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
-  }
-
-  function abbreviatePath(path: string): string {
-    const prefixes = ['/home/', '/Users/'];
-    for (const prefix of prefixes) {
-      if (path.startsWith(prefix)) {
-        const rest = path.slice(prefix.length);
-        const slashIdx = rest.indexOf('/');
-        if (slashIdx !== -1) return '~' + rest.slice(slashIdx);
-        return '~';
-      }
-    }
-    return path;
   }
 
   function globalIndex(taskId: string): number {
@@ -578,7 +666,7 @@ export function Sidebar() {
                         >
                           {isProjectMissing(project.id)
                             ? 'Folder not found'
-                            : abbreviatePath(project.path)}
+                            : abbreviateHomePath(project.path)}
                         </div>
                       </div>
                       <button
@@ -788,6 +876,7 @@ export function Sidebar() {
                     {(taskId) => (
                       <TaskEntry
                         taskId={taskId}
+                        nowMs={nowMs()}
                         globalIndex={globalIndex}
                         dragFromIndex={dragFromIndex}
                         dropTargetIndex={dropTargetIndex}
@@ -795,7 +884,7 @@ export function Sidebar() {
                     )}
                   </For>
                   <For each={collapsedTasks()}>
-                    {(taskId) => <CollapsedTaskEntry taskId={taskId} />}
+                    {(taskId) => <CollapsedTaskEntry taskId={taskId} nowMs={nowMs()} />}
                   </For>
                 </Show>
               );
@@ -826,6 +915,7 @@ export function Sidebar() {
               {(taskId) => (
                 <TaskEntry
                   taskId={taskId}
+                  nowMs={nowMs()}
                   globalIndex={globalIndex}
                   dragFromIndex={dragFromIndex}
                   dropTargetIndex={dropTargetIndex}
@@ -833,7 +923,7 @@ export function Sidebar() {
               )}
             </For>
             <For each={groupedTasks().orphanedCollapsed}>
-              {(taskId) => <CollapsedTaskEntry taskId={taskId} />}
+              {(taskId) => <CollapsedTaskEntry taskId={taskId} nowMs={nowMs()} />}
             </For>
           </Show>
 
@@ -899,38 +989,7 @@ export function Sidebar() {
         />
 
         {/* Confirm remove project dialog */}
-        {(() => {
-          const id = confirmRemove();
-          const taskCount = id
-            ? [...store.taskOrder, ...store.collapsedTaskOrder].filter(
-                (tid) => store.tasks[tid]?.projectId === id,
-              ).length
-            : 0;
-          return (
-            <ConfirmDialog
-              open={id !== null}
-              title="Remove project?"
-              message={
-                taskCount > 0
-                  ? `This project has ${taskCount} open task(s). Removing it will also close all tasks, delete their worktrees and branches.`
-                  : 'Are you sure you want to remove this project?'
-              }
-              confirmLabel={taskCount > 0 ? 'Remove all' : 'Remove'}
-              danger
-              onConfirm={() => {
-                if (id) {
-                  if (taskCount > 0) {
-                    removeProjectWithTasks(id);
-                  } else {
-                    removeProject(id);
-                  }
-                }
-                setConfirmRemove(null);
-              }}
-              onCancel={() => setConfirmRemove(null)}
-            />
-          );
-        })()}
+        <RemoveProjectConfirm projectId={confirmRemove()} onDone={() => setConfirmRemove(null)} />
       </div>
       {/* Resize handle */}
       <div
@@ -949,6 +1008,7 @@ export function Sidebar() {
 
 interface TaskEntryProps {
   taskId: string;
+  nowMs: number;
   globalIndex: (taskId: string) => number;
   dragFromIndex: () => number | null;
   dropTargetIndex: () => number | null;
@@ -965,6 +1025,7 @@ function TaskEntry(props: TaskEntryProps) {
         fallback={
           <TaskRow
             taskId={props.taskId}
+            nowMs={props.nowMs}
             globalIndex={props.globalIndex}
             dragFromIndex={props.dragFromIndex}
             dropTargetIndex={props.dropTargetIndex}
@@ -974,6 +1035,7 @@ function TaskEntry(props: TaskEntryProps) {
       >
         <CoordinatorFolder
           taskId={props.taskId}
+          nowMs={props.nowMs}
           globalIndex={props.globalIndex}
           dragFromIndex={props.dragFromIndex}
           dropTargetIndex={props.dropTargetIndex}
@@ -1000,9 +1062,10 @@ function CoordinatorFolder(props: TaskEntryProps) {
             <div class="drop-indicator" />
           </Show>
           {/* Coordinator row */}
-          <div
+          <TaskRowShell
+            taskId={props.taskId}
             class={`task-item${t().closingStatus === 'removing' ? ' task-item-removing' : ' task-item-appearing'}`}
-            data-task-index={idx()}
+            taskIndex={idx()}
             title={getDotTooltip(
               getTaskDotStatus(props.taskId),
               getTaskAttentionState(props.taskId),
@@ -1011,36 +1074,10 @@ function CoordinatorFolder(props: TaskEntryProps) {
               setActiveTask(props.taskId);
               focusSidebar();
             }}
-            style={{
-              padding: '7px 10px',
-              'border-radius': '6px',
-              background: offscreenAttention.hasAttention()
-                ? `color-mix(in srgb, ${offscreenAttention.color()} 10%, transparent)`
-                : 'transparent',
-              color:
-                store.activeTaskId === props.taskId || offscreenAttention.hasAttention()
-                  ? theme.fg
-                  : theme.fgMuted,
-              'font-size': sf(13),
-              'font-weight':
-                store.activeTaskId === props.taskId || offscreenAttention.hasAttention()
-                  ? '500'
-                  : '400',
-              cursor: props.dragFromIndex() !== null ? 'grabbing' : 'pointer',
-              'white-space': 'nowrap',
-              overflow: 'hidden',
-              'text-overflow': 'ellipsis',
-              opacity: props.dragFromIndex() === idx() ? '0.4' : '1',
-              display: 'flex',
-              'flex-direction': 'column',
-              gap: '1px',
-              border:
-                store.sidebarFocused && store.sidebarFocusedTaskId === props.taskId
-                  ? `1.5px solid var(--border-focus)`
-                  : offscreenAttention.hasAttention()
-                    ? `1.5px solid color-mix(in srgb, ${offscreenAttention.color()} 38%, transparent)`
-                    : '1.5px solid transparent',
-            }}
+            fontSize={sf(13)}
+            cursor={props.dragFromIndex() !== null ? 'grabbing' : 'pointer'}
+            opacity={props.dragFromIndex() === idx() ? '0.4' : '1'}
+            style={taskAttentionStyles(props.taskId, offscreenAttention)}
           >
             <div style={{ display: 'flex', 'align-items': 'center', gap: '6px' }}>
               <CoordinatorIcon />
@@ -1064,13 +1101,15 @@ function CoordinatorFolder(props: TaskEntryProps) {
                 </span>
               </Show>
             </div>
-          </div>
+            <TaskCurrentStateLine task={t()} nowMs={props.nowMs} variant="sidebar" />
+          </TaskRowShell>
 
           {/* Indented active children */}
           <For each={children().active}>
             {(childId) => (
               <TaskRow
                 taskId={childId}
+                nowMs={props.nowMs}
                 globalIndex={props.globalIndex}
                 dragFromIndex={props.dragFromIndex}
                 dropTargetIndex={props.dropTargetIndex}
@@ -1081,7 +1120,7 @@ function CoordinatorFolder(props: TaskEntryProps) {
 
           {/* Indented collapsed children */}
           <For each={children().collapsed}>
-            {(childId) => <CollapsedTaskEntry taskId={childId} indented />}
+            {(childId) => <CollapsedTaskEntry taskId={childId} nowMs={props.nowMs} indented />}
           </For>
         </>
       )}
@@ -1091,7 +1130,12 @@ function CoordinatorFolder(props: TaskEntryProps) {
 
 // --- Collapsed task entry: also handles coordinator folders in collapsed state ---
 
-function CollapsedTaskEntry(props: { taskId: string; indented?: boolean; coordinatorId?: string }) {
+function CollapsedTaskEntry(props: {
+  taskId: string;
+  nowMs: number;
+  indented?: boolean;
+  coordinatorId?: string;
+}) {
   const task = () => store.tasks[props.taskId];
   // Only top-level coordinators render children — indented entries never recurse
   const isCoordinator = () => !props.indented && (task()?.coordinatorMode ?? false);
@@ -1104,11 +1148,12 @@ function CollapsedTaskEntry(props: { taskId: string; indented?: boolean; coordin
     <Show when={task()}>
       {(t) => (
         <>
-          <div
+          <TaskRowShell
+            taskId={props.taskId}
             class="task-item task-item-appearing"
             role="button"
             tabIndex={0}
-            data-sidebar-task-id={props.taskId}
+            sidebarTaskId={props.taskId}
             onClick={() => {
               if (props.coordinatorId) {
                 uncollapseTask(props.coordinatorId);
@@ -1129,22 +1174,14 @@ function CollapsedTaskEntry(props: { taskId: string; indented?: boolean; coordin
               }
             }}
             title="Click to restore"
+            paddingLeft={props.indented ? '22px' : '10px'}
+            fontSize={sf(12)}
+            cursor="pointer"
+            opacity="0.6"
             style={{
-              padding: '7px 10px',
-              'padding-left': props.indented ? '22px' : '10px',
-              'border-radius': '6px',
               background: 'transparent',
               color: theme.fgSubtle,
-              'font-size': sf(12),
               'font-weight': '400',
-              cursor: 'pointer',
-              'white-space': 'nowrap',
-              overflow: 'hidden',
-              'text-overflow': 'ellipsis',
-              opacity: '0.6',
-              display: 'flex',
-              'flex-direction': 'column',
-              gap: '1px',
               border:
                 store.sidebarFocused && store.sidebarFocusedTaskId === props.taskId
                   ? `1.5px solid var(--border-focus)`
@@ -1161,20 +1198,7 @@ function CollapsedTaskEntry(props: { taskId: string; indented?: boolean; coordin
                 attention={getTaskAttentionState(props.taskId)}
               />
               <Show when={t().gitIsolation === 'direct'}>
-                <span
-                  style={{
-                    'font-size': sf(10),
-                    'font-weight': '600',
-                    padding: '1px 5px',
-                    'border-radius': '3px',
-                    background: `color-mix(in srgb, ${theme.warning} 12%, transparent)`,
-                    color: theme.warning,
-                    'flex-shrink': '0',
-                    'line-height': '1.5',
-                  }}
-                >
-                  {t().branchName}
-                </span>
+                <DirectBranchBadge branchName={t().branchName} />
               </Show>
               <span style={{ overflow: 'hidden', 'text-overflow': 'ellipsis' }}>{t().name}</span>
               <Show when={isCoordinator() && childCount() > 0}>
@@ -1189,18 +1213,29 @@ function CollapsedTaskEntry(props: { taskId: string; indented?: boolean; coordin
                 </span>
               </Show>
             </div>
-          </div>
+            <TaskCurrentStateLine task={t()} nowMs={props.nowMs} variant="sidebar" />
+          </TaskRowShell>
 
           {/* If collapsed coordinator, still show children nested */}
           <Show when={isCoordinator()}>
             <For each={children().active}>
               {(childId) => (
-                <CollapsedTaskEntry taskId={childId} indented coordinatorId={props.taskId} />
+                <CollapsedTaskEntry
+                  taskId={childId}
+                  nowMs={props.nowMs}
+                  indented
+                  coordinatorId={props.taskId}
+                />
               )}
             </For>
             <For each={children().collapsed}>
               {(childId) => (
-                <CollapsedTaskEntry taskId={childId} indented coordinatorId={props.taskId} />
+                <CollapsedTaskEntry
+                  taskId={childId}
+                  nowMs={props.nowMs}
+                  indented
+                  coordinatorId={props.taskId}
+                />
               )}
             </For>
           </Show>
@@ -1214,6 +1249,7 @@ function CollapsedTaskEntry(props: { taskId: string; indented?: boolean; coordin
 
 interface TaskRowProps {
   taskId: string;
+  nowMs: number;
   globalIndex: (taskId: string) => number;
   dragFromIndex: () => number | null;
   dropTargetIndex: () => number | null;
@@ -1231,9 +1267,10 @@ function TaskRow(props: TaskRowProps) {
           <Show when={!props.indented && props.dropTargetIndex() === idx()}>
             <div class="drop-indicator" />
           </Show>
-          <div
+          <TaskRowShell
+            taskId={props.taskId}
             class={`task-item${t().closingStatus === 'removing' ? ' task-item-removing' : ' task-item-appearing'}`}
-            data-task-index={props.indented ? undefined : idx()}
+            taskIndex={props.indented ? undefined : idx()}
             title={getDotTooltip(
               getTaskDotStatus(props.taskId),
               getTaskAttentionState(props.taskId),
@@ -1242,41 +1279,13 @@ function TaskRow(props: TaskRowProps) {
               setActiveTask(props.taskId);
               focusSidebar();
             }}
-            style={{
-              padding: '7px 10px',
-              'padding-left': props.indented ? '22px' : '10px',
-              'border-radius': '6px',
-              background: offscreenAttention.hasAttention()
-                ? `color-mix(in srgb, ${offscreenAttention.color()} 10%, transparent)`
-                : 'transparent',
-              color:
-                store.activeTaskId === props.taskId || offscreenAttention.hasAttention()
-                  ? theme.fg
-                  : theme.fgMuted,
-              'font-size': sf(12),
-              'font-weight':
-                store.activeTaskId === props.taskId || offscreenAttention.hasAttention()
-                  ? '500'
-                  : '400',
-              cursor: props.indented
-                ? 'pointer'
-                : props.dragFromIndex() !== null
-                  ? 'grabbing'
-                  : 'pointer',
-              'white-space': 'nowrap',
-              overflow: 'hidden',
-              'text-overflow': 'ellipsis',
-              opacity: !props.indented && props.dragFromIndex() === idx() ? '0.4' : '1',
-              display: 'flex',
-              'flex-direction': 'column',
-              gap: '1px',
-              border:
-                store.sidebarFocused && store.sidebarFocusedTaskId === props.taskId
-                  ? `1.5px solid var(--border-focus)`
-                  : offscreenAttention.hasAttention()
-                    ? `1.5px solid color-mix(in srgb, ${offscreenAttention.color()} 38%, transparent)`
-                    : '1.5px solid transparent',
-            }}
+            paddingLeft={props.indented ? '22px' : '10px'}
+            fontSize={sf(12)}
+            cursor={
+              props.indented ? 'pointer' : props.dragFromIndex() !== null ? 'grabbing' : 'pointer'
+            }
+            opacity={!props.indented && props.dragFromIndex() === idx() ? '0.4' : '1'}
+            style={taskAttentionStyles(props.taskId, offscreenAttention)}
           >
             <div style={{ display: 'flex', 'align-items': 'center', gap: '6px' }}>
               <StatusDot
@@ -1285,20 +1294,7 @@ function TaskRow(props: TaskRowProps) {
                 attention={getTaskAttentionState(props.taskId)}
               />
               <Show when={t().gitIsolation === 'direct'}>
-                <span
-                  style={{
-                    'font-size': sf(10),
-                    'font-weight': '600',
-                    padding: '1px 5px',
-                    'border-radius': '3px',
-                    background: `color-mix(in srgb, ${theme.warning} 12%, transparent)`,
-                    color: theme.warning,
-                    'flex-shrink': '0',
-                    'line-height': '1.5',
-                  }}
-                >
-                  {t().branchName}
-                </span>
+                <DirectBranchBadge branchName={t().branchName} />
               </Show>
               <span style={{ overflow: 'hidden', 'text-overflow': 'ellipsis' }}>{t().name}</span>
               <Show when={offscreenAttention.label()}>
@@ -1318,7 +1314,8 @@ function TaskRow(props: TaskRowProps) {
                 )}
               </Show>
             </div>
-          </div>
+            <TaskCurrentStateLine task={t()} nowMs={props.nowMs} variant="sidebar" />
+          </TaskRowShell>
         </>
       )}
     </Show>

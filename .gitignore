@@ -12,8 +12,9 @@ update-test/
 .idea
 .claude
 .DS_Store
-docs/
-openspec/
+# Keep generated docs content ignored, but track the authored architecture overview.
+docs/*
+!docs/architecture-overview.html
 
 # GSD planning artifacts — kept local (commit_docs=false)
 .planning/

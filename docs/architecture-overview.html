@@ -1,0 +1,2146 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="A source-aligned architecture overview of the Parallel Code Electron application."
+    />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='13' fill='%23050607'/%3E%3Cg fill='none' stroke='%232ec8ff' stroke-width='5'%3E%3Cpath d='M12 7v50M25 7v50M34 10h18v18H34M54 36H36v18h18'/%3E%3C/g%3E%3C/svg%3E"
+    />
+    <title>Parallel Code — Architecture Overview</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --page: #0f1114;
+        --surface: #16191e;
+        --surface-raised: #1c2026;
+        --surface-soft: #13161a;
+        --border: #30353d;
+        --border-strong: #454c57;
+        --text: #eef1f5;
+        --muted: #a5abb4;
+        --quiet: #858d98;
+        --blue: #2ec8ff;
+        --green: #54d6a0;
+        --amber: #f2b95e;
+        --ink: #071117;
+        --radius-sm: 6px;
+        --radius-md: 10px;
+        --radius-lg: 14px;
+        --sans: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        --display: 'Space Grotesk', Inter, ui-sans-serif, sans-serif;
+        --mono: 'JetBrains Mono', 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html {
+        scroll-behavior: smooth;
+        scroll-padding-top: 2rem;
+      }
+
+      body {
+        margin: 0;
+        min-width: 320px;
+        background: var(--page);
+        color: var(--text);
+        font-family: var(--sans);
+        font-size: 15px;
+        line-height: 1.65;
+      }
+
+      body::before {
+        position: fixed;
+        inset: 0;
+        z-index: -1;
+        background-image:
+          linear-gradient(rgba(255, 255, 255, 0.018) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(255, 255, 255, 0.018) 1px, transparent 1px);
+        background-size: 32px 32px;
+        content: '';
+        pointer-events: none;
+      }
+
+      a {
+        color: var(--blue);
+        text-decoration-thickness: 1px;
+        text-underline-offset: 0.18em;
+      }
+
+      a:hover {
+        color: #8ae4ff;
+      }
+
+      a:focus-visible,
+      summary:focus-visible {
+        border-radius: 3px;
+        outline: 3px solid var(--blue);
+        outline-offset: 3px;
+      }
+
+      code {
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 4px;
+        background: #0d1013;
+        color: #ccefff;
+        font-family: var(--mono);
+        font-size: 0.84em;
+        overflow-wrap: anywhere;
+        padding: 0.12rem 0.32rem;
+      }
+
+      .skip-link {
+        position: fixed;
+        top: 0.75rem;
+        left: 0.75rem;
+        z-index: 50;
+        border-radius: var(--radius-sm);
+        background: var(--blue);
+        color: var(--ink);
+        font-weight: 700;
+        padding: 0.65rem 0.9rem;
+        transform: translateY(-160%);
+        transition: transform 120ms ease;
+      }
+
+      .skip-link:focus {
+        transform: translateY(0);
+      }
+
+      .page-grid {
+        display: grid;
+        grid-template-columns: 236px minmax(0, 1fr);
+        max-width: 1500px;
+        min-height: 100vh;
+        margin: 0 auto;
+      }
+
+      .rail {
+        position: sticky;
+        top: 0;
+        display: flex;
+        flex-direction: column;
+        height: 100vh;
+        height: 100dvh;
+        overflow-y: auto;
+        border-right: 1px solid var(--border);
+        background: rgba(15, 17, 20, 0.94);
+        padding: 1.5rem 1.25rem;
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        color: var(--text);
+        text-decoration: none;
+      }
+
+      .brand-mark {
+        display: grid;
+        width: 38px;
+        height: 38px;
+        flex: 0 0 auto;
+        place-items: center;
+        border: 1px solid var(--border-strong);
+        border-radius: 9px;
+        background: #050607;
+      }
+
+      .brand-mark svg {
+        width: 28px;
+        height: 28px;
+      }
+
+      .brand-copy {
+        display: grid;
+        line-height: 1.15;
+      }
+
+      .brand-copy strong {
+        font-family: var(--display);
+        font-size: 0.95rem;
+        letter-spacing: 0.01em;
+      }
+
+      .brand-copy span {
+        margin-top: 0.2rem;
+        color: var(--quiet);
+        font-family: var(--mono);
+        font-size: 0.64rem;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+
+      .rail-label {
+        margin: 2.25rem 0 0.7rem;
+        color: var(--quiet);
+        font-family: var(--mono);
+        font-size: 0.65rem;
+        font-weight: 700;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+      }
+
+      .rail nav {
+        display: grid;
+        gap: 0.2rem;
+      }
+
+      .rail nav a {
+        display: flex;
+        min-height: 42px;
+        align-items: center;
+        gap: 0.65rem;
+        border-radius: var(--radius-sm);
+        color: var(--muted);
+        font-size: 0.84rem;
+        text-decoration: none;
+        padding: 0.52rem 0.6rem;
+      }
+
+      .rail nav a:hover {
+        background: var(--surface-raised);
+        color: var(--text);
+      }
+
+      .nav-num {
+        color: var(--blue);
+        font-family: var(--mono);
+        font-size: 0.67rem;
+      }
+
+      .rail-foot {
+        margin-top: auto;
+        border-top: 1px solid var(--border);
+        color: var(--quiet);
+        font-size: 0.72rem;
+        padding-top: 1rem;
+      }
+
+      .rail-foot strong {
+        display: block;
+        margin-bottom: 0.2rem;
+        color: var(--muted);
+        font-weight: 600;
+      }
+
+      main {
+        min-width: 0;
+      }
+
+      .hero {
+        position: relative;
+        isolation: isolate;
+        overflow: hidden;
+        min-height: 520px;
+        border-bottom: 1px solid var(--border);
+        padding: clamp(3rem, 7vw, 6.5rem) clamp(1.5rem, 5vw, 5.5rem) 3.5rem;
+      }
+
+      .hero::after {
+        position: absolute;
+        top: -18rem;
+        right: -15rem;
+        z-index: -1;
+        width: 44rem;
+        height: 44rem;
+        border: 1px solid rgba(46, 200, 255, 0.14);
+        border-radius: 50%;
+        background: radial-gradient(circle, rgba(40, 108, 245, 0.17), transparent 67%);
+        content: '';
+      }
+
+      .eyebrow,
+      .section-kicker,
+      .diagram-label {
+        color: var(--blue);
+        font-family: var(--mono);
+        font-size: 0.7rem;
+        font-weight: 700;
+        letter-spacing: 0.15em;
+        text-transform: uppercase;
+      }
+
+      .hero h1 {
+        max-width: 850px;
+        margin: 1rem 0 1.4rem;
+        font-family: var(--display);
+        font-size: clamp(3rem, 7vw, 6.3rem);
+        font-weight: 650;
+        letter-spacing: -0.055em;
+        line-height: 0.94;
+      }
+
+      .hero h1 span {
+        display: block;
+        color: var(--muted);
+      }
+
+      .hero-deck {
+        max-width: 760px;
+        margin: 0;
+        color: var(--muted);
+        font-size: clamp(1.05rem, 1.7vw, 1.32rem);
+        line-height: 1.55;
+      }
+
+      .hero-meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.55rem;
+        margin-top: 2rem;
+      }
+
+      .meta-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.45rem;
+        border: 1px solid var(--border-strong);
+        border-radius: 999px;
+        background: rgba(22, 25, 30, 0.75);
+        color: var(--muted);
+        font-family: var(--mono);
+        font-size: 0.68rem;
+        letter-spacing: 0.04em;
+        padding: 0.42rem 0.68rem;
+      }
+
+      .meta-chip::before {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: var(--blue);
+        content: '';
+      }
+
+      .hero-principle {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr);
+        gap: 1rem;
+        max-width: 920px;
+        margin-top: 3.5rem;
+        border-top: 1px solid var(--border);
+        padding-top: 1.35rem;
+      }
+
+      .hero-principle .index {
+        color: var(--blue);
+        font-family: var(--mono);
+        font-size: 0.8rem;
+      }
+
+      .hero-principle p {
+        margin: 0;
+        color: var(--muted);
+      }
+
+      .hero-principle strong {
+        color: var(--text);
+      }
+
+      .section {
+        border-bottom: 1px solid var(--border);
+        padding: clamp(3.25rem, 6vw, 6rem) clamp(1.5rem, 5vw, 5.5rem);
+      }
+
+      .section-head {
+        display: grid;
+        grid-template-columns: minmax(220px, 0.75fr) minmax(280px, 1.25fr);
+        gap: clamp(1.5rem, 4vw, 4rem);
+        align-items: end;
+        margin-bottom: 2.5rem;
+      }
+
+      .section-head h2 {
+        margin: 0.55rem 0 0;
+        font-family: var(--display);
+        font-size: clamp(2rem, 4vw, 3.45rem);
+        font-weight: 600;
+        letter-spacing: -0.04em;
+        line-height: 1.02;
+      }
+
+      .section-lede {
+        max-width: 660px;
+        margin: 0;
+        color: var(--muted);
+        font-size: 1rem;
+      }
+
+      .principle-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        border: 1px solid var(--border);
+        border-radius: var(--radius-lg);
+        overflow: hidden;
+      }
+
+      .principle-card {
+        min-height: 200px;
+        background: var(--surface);
+        padding: 1.35rem;
+      }
+
+      .principle-card + .principle-card {
+        border-left: 1px solid var(--border);
+      }
+
+      .principle-card .card-num {
+        color: var(--quiet);
+        font-family: var(--mono);
+        font-size: 0.68rem;
+      }
+
+      .principle-card h3 {
+        margin: 2rem 0 0.6rem;
+        font-size: 1rem;
+      }
+
+      .principle-card p {
+        margin: 0;
+        color: var(--muted);
+        font-size: 0.86rem;
+      }
+
+      .diagram {
+        margin-top: 2rem;
+        border: 1px solid var(--border);
+        border-radius: var(--radius-lg);
+        background: var(--surface-soft);
+        padding: clamp(1rem, 3vw, 2rem);
+      }
+
+      .diagram-topline {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+        margin-bottom: 1.5rem;
+      }
+
+      .diagram-note {
+        color: var(--quiet);
+        font-family: var(--mono);
+        font-size: 0.67rem;
+      }
+
+      .runtime-flow {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 54px minmax(160px, 0.56fr) 54px minmax(0, 1fr);
+        align-items: stretch;
+      }
+
+      .node {
+        position: relative;
+        min-width: 0;
+        border: 1px solid var(--border-strong);
+        border-radius: var(--radius-md);
+        background: var(--surface-raised);
+        padding: 1.15rem;
+      }
+
+      .node.renderer {
+        border-top: 3px solid var(--blue);
+      }
+
+      .node.boundary {
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        border-style: dashed;
+        border-color: rgba(242, 185, 94, 0.65);
+        background: rgba(242, 185, 94, 0.055);
+      }
+
+      .node.main-process {
+        border-top: 3px solid var(--green);
+      }
+
+      .node-tag {
+        color: var(--quiet);
+        font-family: var(--mono);
+        font-size: 0.62rem;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+      }
+
+      .node h3 {
+        margin: 0.55rem 0 0.45rem;
+        font-size: 1rem;
+      }
+
+      .node p {
+        margin: 0;
+        color: var(--muted);
+        font-size: 0.82rem;
+      }
+
+      .node-list {
+        display: grid;
+        gap: 0.4rem;
+        margin: 1rem 0 0;
+        padding: 0;
+        list-style: none;
+      }
+
+      .node-list li {
+        border-top: 1px solid var(--border);
+        color: var(--muted);
+        font-size: 0.76rem;
+        padding-top: 0.45rem;
+      }
+
+      .connector {
+        display: grid;
+        place-items: center;
+        color: var(--quiet);
+        font-family: var(--mono);
+        font-size: 1.3rem;
+      }
+
+      .connector span {
+        display: grid;
+        width: 34px;
+        height: 34px;
+        place-items: center;
+        border: 1px solid var(--border);
+        border-radius: 50%;
+        background: var(--page);
+      }
+
+      .host-services {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 0.65rem;
+        margin-top: 1.2rem;
+        padding-top: 1.2rem;
+        border-top: 1px dashed var(--border-strong);
+      }
+
+      .host-service {
+        min-height: 104px;
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        background: #101318;
+        padding: 0.85rem;
+      }
+
+      .host-service strong {
+        display: block;
+        margin-bottom: 0.35rem;
+        color: var(--text);
+        font-size: 0.8rem;
+      }
+
+      .host-service span {
+        display: block;
+        color: var(--quiet);
+        font-size: 0.72rem;
+        line-height: 1.5;
+      }
+
+      .boundary-callout {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr);
+        gap: 0.9rem;
+        margin-top: 1rem;
+        border-left: 3px solid var(--amber);
+        background: rgba(242, 185, 94, 0.06);
+        padding: 0.9rem 1rem;
+      }
+
+      .boundary-callout strong {
+        color: var(--amber);
+        font-family: var(--mono);
+        font-size: 0.7rem;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .boundary-callout p {
+        margin: 0;
+        color: var(--muted);
+        font-size: 0.82rem;
+      }
+
+      .timeline {
+        display: grid;
+        grid-template-columns: repeat(6, minmax(0, 1fr));
+        margin: 0;
+        border: 1px solid var(--border);
+        border-radius: var(--radius-lg);
+        overflow: hidden;
+        padding: 0;
+        list-style: none;
+      }
+
+      .phase {
+        position: relative;
+        min-height: 255px;
+        background: var(--surface);
+        padding: 1.15rem;
+      }
+
+      .phase + .phase {
+        border-left: 1px solid var(--border);
+      }
+
+      .phase-num {
+        display: grid;
+        width: 31px;
+        height: 31px;
+        place-items: center;
+        border: 1px solid var(--border-strong);
+        border-radius: 50%;
+        color: var(--blue);
+        font-family: var(--mono);
+        font-size: 0.66rem;
+      }
+
+      .phase h3 {
+        margin: 2rem 0 0.65rem;
+        font-size: 0.9rem;
+      }
+
+      .phase p {
+        margin: 0;
+        color: var(--muted);
+        font-size: 0.76rem;
+        line-height: 1.55;
+      }
+
+      .phase code {
+        border: 0;
+        background: transparent;
+        padding: 0;
+      }
+
+      .flow-note {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 1rem;
+        margin-top: 1rem;
+      }
+
+      .note-card {
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+        background: var(--surface-soft);
+        padding: 1rem;
+      }
+
+      .note-card strong {
+        display: block;
+        margin-bottom: 0.35rem;
+        color: var(--text);
+        font-size: 0.82rem;
+      }
+
+      .note-card p {
+        margin: 0;
+        color: var(--muted);
+        font-size: 0.78rem;
+      }
+
+      .table-wrap {
+        overflow-x: auto;
+        border: 1px solid var(--border);
+        border-radius: var(--radius-lg);
+      }
+
+      .table-wrap:focus-visible {
+        outline: 3px solid var(--blue);
+        outline-offset: 3px;
+      }
+
+      table {
+        width: 100%;
+        min-width: 820px;
+        border-collapse: collapse;
+        background: var(--surface);
+        text-align: left;
+      }
+
+      th,
+      td {
+        border-bottom: 1px solid var(--border);
+        vertical-align: top;
+        padding: 0.9rem 1rem;
+      }
+
+      thead th {
+        background: #12151a;
+        color: var(--quiet);
+        font-family: var(--mono);
+        font-size: 0.65rem;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+      }
+
+      td {
+        color: var(--muted);
+        font-size: 0.79rem;
+      }
+
+      tbody th {
+        background: var(--surface);
+        color: var(--text);
+        font-size: 0.79rem;
+        font-weight: 600;
+      }
+
+      td strong,
+      tbody th strong {
+        color: var(--text);
+        font-size: 0.82rem;
+      }
+
+      tbody tr:last-child > * {
+        border-bottom: 0;
+      }
+
+      .contract-grid,
+      .optional-grid,
+      .guardrail-grid,
+      .build-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 1rem;
+      }
+
+      .contract-card,
+      .plane-card,
+      .guardrail-card,
+      .build-card {
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+        background: var(--surface);
+        padding: 1.15rem;
+      }
+
+      .contract-card h3,
+      .plane-card h3,
+      .guardrail-card h3,
+      .build-card h3 {
+        margin: 0.65rem 0 0.5rem;
+        font-size: 0.95rem;
+      }
+
+      .contract-card p,
+      .plane-card p,
+      .guardrail-card p,
+      .build-card p {
+        margin: 0;
+        color: var(--muted);
+        font-size: 0.8rem;
+      }
+
+      .contract-card .path,
+      .plane-card .path,
+      .build-card .path {
+        color: var(--quiet);
+        font-family: var(--mono);
+        font-size: 0.67rem;
+      }
+
+      .contract-card ul,
+      .plane-card ul,
+      .build-card ul {
+        display: grid;
+        gap: 0.42rem;
+        margin: 0.85rem 0 0;
+        color: var(--muted);
+        font-size: 0.77rem;
+        padding-left: 1.1rem;
+      }
+
+      .plane-route {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0.45rem;
+        margin: 1rem 0;
+      }
+
+      .route-node {
+        border: 1px solid var(--border-strong);
+        border-radius: var(--radius-sm);
+        background: #101318;
+        color: #c9ced6;
+        font-family: var(--mono);
+        font-size: 0.66rem;
+        padding: 0.38rem 0.5rem;
+      }
+
+      .route-arrow {
+        color: var(--quiet);
+        font-family: var(--mono);
+        font-size: 0.76rem;
+      }
+
+      .plane-card.phone {
+        border-top: 3px solid var(--blue);
+      }
+
+      .plane-card.mcp {
+        border-top: 3px solid var(--green);
+      }
+
+      .ownership-split {
+        margin-top: 1rem;
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+        background: #101318;
+        padding: 1rem;
+      }
+
+      .ownership-split h3 {
+        margin: 0 0 0.75rem;
+        font-size: 0.9rem;
+      }
+
+      .ownership-split dl {
+        display: grid;
+        grid-template-columns: minmax(160px, 0.35fr) minmax(0, 1fr);
+        margin: 0;
+      }
+
+      .ownership-split dt,
+      .ownership-split dd {
+        border-top: 1px solid var(--border);
+        margin: 0;
+        padding: 0.7rem 0;
+      }
+
+      .ownership-split dt {
+        color: var(--text);
+        font-size: 0.78rem;
+        font-weight: 700;
+      }
+
+      .ownership-split dd {
+        color: var(--muted);
+        font-size: 0.77rem;
+      }
+
+      .guardrail-card {
+        min-height: 175px;
+      }
+
+      .guardrail-card .guardrail-icon {
+        display: grid;
+        width: 32px;
+        height: 32px;
+        place-items: center;
+        border-radius: var(--radius-sm);
+        background: rgba(46, 200, 255, 0.11);
+        color: var(--blue);
+        font-family: var(--mono);
+        font-size: 0.78rem;
+      }
+
+      .guardrail-card.caution .guardrail-icon {
+        background: rgba(242, 185, 94, 0.11);
+        color: var(--amber);
+      }
+
+      .code-map {
+        display: grid;
+        grid-template-columns: minmax(0, 0.85fr) minmax(300px, 1.15fr);
+        gap: 1rem;
+      }
+
+      .tree,
+      .change-guide {
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+        background: var(--surface);
+        padding: 1.15rem;
+      }
+
+      .tree h3,
+      .change-guide h3 {
+        margin: 0 0 1rem;
+        font-size: 0.95rem;
+      }
+
+      .tree-list {
+        display: grid;
+        gap: 0.35rem;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+
+      .tree-list li {
+        display: grid;
+        grid-template-columns: minmax(140px, 0.45fr) minmax(0, 1fr);
+        gap: 0.8rem;
+        border-top: 1px solid var(--border);
+        color: var(--muted);
+        font-size: 0.75rem;
+        padding: 0.62rem 0;
+      }
+
+      .tree-list code {
+        align-self: start;
+        justify-self: start;
+      }
+
+      .change-list {
+        display: grid;
+        gap: 0;
+        margin: 0;
+      }
+
+      .change-row {
+        display: grid;
+        grid-template-columns: minmax(145px, 0.42fr) minmax(0, 1fr);
+        gap: 1rem;
+        border-top: 1px solid var(--border);
+        padding: 0.68rem 0;
+      }
+
+      .change-row dt,
+      .change-row dd {
+        margin: 0;
+      }
+
+      .change-row dt {
+        color: var(--text);
+        font-size: 0.77rem;
+        font-weight: 700;
+      }
+
+      .change-row dd {
+        color: var(--muted);
+        font-size: 0.75rem;
+      }
+
+      .pipeline {
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        align-items: center;
+        margin-top: 1.25rem;
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+        background: #101318;
+        overflow: hidden;
+      }
+
+      .pipeline-step {
+        min-height: 118px;
+        padding: 1rem;
+      }
+
+      .pipeline-step + .pipeline-step {
+        border-left: 1px solid var(--border);
+      }
+
+      .pipeline-step strong {
+        display: block;
+        margin-bottom: 0.4rem;
+        color: var(--text);
+        font-size: 0.78rem;
+      }
+
+      .pipeline-step span {
+        display: block;
+        color: var(--quiet);
+        font-size: 0.7rem;
+      }
+
+      .source-note {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 1.5rem;
+        margin-top: 2rem;
+        border-top: 1px solid var(--border);
+        color: var(--quiet);
+        font-size: 0.72rem;
+        padding-top: 1rem;
+      }
+
+      .source-note p {
+        max-width: 720px;
+        margin: 0;
+      }
+
+      .source-note a {
+        flex: 0 0 auto;
+      }
+
+      @media (max-width: 1180px) {
+        .runtime-flow {
+          grid-template-columns: minmax(0, 1fr) 38px minmax(145px, 0.62fr) 38px minmax(0, 1fr);
+        }
+
+        .host-services {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .timeline {
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+        }
+
+        .phase:nth-child(4) {
+          border-left: 0;
+          border-top: 1px solid var(--border);
+        }
+
+        .phase:nth-child(5),
+        .phase:nth-child(6) {
+          border-top: 1px solid var(--border);
+        }
+      }
+
+      @media (max-width: 980px) {
+        .page-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .rail {
+          position: relative;
+          z-index: 10;
+          display: grid;
+          grid-template-columns: auto minmax(0, 1fr);
+          height: auto;
+          align-items: center;
+          gap: 1rem;
+          border-right: 0;
+          border-bottom: 1px solid var(--border);
+          padding: 0.85rem 1rem;
+        }
+
+        .rail-label,
+        .rail-foot {
+          display: none;
+        }
+
+        .rail nav {
+          display: flex;
+          justify-content: flex-start;
+          overflow-x: auto;
+        }
+
+        .rail nav a {
+          flex: 0 0 auto;
+        }
+
+        .section-head {
+          grid-template-columns: 1fr;
+          align-items: start;
+        }
+
+        .principle-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .principle-card + .principle-card {
+          border-top: 1px solid var(--border);
+          border-left: 0;
+        }
+
+        .runtime-flow {
+          grid-template-columns: 1fr;
+        }
+
+        .connector {
+          min-height: 52px;
+          transform: rotate(90deg);
+        }
+
+        .code-map {
+          grid-template-columns: 1fr;
+        }
+
+        .pipeline {
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+        }
+
+        .pipeline-step:nth-child(4) {
+          border-top: 1px solid var(--border);
+          border-left: 0;
+        }
+
+        .pipeline-step:nth-child(5) {
+          border-top: 1px solid var(--border);
+        }
+      }
+
+      @media (max-width: 700px) {
+        .rail {
+          grid-template-columns: 1fr;
+        }
+
+        .rail nav {
+          width: 100%;
+        }
+
+        .rail nav a {
+          min-height: 40px;
+          padding: 0.45rem 0.55rem;
+        }
+
+        .hero {
+          min-height: auto;
+          padding-top: 3.5rem;
+        }
+
+        .hero h1 {
+          font-size: clamp(2.65rem, 15vw, 4.2rem);
+        }
+
+        .hero-principle,
+        .boundary-callout {
+          grid-template-columns: 1fr;
+        }
+
+        .contract-grid,
+        .optional-grid,
+        .guardrail-grid,
+        .build-grid,
+        .flow-note {
+          grid-template-columns: 1fr;
+        }
+
+        .timeline {
+          grid-template-columns: 1fr;
+        }
+
+        .phase {
+          min-height: auto;
+        }
+
+        .phase + .phase,
+        .phase:nth-child(4),
+        .phase:nth-child(5),
+        .phase:nth-child(6) {
+          border-top: 1px solid var(--border);
+          border-left: 0;
+        }
+
+        .phase h3 {
+          margin-top: 1rem;
+        }
+
+        .host-services,
+        .pipeline {
+          grid-template-columns: 1fr;
+        }
+
+        .pipeline-step + .pipeline-step,
+        .pipeline-step:nth-child(4),
+        .pipeline-step:nth-child(5) {
+          border-top: 1px solid var(--border);
+          border-left: 0;
+        }
+
+        .ownership-split dl,
+        .tree-list li,
+        .change-row {
+          grid-template-columns: 1fr;
+          gap: 0.35rem;
+        }
+
+        .source-note {
+          flex-direction: column;
+        }
+
+        .diagram-topline {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        html {
+          scroll-behavior: auto;
+        }
+
+        .skip-link {
+          transition: none;
+        }
+      }
+
+      @media print {
+        :root {
+          color-scheme: light;
+          --page: #ffffff;
+          --surface: #ffffff;
+          --surface-raised: #f5f7f9;
+          --surface-soft: #f8f9fa;
+          --border: #cbd0d6;
+          --border-strong: #939ba5;
+          --text: #111418;
+          --muted: #444b54;
+          --quiet: #636b74;
+          --blue: #00677f;
+          --green: #276d50;
+          --amber: #795000;
+          --ink: #ffffff;
+        }
+
+        body::before,
+        .rail,
+        .hero::after,
+        .skip-link {
+          display: none;
+        }
+
+        .page-grid {
+          display: block;
+        }
+
+        thead th {
+          background: #e9edf1;
+          color: #38414a;
+        }
+
+        .hero,
+        .section {
+          break-inside: avoid;
+          padding: 1.2cm 1cm;
+        }
+
+        .table-wrap {
+          overflow: visible;
+        }
+
+        table {
+          min-width: 0;
+          table-layout: fixed;
+        }
+
+        th,
+        td {
+          overflow-wrap: anywhere;
+          padding: 0.55rem 0.65rem;
+        }
+
+        code,
+        .meta-chip,
+        .host-service,
+        .route-node,
+        .ownership-split,
+        .pipeline {
+          background: #f4f6f8;
+          color: #16384a;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">Skip to architecture overview</a>
+
+    <div class="page-grid">
+      <aside class="rail" aria-label="Architecture overview navigation">
+        <a class="brand" href="#top" aria-label="Parallel Code architecture overview home">
+          <span class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 56 56" fill="none" stroke="#2ec8ff" stroke-width="4">
+              <line x1="10" y1="6" x2="10" y2="50"></line>
+              <line x1="22" y1="6" x2="22" y2="50"></line>
+              <path d="M30 8 H47 V24 H30"></path>
+              <path d="M49 32 H32 V48 H49"></path>
+            </svg>
+          </span>
+          <span class="brand-copy">
+            <strong>Parallel Code</strong>
+            <span>System map</span>
+          </span>
+        </a>
+
+        <p class="rail-label">Contents</p>
+        <nav>
+          <a href="#shape"
+            ><span class="nav-num" aria-hidden="true">01</span><span>System shape</span></a
+          >
+          <a href="#lifecycle"
+            ><span class="nav-num" aria-hidden="true">02</span><span>Task lifecycle</span></a
+          >
+          <a href="#state"
+            ><span class="nav-num" aria-hidden="true">03</span><span>State &amp; data</span></a
+          >
+          <a href="#contracts"
+            ><span class="nav-num" aria-hidden="true">04</span><span>Contracts</span></a
+          >
+          <a href="#optional"
+            ><span class="nav-num" aria-hidden="true">05</span><span>Optional planes</span></a
+          >
+          <a href="#security"
+            ><span class="nav-num" aria-hidden="true">06</span><span>Guardrails</span></a
+          >
+          <a href="#code-map"
+            ><span class="nav-num" aria-hidden="true">07</span><span>Code map</span></a
+          >
+          <a href="#build"
+            ><span class="nav-num" aria-hidden="true">08</span><span>Build &amp; change</span></a
+          >
+        </nav>
+
+        <div class="rail-foot">
+          <strong>Source-aligned snapshot</strong>
+          v1.12.0 · 21 July 2026<br />macOS + Linux
+        </div>
+      </aside>
+
+      <main id="main-content">
+        <header class="hero" id="top">
+          <div class="eyebrow">Engineering / Architecture</div>
+          <h1>Architecture <span>at a glance.</span></h1>
+          <p class="hero-deck">
+            Parallel Code is an Electron control plane that turns one repository into many isolated
+            agent workspaces. SolidJS owns interaction and durable application state; Electron owns
+            privileged work; Git worktrees are the default unit of task isolation.
+          </p>
+
+          <div class="hero-meta" role="list" aria-label="Architecture snapshot metadata">
+            <span class="meta-chip" role="listitem">Electron 40</span>
+            <span class="meta-chip" role="listitem">SolidJS 1.9</span>
+            <span class="meta-chip" role="listitem">TypeScript 5.9</span>
+            <span class="meta-chip" role="listitem">Desktop + mobile companion</span>
+          </div>
+
+          <div class="hero-principle">
+            <span class="index">00</span>
+            <p>
+              <strong>The organizing rule:</strong> the renderer decides what the user wants; the
+              main process decides how to perform it safely on the host. The preload bridge and IPC
+              manifest are the contract between them.
+            </p>
+          </div>
+        </header>
+
+        <section class="section" id="shape" aria-labelledby="shape-title">
+          <div class="section-head">
+            <div>
+              <div class="section-kicker">01 / System shape</div>
+              <h2 id="shape-title">One app, two authority levels.</h2>
+            </div>
+            <p class="section-lede">
+              The desktop renderer is deliberately unprivileged. It composes the workspace, holds
+              the reactive model, and requests capabilities. Electron main owns privileged process,
+              filesystem, Git, network-server, and operating-system integration work; ordinary web
+              capabilities such as clipboard writes can remain in the renderer.
+            </p>
+          </div>
+
+          <div class="principle-grid" role="list" aria-label="Core architectural principles">
+            <article class="principle-card" role="listitem">
+              <span class="card-num">P / 01</span>
+              <h3>Renderer-led product flow</h3>
+              <p>
+                <code>App.tsx</code>, domain store modules, and components coordinate normal task
+                creation, navigation, review, and persistence.
+              </p>
+            </article>
+            <article class="principle-card" role="listitem">
+              <span class="card-num">P / 02</span>
+              <h3>Main-process authority</h3>
+              <p>
+                IPC handlers validate requests, then call narrow Git, PTY, file, Docker, updater,
+                notification, remote, and MCP modules.
+              </p>
+            </article>
+            <article class="principle-card" role="listitem">
+              <span class="card-num">P / 03</span>
+              <h3>Worktree isolation</h3>
+              <p>
+                A standard task receives a branch and
+                <code>.worktrees/&lt;branch&gt;</code> directory, so agents can run concurrently
+                without sharing a working tree.
+              </p>
+            </article>
+          </div>
+
+          <figure class="diagram" aria-labelledby="runtime-map-title">
+            <div class="diagram-topline">
+              <figcaption class="diagram-label" id="runtime-map-title">
+                Primary desktop runtime
+              </figcaption>
+              <span class="diagram-note">request → validate → execute → event / result</span>
+            </div>
+
+            <div class="runtime-flow">
+              <article class="node renderer">
+                <span class="node-tag">Chromium renderer</span>
+                <h3>SolidJS application</h3>
+                <p>Presentation, interaction, reactive state, and high-level orchestration.</p>
+                <ul class="node-list">
+                  <li><code>src/App.tsx</code> — boot, subscriptions, global shell</li>
+                  <li><code>src/store/</code> — normalized model and domain actions</li>
+                  <li><code>src/components/</code> — tiling, terminal, review, dialogs</li>
+                  <li>xterm.js, Monaco, Shiki, Marked, Mermaid</li>
+                </ul>
+              </article>
+
+              <div class="connector" aria-hidden="true"><span>→</span></div>
+
+              <article class="node boundary">
+                <div>
+                  <span class="node-tag">Trust boundary</span>
+                  <h3>Preload + IPC</h3>
+                  <p>Allowlisted named channels plus scoped UUID stream channels.</p>
+                </div>
+                <ul class="node-list">
+                  <li><code>contextBridge</code></li>
+                  <li><code>invoke&lt;T&gt;()</code></li>
+                  <li><code>Channel&lt;T&gt;</code></li>
+                </ul>
+              </article>
+
+              <div class="connector" aria-hidden="true"><span>→</span></div>
+
+              <article class="node main-process">
+                <span class="node-tag">Node / Electron main</span>
+                <h3>Privileged runtime</h3>
+                <p>Window lifecycle, validated capabilities, long-lived process registries.</p>
+                <ul class="node-list">
+                  <li><code>electron/main.ts</code> — environment, window, permissions</li>
+                  <li><code>electron/ipc/register.ts</code> — capability facade</li>
+                  <li><code>electron/ipc/pty.ts</code> — native and Docker PTYs</li>
+                  <li><code>electron/ipc/git.ts</code> — branches, diffs, merge, cleanup</li>
+                </ul>
+              </article>
+            </div>
+
+            <div
+              class="host-services"
+              role="list"
+              aria-label="Host resources owned by Electron main"
+            >
+              <div class="host-service" role="listitem">
+                <strong>Repositories</strong>
+                <span>Branches, worktrees, diffs, commits, merge, push, rebase</span>
+              </div>
+              <div class="host-service" role="listitem">
+                <strong>Agent processes</strong>
+                <span>node-pty sessions, CLI tools, shells, scrollback, flow control</span>
+              </div>
+              <div class="host-service" role="listitem">
+                <strong>Local storage</strong>
+                <span>State, themes, keybindings, watched plans and steps</span>
+              </div>
+              <div class="host-service" role="listitem">
+                <strong>Host integrations</strong>
+                <span
+                  >Docker, notifications, updater, privileged clipboard reads, dialogs, external
+                  links</span
+                >
+              </div>
+            </div>
+
+            <div class="boundary-callout">
+              <strong>Invariant</strong>
+              <p>
+                The desktop renderer has <code>contextIsolation: true</code> and
+                <code>nodeIntegration: false</code>. Dependency Cruiser also rejects renderer
+                imports from Electron main, except explicitly allowlisted pure shared modules.
+              </p>
+            </div>
+          </figure>
+        </section>
+
+        <section class="section" id="lifecycle" aria-labelledby="lifecycle-title">
+          <div class="section-head">
+            <div>
+              <div class="section-kicker">02 / Task lifecycle</div>
+              <h2 id="lifecycle-title">From intent to isolated agent.</h2>
+            </div>
+            <p class="section-lede">
+              A worktree-isolated task crosses the boundary to materialize its Git workspace and
+              again when the mounted terminal asks main to spawn the selected agent. Persistence and
+              later stream/control operations use the same IPC boundary; the store is updated only
+              after required setup succeeds.
+            </p>
+          </div>
+
+          <div
+            class="timeline"
+            role="list"
+            aria-label="Normal task creation and completion sequence"
+          >
+            <article class="phase" role="listitem">
+              <span class="phase-num">01</span>
+              <h3>Capture intent</h3>
+              <p>
+                <code>NewTaskDialog</code> resolves project, agent, base branch, isolation, Docker,
+                steps, prompt, and coordinator options.
+              </p>
+            </article>
+            <article class="phase" role="listitem">
+              <span class="phase-num">02</span>
+              <h3>Isolate work</h3>
+              <p>
+                <code>store/tasks.createTask</code> invokes <code>CreateTask</code>. Main validates
+                the request, creates a slugged branch, and adds the worktree.
+              </p>
+            </article>
+            <article class="phase" role="listitem">
+              <span class="phase-num">03</span>
+              <h3>Publish state</h3>
+              <p>
+                The renderer inserts normalized Task and Agent records, appends the task order, and
+                selects the new workspace.
+              </p>
+            </article>
+            <article class="phase" role="listitem">
+              <span class="phase-num">04</span>
+              <h3>Attach terminal</h3>
+              <p>
+                Reactive render mounts <code>TaskPanel → TaskAITerminal → TerminalView</code>. The
+                terminal opens a UUID output channel and invokes <code>SpawnAgent</code>.
+              </p>
+            </article>
+            <article class="phase" role="listitem">
+              <span class="phase-num">05</span>
+              <h3>Stream both ways</h3>
+              <p>
+                Main batches base64 PTY output to xterm. Input and resize return over IPC; pause and
+                resume provide backpressure when rendering falls behind.
+              </p>
+            </article>
+            <article class="phase" role="listitem">
+              <span class="phase-num">06</span>
+              <h3>Review &amp; land</h3>
+              <p>
+                Git IPC supplies status and diffs. Merge, push, or close actions validate repository
+                state before optional agent, worktree, and branch cleanup.
+              </p>
+            </article>
+          </div>
+
+          <div class="flow-note">
+            <article class="note-card">
+              <strong>Three isolation modes</strong>
+              <p>
+                <code>worktree</code> creates an app-owned branch/worktree; <code>direct</code> uses
+                the current project branch; <code>none</code> supports non-Git folders. Imported
+                worktrees remain user-owned and are not deleted during normal cleanup.
+              </p>
+            </article>
+            <article class="note-card">
+              <strong>Reload without process loss</strong>
+              <p>
+                PTY sessions live in main and are keyed by agent ID. A renderer reload can attach a
+                new output channel, resize and resume the existing process, then replay its bounded
+                scrollback.
+              </p>
+            </article>
+          </div>
+        </section>
+
+        <section class="section" id="state" aria-labelledby="state-title">
+          <div class="section-head">
+            <div>
+              <div class="section-kicker">03 / State &amp; data</div>
+              <h2 id="state-title">Ownership is explicit.</h2>
+            </div>
+            <p class="section-lede">
+              The renderer is authoritative for product state; main owns live resources. Persistence
+              serializes a deliberate subset of the Solid store, while task artifacts stay with the
+              repository that produced them.
+            </p>
+          </div>
+
+          <div
+            class="table-wrap"
+            role="region"
+            tabindex="0"
+            aria-label="State ownership table; scroll horizontally to view all columns"
+          >
+            <table>
+              <thead>
+                <tr>
+                  <th scope="col">Owner</th>
+                  <th scope="col">What it owns</th>
+                  <th scope="col">Lifetime</th>
+                  <th scope="col">Backing store / contract</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <th scope="row">
+                    <strong>Solid store</strong><br /><code>src/store/core.ts</code>
+                  </th>
+                  <td>
+                    Projects; normalized tasks, agents, and terminals; ordering; focus; layout;
+                    settings; status snapshots.
+                  </td>
+                  <td>Renderer session, reconstructed at startup.</td>
+                  <td>
+                    <code>AppStore</code> and domain modules exposed through
+                    <code>store/store.ts</code>.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <strong>PTY registry</strong><br /><code>electron/ipc/pty.ts</code>
+                  </th>
+                  <td>
+                    Native processes, Docker container IDs, stream channels, subscribers, and
+                    bounded scrollback.
+                  </td>
+                  <td>
+                    Electron main-process lifetime; survives renderer reload and hidden windows.
+                  </td>
+                  <td>In-memory <code>Map&lt;agentId, PtySession&gt;</code>.</td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <strong>App user data</strong><br /><code>electron/ipc/persistence.ts</code>
+                  </th>
+                  <td>Persisted state, themes, keybindings, arena data, and preferences.</td>
+                  <td>Across application restarts.</td>
+                  <td>
+                    <code>state.json</code> + backup (separate development directory),
+                    <code>themes/*.css</code>, <code>keybindings.json</code> + backup, and
+                    <code>arena-*.json</code>.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <strong>Project repository</strong><br /><code>electron/ipc/git.ts</code>
+                  </th>
+                  <td>Source, branches, worktrees, commits, diffs, and local Git exclude rules.</td>
+                  <td>Repository and task lifetime.</td>
+                  <td>Git plus <code>&lt;repo&gt;/.worktrees/&lt;branch&gt;</code>.</td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <strong>Task artifacts</strong><br /><code>plans.ts</code> /
+                    <code>steps.ts</code>
+                  </th>
+                  <td>Newest plan and the agent-maintained engineering timeline.</td>
+                  <td>Per worktree; watched while a task is live.</td>
+                  <td>
+                    <code>.claude/plans</code>, <code>docs/plans</code>, and
+                    <code>.claude/steps.json</code>.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <strong>Remote browser</strong><br /><code>src/remote/auth.ts</code>
+                  </th>
+                  <td>Base connection token and optional elevated pairing token.</td>
+                  <td>Browser origin; server tokens expire with the desktop server.</td>
+                  <td>Browser <code>localStorage</code> plus in-memory server token sets.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="flow-note">
+            <article class="note-card">
+              <strong>Persistence path</strong>
+              <p>
+                A serialized snapshot changes → one-second debounce → <code>SaveAppState</code> IPC
+                → JSON validation → temporary write → previous-file backup → atomic rename.
+              </p>
+            </article>
+            <article class="note-card">
+              <strong>Restore order matters</strong>
+              <p>
+                Startup loads agents and state, restores coordinator servers before their children,
+                reloads plan/steps content, validates project paths, then starts autosave and live
+                subscriptions.
+              </p>
+            </article>
+          </div>
+        </section>
+
+        <section class="section" id="contracts" aria-labelledby="contracts-title">
+          <div class="section-head">
+            <div>
+              <div class="section-kicker">04 / Contracts</div>
+              <h2 id="contracts-title">Small boundaries, typed payloads.</h2>
+            </div>
+            <p class="section-lede">
+              Parallel Code uses different contracts for request/response IPC, high-volume streams,
+              the phone WebSocket, and MCP coordination. Each lives close to the process boundary it
+              protects.
+            </p>
+          </div>
+
+          <div class="contract-grid">
+            <article class="contract-card">
+              <span class="path">electron/ipc/channel-manifest.json</span>
+              <h3>Named IPC capabilities</h3>
+              <p>
+                The manifest feeds the typed <code>IPC</code> export. The preload holds an exact
+                literal allowlist, checked by tests and again during development startup.
+              </p>
+              <ul>
+                <li>Renderer requests use <code>invoke&lt;T&gt;()</code>.</li>
+                <li>Main pushes lifecycle events with <code>webContents.send</code>.</li>
+                <li>
+                  Handlers validate primitives and channel-specific identifiers, branch names,
+                  paths, URLs, and hashes.
+                </li>
+              </ul>
+            </article>
+
+            <article class="contract-card">
+              <span class="path">src/lib/ipc.ts</span>
+              <h3>Scoped stream channels</h3>
+              <p>
+                <code>Channel&lt;T&gt;</code> creates a UUID topic, serializes itself as a channel
+                ID, and subscribes to <code>channel:&lt;uuid&gt;</code>. PTY output and command
+                progress use this path.
+              </p>
+              <ul>
+                <li><code>PtyOutput</code> is a Data / Exit discriminated union.</li>
+                <li>PTY bytes are base64 encoded across Electron IPC.</li>
+                <li>Disposal removes the exact listener.</li>
+              </ul>
+            </article>
+
+            <article class="contract-card">
+              <span class="path">electron/ipc/shared-types.ts</span>
+              <h3>Cross-process DTOs</h3>
+              <p>
+                Task creation, Git status, diffs, commits, coverage, PR checks, and agent
+                definitions are declared in main-owned pure types and re-exported to the renderer.
+              </p>
+              <ul>
+                <li>Application entities stay in <code>src/store/types.ts</code>.</li>
+                <li>
+                  Renderer runtime imports from <code>electron/</code> are limited to explicitly
+                  allowlisted shared modules.
+                </li>
+                <li>Migrations validate persisted data at runtime.</li>
+              </ul>
+            </article>
+
+            <article class="contract-card">
+              <span class="path">electron/remote/protocol.ts · electron/mcp/types.ts</span>
+              <h3>Network and coordinator protocols</h3>
+              <p>
+                Remote WebSocket messages and coordinator task/landing shapes have dedicated
+                discriminated unions and runtime validation appropriate to untrusted input.
+              </p>
+              <ul>
+                <li>WebSocket input, resize, kill, subscribe, output, and status messages.</li>
+                <li>Coordinator task state, verification, landing, and notification metadata.</li>
+                <li>Token class and ownership checks happen server-side.</li>
+              </ul>
+            </article>
+          </div>
+        </section>
+
+        <section class="section" id="optional" aria-labelledby="optional-title">
+          <div class="section-head">
+            <div>
+              <div class="section-kicker">05 / Optional planes</div>
+              <h2 id="optional-title">Phone access and agent delegation.</h2>
+            </div>
+            <p class="section-lede">
+              One local HTTP/WebSocket server supports two distinct features: a mobile companion and
+              token-protected MCP coordination. The protocols share transport infrastructure, not
+              authority.
+            </p>
+          </div>
+
+          <div class="optional-grid">
+            <article class="plane-card phone">
+              <span class="path">src/remote/ ↔ electron/remote/</span>
+              <h3>Phone companion</h3>
+              <p>
+                A second Solid SPA is served from Electron main. It lists agents, streams selected
+                terminal output and scrollback, accepts interaction, edits notes, and creates tasks
+                after PIN pairing.
+              </p>
+              <div class="plane-route" role="group" aria-label="Phone companion request route">
+                <span class="route-node">Phone SPA</span>
+                <span class="route-arrow">→</span>
+                <span class="route-node">HTTP / WS</span>
+                <span class="route-arrow">→</span>
+                <span class="route-node">Remote server</span>
+                <span class="route-arrow">→</span>
+                <span class="route-node">PTY / renderer bridge</span>
+              </div>
+              <ul>
+                <li>
+                  Manual access binds to the network; the QR-carried token can list agents, stream
+                  or write active terminals, and read or edit task notes.
+                </li>
+                <li>
+                  PIN pairing mints an in-memory elevated token that additionally permits top-level
+                  task creation.
+                </li>
+                <li>
+                  Task creation round-trips through the renderer to preserve the normal store path.
+                </li>
+              </ul>
+            </article>
+
+            <article class="plane-card mcp">
+              <span class="path">electron/mcp/ ↔ electron/remote/server.ts</span>
+              <h3>MCP coordinator</h3>
+              <p>
+                A bundled Node script speaks MCP over stdio to coordinator and task-scoped subtask
+                CLIs, selects a role-specific tool set, and delegates calls over authenticated HTTP
+                to a lazy-loaded main-process <code>Coordinator</code>.
+              </p>
+              <div class="plane-route" role="group" aria-label="MCP coordinator request route">
+                <span class="route-node">Agent CLI</span>
+                <span class="route-arrow">→</span>
+                <span class="route-node">MCP stdio</span>
+                <span class="route-arrow">→</span>
+                <span class="route-node">Token-auth HTTP</span>
+                <span class="route-arrow">→</span>
+                <span class="route-node">Coordinator</span>
+              </div>
+              <ul>
+                <li>
+                  Coordinator tools create, inspect, prompt, wait for, merge, and close subtasks;
+                  task-scoped subtask tools expose <code>land_self</code> and legacy
+                  <code>signal_done</code>.
+                </li>
+                <li>
+                  On macOS, a Docker coordinator that starts the otherwise-stopped shared HTTP
+                  server binds it to <code>0.0.0.0</code> for container access, exposing the
+                  bearer-token-protected port to LAN interfaces. An already-running loopback server
+                  is reused rather than rebound.
+                </li>
+                <li>
+                  Main directly uses task, Git, and PTY primitives, then mirrors events to the
+                  renderer.
+                </li>
+                <li>
+                  Persisted coordinator tasks are registered before child-task hydration at startup.
+                </li>
+              </ul>
+            </article>
+          </div>
+
+          <div class="ownership-split">
+            <h3>Why orchestration has two paths</h3>
+            <dl>
+              <dt>Human-created tasks</dt>
+              <dd>
+                Renderer-led. Store actions call IPC, then publish the resulting task and agent
+                records into Solid state.
+              </dd>
+              <dt>Coordinator-created subtasks</dt>
+              <dd>
+                Main-led. The <code>Coordinator</code> uses backend primitives independently of the
+                UI, then sends lifecycle events so the renderer can mirror the task.
+              </dd>
+              <dt>Phone-created tasks</dt>
+              <dd>
+                Bridged back to the renderer. This deliberately reuses the human-created path
+                instead of duplicating its store orchestration in the remote server.
+              </dd>
+            </dl>
+          </div>
+        </section>
+
+        <section class="section" id="security" aria-labelledby="security-title">
+          <div class="section-head">
+            <div>
+              <div class="section-kicker">06 / Guardrails</div>
+              <h2 id="security-title">Trust the boundary, validate the crossing.</h2>
+            </div>
+            <p class="section-lede">
+              The security model trusts the bundled renderer to call allowlisted desktop
+              capabilities. Context isolation, narrow preload exposure, navigation checks, and
+              validation limit—but do not eliminate—the impact of a renderer compromise.
+            </p>
+          </div>
+
+          <div class="guardrail-grid">
+            <article class="guardrail-card">
+              <span class="guardrail-icon" aria-hidden="true">01</span>
+              <h3>Renderer containment</h3>
+              <p>
+                Context isolation is enabled and Node integration is disabled. Popup creation is
+                denied in-window, with HTTP(S) targets handed to the system browser. Top-level
+                navigation currently accepts URLs beginning with the configured development origin
+                and any <code>file://</code> URL; treat this as routing policy, not an origin-exact
+                containment boundary.
+              </p>
+            </article>
+            <article class="guardrail-card">
+              <span class="guardrail-icon" aria-hidden="true">02</span>
+              <h3>Explicit capabilities</h3>
+              <p>
+                The preload exposes only IPC subscription/invocation, zoom, and dropped-file path
+                resolution. Named channels must appear in both manifest and allowlist.
+              </p>
+            </article>
+            <article class="guardrail-card">
+              <span class="guardrail-icon" aria-hidden="true">03</span>
+              <h3>Command and path validation</h3>
+              <p>
+                Main applies channel-specific checks to commands, branches, hashes, URLs, filenames,
+                paths, and MCP UUIDs. Git and child-process work uses argv APIs; shell
+                metacharacters are rejected where relevant.
+              </p>
+            </article>
+            <article class="guardrail-card">
+              <span class="guardrail-icon" aria-hidden="true">04</span>
+              <h3>Network authority classes</h3>
+              <p>
+                Coordinator, subtask, mobile, and paired tokens have different routes and ownership
+                checks. Pairing PINs are short-lived, bounded-attempt, and single-use.
+              </p>
+            </article>
+            <article class="guardrail-card">
+              <span class="guardrail-icon" aria-hidden="true">05</span>
+              <h3>Recoverable writes</h3>
+              <p>
+                Application state and keybindings use validate → temp file → backup → rename. MCP
+                configuration is written atomically with restrictive permissions and excluded from
+                Git.
+              </p>
+            </article>
+            <article class="guardrail-card caution">
+              <span class="guardrail-icon" aria-hidden="true">!</span>
+              <h3>Trust-model edge</h3>
+              <p>
+                Allowlisted filesystem capabilities accept validated absolute paths but are not
+                scoped to a project root. A compromised renderer could exercise those capabilities;
+                isolation, navigation controls, and the narrow preload remain critical.
+              </p>
+            </article>
+          </div>
+        </section>
+
+        <section class="section" id="code-map" aria-labelledby="code-map-title">
+          <div class="section-head">
+            <div>
+              <div class="section-kicker">07 / Code map</div>
+              <h2 id="code-map-title">Find the owning module first.</h2>
+            </div>
+            <p class="section-lede">
+              The repository is organized by process boundary first and domain second. Normal
+              feature work should extend the existing domain store and IPC handler rather than
+              create a new cross-cutting layer.
+            </p>
+          </div>
+
+          <div class="code-map">
+            <article class="tree">
+              <h3>Repository landmarks</h3>
+              <ul class="tree-list">
+                <li>
+                  <code>src/App.tsx</code
+                  ><span>Desktop renderer shell, startup, global subscriptions and shortcuts.</span>
+                </li>
+                <li>
+                  <code>src/components/</code
+                  ><span>Task workspace, xterm surfaces, sidebar, diff/review UI, dialogs.</span>
+                </li>
+                <li>
+                  <code>src/store/</code
+                  ><span
+                    >Reactive model, domain actions, persistence, status and synchronization.</span
+                  >
+                </li>
+                <li>
+                  <code>src/lib/</code
+                  ><span
+                    >Renderer infrastructure: IPC, themes, terminal helpers, focus, parsing.</span
+                  >
+                </li>
+                <li>
+                  <code>src/remote/</code
+                  ><span
+                    >Independent mobile Solid SPA, REST helpers, WebSocket client and auth.</span
+                  >
+                </li>
+                <li>
+                  <code>src/arena/</code
+                  ><span
+                    >Independent arena state machine and screens, reusing terminal/review
+                    parts.</span
+                  >
+                </li>
+                <li>
+                  <code>electron/main.ts</code
+                  ><span
+                    >Desktop process entry, environment repair, BrowserWindow and permissions.</span
+                  >
+                </li>
+                <li>
+                  <code>electron/ipc/</code
+                  ><span
+                    >Capability registration and privileged PTY, Git, persistence and watcher
+                    modules.</span
+                  >
+                </li>
+                <li>
+                  <code>electron/remote/</code
+                  ><span
+                    >HTTP/WebSocket server, protocol validation, pairing and token scopes.</span
+                  >
+                </li>
+                <li>
+                  <code>electron/mcp/</code
+                  ><span
+                    >Stdio bridge, HTTP client, coordinator lifecycle, validation and landing.</span
+                  >
+                </li>
+              </ul>
+            </article>
+
+            <article class="change-guide">
+              <h3>Where a change usually lands</h3>
+              <dl class="change-list">
+                <div class="change-row">
+                  <dt>Task behavior or persisted fields</dt>
+                  <dd>
+                    <code>src/store/types.ts</code>, the owning domain module, persistence
+                    save/load, and focused tests.
+                  </dd>
+                </div>
+                <div class="change-row">
+                  <dt>New desktop capability</dt>
+                  <dd>
+                    Channel manifest, preload allowlist, <code>register.ts</code>, a focused main
+                    module, shared DTOs, and allowlist tests.
+                  </dd>
+                </div>
+                <div class="change-row">
+                  <dt>Terminal transport</dt>
+                  <dd>
+                    <code>TerminalView.tsx</code>, <code>electron/ipc/pty.ts</code>,
+                    <code>PtyOutput</code>, and flow/reattach tests.
+                  </dd>
+                </div>
+                <div class="change-row">
+                  <dt>Git or worktree semantics</dt>
+                  <dd>
+                    <code>electron/ipc/git.ts</code> or <code>tasks.ts</code>, IPC validation, store
+                    lifecycle, and cleanup tests.
+                  </dd>
+                </div>
+                <div class="change-row">
+                  <dt>Phone capability</dt>
+                  <dd>
+                    <code>electron/remote/server.ts</code>, remote protocol,
+                    <code>src/remote/</code>, token scope, and request tests.
+                  </dd>
+                </div>
+                <div class="change-row">
+                  <dt>Coordinator tool or landing state</dt>
+                  <dd>
+                    <code>electron/mcp/</code>, remote coordinator routes, renderer mirror/hydration
+                    fields, and coordinator tests.
+                  </dd>
+                </div>
+                <div class="change-row">
+                  <dt>Task workspace UI</dt>
+                  <dd>
+                    Focused component under <code>src/components/</code>; reuse store actions and
+                    existing resizable/terminal patterns.
+                  </dd>
+                </div>
+              </dl>
+            </article>
+          </div>
+        </section>
+
+        <section class="section" id="build" aria-labelledby="build-title">
+          <div class="section-head">
+            <div>
+              <div class="section-kicker">08 / Build &amp; change</div>
+              <h2 id="build-title">Three artifacts, one desktop release.</h2>
+            </div>
+            <p class="section-lede">
+              Production combines the desktop renderer, the remote SPA, compiled Electron main, and
+              a CommonJS MCP bridge. electron-builder packages those outputs for macOS and Linux
+              only.
+            </p>
+          </div>
+
+          <div class="build-grid">
+            <article class="build-card">
+              <span class="path">npm run dev</span>
+              <h3>Development loop</h3>
+              <p>
+                Compile Electron main, bundle the MCP server, start Vite on port 1421, then launch
+                Electron against the live renderer URL.
+              </p>
+              <ul>
+                <li>
+                  Vite ignores nested <code>.worktrees</code> to avoid self-triggered reloads.
+                </li>
+                <li>Electron reload can reattach to main-owned PTYs.</li>
+                <li>Development state uses a separate user-data directory.</li>
+              </ul>
+            </article>
+            <article class="build-card">
+              <span class="path">npm run build</span>
+              <h3>Production packaging</h3>
+              <p>
+                Build both Solid surfaces, compile Electron, bundle the MCP entry, then assemble
+                signed and notarized macOS packages or Linux installers.
+              </p>
+              <ul>
+                <li><code>dist/</code> — desktop renderer</li>
+                <li><code>dist-remote/</code> — mobile SPA</li>
+                <li><code>dist-electron/</code> — main process and MCP bridge</li>
+              </ul>
+            </article>
+          </div>
+
+          <div class="pipeline" role="list" aria-label="Production build pipeline">
+            <div class="pipeline-step" role="listitem">
+              <strong>Desktop Vite</strong><span>SolidJS → dist/</span>
+            </div>
+            <div class="pipeline-step" role="listitem">
+              <strong>Remote Vite</strong><span>Mobile SPA → dist-remote/</span>
+            </div>
+            <div class="pipeline-step" role="listitem">
+              <strong>TypeScript</strong><span>Electron → dist-electron/</span>
+            </div>
+            <div class="pipeline-step" role="listitem">
+              <strong>esbuild</strong><span>MCP → mcp-server.cjs</span>
+            </div>
+            <div class="pipeline-step" role="listitem">
+              <strong>electron-builder</strong><span>DMG / ZIP / AppImage / DEB</span>
+            </div>
+          </div>
+
+          <div class="flow-note">
+            <article class="note-card">
+              <strong>Static quality gates</strong>
+              <p>
+                CI runs compile, typecheck, lint, format, dead-code and dependency checks, Semgrep
+                rule tests, and Vitest. Separate scripts provide coverage and secret scanning.
+              </p>
+            </article>
+            <article class="note-card">
+              <strong>Architecture rules are executable</strong>
+              <p>
+                Dependency Cruiser rejects runtime renderer-to-main imports except explicitly
+                allowlisted shared paths, blocks MCP dependencies on renderer components, store, and
+                lib, and rejects circular dependencies. The preload allowlist has its own
+                synchronization tests.
+              </p>
+            </article>
+          </div>
+
+          <footer class="source-note">
+            <p>
+              This overview describes the repository at package version 1.12.0. It is intentionally
+              conceptual; the source files named in each section remain authoritative for exact
+              payloads, validation rules, and lifecycle edge cases.
+            </p>
+            <a href="#top">Back to top ↑</a>
+          </footer>
+        </section>
+      </main>
+    </div>
+  </body>
+</html>

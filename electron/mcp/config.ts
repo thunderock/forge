@@ -1,5 +1,28 @@
 import os from 'os';
 import { join, dirname } from 'path';
+import { atomicWriteFile, atomicWriteFileSync } from './atomic.js';
+
+export interface SubTaskMcpConfigOpts {
+  serverPath: string;
+  serverUrl: string;
+  subtaskToken: string;
+  taskId: string;
+  doneToken: string;
+}
+
+export interface SubTaskMcpConfig {
+  mcpServers: {
+    forge: {
+      type: 'stdio';
+      command: 'node';
+      args: string[];
+      env: {
+        FORGE_MCP_TOKEN: string;
+        FORGE_MCP_DONE_TOKEN: string;
+      };
+    };
+  };
+}
 
 export function getMCPRemoteServerUrl(
   port: number,
@@ -32,6 +55,53 @@ export function getSubTaskMcpConfigPath(
   return dockerContainerName
     ? join(dirname(serverPath), `subtask-${taskId}.json`)
     : join(tempDir, `forge-subtask-${taskId}.json`);
+}
+
+export function buildSubTaskMcpConfig(args: SubTaskMcpConfigOpts): SubTaskMcpConfig {
+  return {
+    mcpServers: {
+      forge: {
+        type: 'stdio',
+        command: 'node',
+        args: [args.serverPath, '--url', args.serverUrl, '--task-id', args.taskId],
+        env: {
+          FORGE_MCP_TOKEN: args.subtaskToken,
+          FORGE_MCP_DONE_TOKEN: args.doneToken,
+        },
+      },
+    },
+  };
+}
+
+export async function writeSubTaskMcpConfig(
+  configPath: string,
+  config: SubTaskMcpConfig,
+): Promise<void> {
+  await atomicWriteFile(configPath, JSON.stringify(config, null, 2), { mode: 0o600 });
+}
+
+export function writeSubTaskMcpConfigSync(configPath: string, config: SubTaskMcpConfig): void {
+  atomicWriteFileSync(configPath, JSON.stringify(config, null, 2), { mode: 0o600 });
+}
+
+export function isAllowedSubTaskMcpConfigPath(
+  configPath: string | undefined,
+  args: {
+    taskId: string;
+    serverPath?: string;
+    dockerContainerName?: string | null;
+    tempDir?: string;
+  },
+): boolean {
+  if (!configPath) return false;
+  const tempDir = args.tempDir ?? os.tmpdir();
+  const allowed = new Set([getSubTaskMcpConfigPath(null, '', args.taskId, tempDir)]);
+  if (args.dockerContainerName && args.serverPath) {
+    allowed.add(
+      getSubTaskMcpConfigPath(args.dockerContainerName, args.serverPath, args.taskId, tempDir),
+    );
+  }
+  return allowed.has(configPath);
 }
 
 /**

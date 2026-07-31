@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { openExternalHttpUrl, selectMcpJsonDir, validateExternalHttpUrl } from './register.js';
+import {
+  branchNameArg,
+  openExternalHttpUrl,
+  optionalBaseBranch,
+  projectRootArg,
+  selectMcpJsonDir,
+  validateExternalHttpUrl,
+  worktreePathArg,
+} from './register.js';
 
 describe('selectMcpJsonDir', () => {
   it('returns worktreePath when defined', () => {
@@ -39,6 +47,35 @@ describe('validateExternalHttpUrl', () => {
   it('rejects invalid and non-string values', () => {
     expect(() => validateExternalHttpUrl('not a url')).toThrow('url must be a valid URL');
     expect(() => validateExternalHttpUrl(undefined)).toThrow('url must be a string');
+  });
+});
+
+describe('Git IPC argument helpers', () => {
+  it('returns validated absolute paths', () => {
+    expect(projectRootArg({ projectRoot: '/repo' })).toBe('/repo');
+    expect(worktreePathArg({ worktreePath: '/repo/.worktrees/task' })).toBe(
+      '/repo/.worktrees/task',
+    );
+  });
+
+  it('rejects invalid absolute path fields', () => {
+    expect(() => projectRootArg({ projectRoot: 'relative' })).toThrow(
+      'projectRoot must be absolute',
+    );
+    expect(() => worktreePathArg({ worktreePath: '/tmp/../repo' })).toThrow(
+      'worktreePath must not contain ".."',
+    );
+  });
+
+  it('normalizes optional baseBranch using existing Git handler semantics', () => {
+    expect(optionalBaseBranch({})).toBeUndefined();
+    expect(optionalBaseBranch({ baseBranch: '' })).toBeUndefined();
+    expect(optionalBaseBranch({ baseBranch: 'feature/base' })).toBe('feature/base');
+  });
+
+  it('rejects invalid branch fields', () => {
+    expect(() => branchNameArg({ branchName: '../main' })).toThrow('branchName');
+    expect(() => optionalBaseBranch({ baseBranch: '../main' })).toThrow('baseBranch');
   });
 });
 

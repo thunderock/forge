@@ -8,6 +8,7 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprot
 import { MCPClient } from './client.js';
 import { selectTools } from './mcp-tool-list.js';
 import { validateBranchName } from './validation.js';
+import { formatDiffForTool } from './diff-format.js';
 import type { LandSelfInput } from './types.js';
 
 export interface MCPToolHandlerContext {
@@ -107,24 +108,8 @@ export async function handleMCPToolCall(
         const result = await client.getTaskDiff(
           (params as Record<string, unknown>).taskId as string,
         );
-        // Return files summary + truncated diff
-        const summary = result.files
-          .map(
-            (f) =>
-              `${f.status} ${f.path} (+${f.lines_added} -${f.lines_removed})` +
-              (f.committed ? '' : ' [NOT COMMITTED — will be auto-committed on merge]'),
-          )
-          .join('\n');
-        let diffText: string;
-        if (result.diff.length > 50_000) {
-          result.truncated = true;
-          result.originalSizeBytes = result.diff.length;
-          diffText = result.diff.slice(0, 50_000) + '\n... (diff truncated)';
-        } else {
-          diffText = result.diff;
-        }
         return {
-          content: [{ type: 'text', text: `Changed files:\n${summary}\n\n${diffText}` }],
+          content: [{ type: 'text', text: formatDiffForTool(result) }],
         };
       }
 
@@ -175,23 +160,12 @@ export async function handleMCPToolCall(
           squash: p.squash as boolean | undefined,
           message: p.message as string | undefined,
         });
-        const summary = result.diff.files
-          .map(
-            (f) =>
-              `${f.status} ${f.path} (+${f.lines_added} -${f.lines_removed})` +
-              (f.committed ? '' : ' [NOT COMMITTED — will be auto-committed on merge]'),
-          )
-          .join('\n');
-        let diffText = result.diff.diff;
-        if (diffText.length > 50_000) {
-          diffText = diffText.slice(0, 50_000) + '\n... (diff truncated)';
-        }
         const mergeInfo = `Merged into ${result.merge.mainBranch}: +${result.merge.linesAdded} -${result.merge.linesRemoved} lines`;
         return {
           content: [
             {
               type: 'text',
-              text: `${mergeInfo}\n\nChanged files:\n${summary}\n\n${diffText}`,
+              text: formatDiffForTool(result.diff, mergeInfo),
             },
           ],
         };

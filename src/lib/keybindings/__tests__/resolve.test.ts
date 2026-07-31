@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { resolveBindings, findConflict } from '../resolve';
+import { resolveBindings, resolveOneBinding, findConflict } from '../resolve';
 import { DEFAULT_BINDINGS } from '../defaults';
+
+function defaultBinding(id: string) {
+  const binding = DEFAULT_BINDINGS.find((b) => b.id === id);
+  if (!binding) throw new Error(`Missing default binding: ${id}`);
+  return binding;
+}
 
 describe('resolveBindings', () => {
   it('returns defaults unchanged when no preset or user overrides', () => {
@@ -47,6 +53,33 @@ describe('resolveBindings', () => {
     });
     // Should have same count as defaults filtered to current platform
     expect(resolved.length).toBeGreaterThan(0);
+  });
+});
+
+describe('resolveOneBinding', () => {
+  it('applies user overrides for one binding', () => {
+    const binding = defaultBinding('app.toggle-sidebar');
+
+    const resolved = resolveOneBinding(binding, {
+      preset: 'default',
+      userOverrides: {
+        'app.toggle-sidebar': { key: 'B', modifiers: { cmdOrCtrl: true, shift: true } },
+      },
+    });
+
+    expect(resolved?.key).toBe('B');
+    expect(resolved?.modifiers).toEqual({ cmdOrCtrl: true, shift: true });
+  });
+
+  it('returns null for an unbound binding', () => {
+    const binding = defaultBinding('app.toggle-sidebar');
+
+    expect(
+      resolveOneBinding(binding, {
+        preset: 'default',
+        userOverrides: { 'app.toggle-sidebar': null },
+      }),
+    ).toBeNull();
   });
 });
 

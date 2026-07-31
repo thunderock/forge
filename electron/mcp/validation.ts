@@ -16,12 +16,12 @@ export function validateBranchName(value: unknown, field = 'branch'): string {
     throw new Error(`${field} must not contain a ".lock" path component`);
   // eslint-disable-next-line no-control-regex
   if (/[\x00-\x1f\x7f ]/.test(value)) throw new Error(`${field} contains invalid characters`);
+  if (value.includes('@{')) throw new Error(`${field} must not contain "@{"`);
   // Reject git check-ref-format illegal characters.
   if (/[`$(){}[\]<>\\'*?!#;|&":^~]/.test(value))
     throw new Error(`${field} contains invalid characters`);
   // Reject sequences illegal per git check-ref-format.
   if (value.includes('..')) throw new Error(`${field} must not contain ".."`);
-  if (value.includes('@{')) throw new Error(`${field} must not contain "@{"`);
   if (value.includes('//')) throw new Error(`${field} must not contain "//"`);
   // Reject path components starting with "." (e.g. feature/.hidden).
   if (/(?:^|\/)\./.test(value))

@@ -1,28 +1,16 @@
 import fs from 'fs';
 import path from 'path';
+import type {
+  CoverageFileSummary,
+  CoverageMetricSummary,
+  CoverageSummary,
+} from './shared-types.js';
 
-interface CoverageMetricSummary {
-  total: number;
-  covered: number;
-  skipped: number;
-  pct: number;
-}
-
-interface CoverageFileSummary {
-  path: string;
-  lines: CoverageMetricSummary;
-  statements: CoverageMetricSummary;
-  functions: CoverageMetricSummary;
-  branches: CoverageMetricSummary;
-}
-
-interface CoverageSummary {
-  format: 'istanbul-summary' | 'lcov';
-  generatedAt: string;
-  reportPath: string;
-  totals: Omit<CoverageFileSummary, 'path'>;
-  files: Record<string, CoverageFileSummary>;
-}
+export type {
+  CoverageFileSummary,
+  CoverageMetricSummary,
+  CoverageSummary,
+} from './shared-types.js';
 
 interface RawCoverageMetric {
   total?: unknown;

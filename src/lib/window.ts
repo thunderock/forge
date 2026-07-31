@@ -16,14 +16,6 @@ class AppWindow {
     return window.electron.ipcRenderer.invoke(IPC.WindowIsMaximized) as Promise<boolean>;
   }
 
-  async setDecorations(_decorated: boolean): Promise<void> {
-    // Set at BrowserWindow creation time in Electron — no-op
-  }
-
-  async setTitleBarStyle(_style: string): Promise<void> {
-    // Set at BrowserWindow creation time in Electron — no-op
-  }
-
   async minimize(): Promise<void> {
     await window.electron.ipcRenderer.invoke(IPC.WindowMinimize);
   }
@@ -68,14 +60,6 @@ class AppWindow {
 
   async outerSize(): Promise<Size> {
     return (await window.electron.ipcRenderer.invoke(IPC.WindowGetSize)) as Size;
-  }
-
-  async startDragging(): Promise<void> {
-    // Electron uses CSS -webkit-app-region: drag instead
-  }
-
-  async startResizeDragging(_direction: string): Promise<void> {
-    // Electron handles resize natively with resizable: true
   }
 
   async onFocusChanged(handler: (event: { payload: boolean }) => void): Promise<UnlistenFn> {

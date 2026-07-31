@@ -5,7 +5,7 @@ import './arena-battle.css';
 import './arena-results.css';
 import './arena-history.css';
 import { Show, onMount } from 'solid-js';
-import { arenaStore, resetForNewMatch } from './store';
+import { arenaStore } from './store';
 import { loadArenaPresets, loadArenaHistory } from './persistence';
 import { ConfigScreen } from './ConfigScreen';
 import { CountdownScreen } from './CountdownScreen';
@@ -24,7 +24,6 @@ export function ArenaOverlay(props: ArenaOverlayProps) {
   });
 
   function handleClose() {
-    void resetForNewMatch();
     props.onClose();
   }
 

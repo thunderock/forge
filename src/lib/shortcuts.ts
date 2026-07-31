@@ -1,14 +1,13 @@
 import type { KeyBinding } from './keybindings';
+import type { Modifiers } from './keybindings';
+import { matchesKeyEvent } from './keybindings/match';
 
 type ShortcutHandler = (e: KeyboardEvent) => void;
 type ActionHandler = (e: KeyboardEvent) => void;
 
-interface Shortcut {
+interface ShortcutRegistration {
   key: string;
-  ctrl?: boolean;
-  cmdOrCtrl?: boolean;
-  alt?: boolean;
-  shift?: boolean;
+  modifiers: Modifiers;
   /** When true, the shortcut fires even when an input/textarea/select is focused (e.g. inside a terminal). */
   global?: boolean;
   /** When true, the shortcut fires even when a dialog overlay is open. */
@@ -16,26 +15,39 @@ interface Shortcut {
   handler: ShortcutHandler;
 }
 
-const shortcuts: Shortcut[] = [];
-
-function matches(e: KeyboardEvent, s: Shortcut): boolean {
-  const ctrlMatch = s.cmdOrCtrl ? e.ctrlKey || e.metaKey : !!e.ctrlKey === !!s.ctrl;
-  // For non-cmdOrCtrl shortcuts, require metaKey to not be pressed
-  const metaMatch = s.cmdOrCtrl || !e.metaKey;
-
-  return (
-    e.key.toLowerCase() === s.key.toLowerCase() &&
-    ctrlMatch &&
-    metaMatch &&
-    !!e.altKey === !!s.alt &&
-    !!e.shiftKey === !!s.shift
-  );
+interface RegisteredShortcut {
+  binding: KeyBinding;
+  handler: ShortcutHandler;
 }
 
-export function registerShortcut(shortcut: Shortcut): () => void {
-  shortcuts.push(shortcut);
+const shortcuts: RegisteredShortcut[] = [];
+
+function createShortcutBinding(shortcut: ShortcutRegistration): KeyBinding {
+  return {
+    id: `shortcut:${shortcut.key}`,
+    layer: 'app',
+    category: 'App',
+    description: '',
+    platform: 'both',
+    key: shortcut.key,
+    modifiers: shortcut.modifiers,
+    global: shortcut.global,
+    dialogSafe: shortcut.dialogSafe,
+  };
+}
+
+function matches(e: KeyboardEvent, shortcut: RegisteredShortcut): boolean {
+  return matchesKeyEvent(e, shortcut.binding);
+}
+
+export function registerShortcut(shortcut: ShortcutRegistration): () => void {
+  const registered: RegisteredShortcut = {
+    binding: createShortcutBinding(shortcut),
+    handler: shortcut.handler,
+  };
+  shortcuts.push(registered);
   return () => {
-    const idx = shortcuts.indexOf(shortcut);
+    const idx = shortcuts.indexOf(registered);
     if (idx >= 0) shortcuts.splice(idx, 1);
   };
 }
@@ -55,29 +67,28 @@ export function registerZoomShortcuts(handlers: ZoomShortcutHandlers): () => voi
     //   key '+' no shift  — Ctrl++ on European keyboards and NumPad+
     registerShortcut({
       key: '=',
-      cmdOrCtrl: true,
+      modifiers: { cmdOrCtrl: true },
       global: true,
       dialogSafe: true,
       handler: () => handlers.zoomIn(),
     }),
     registerShortcut({
       key: '+',
-      cmdOrCtrl: true,
-      shift: true,
+      modifiers: { cmdOrCtrl: true, shift: true },
       global: true,
       dialogSafe: true,
       handler: () => handlers.zoomIn(),
     }),
     registerShortcut({
       key: '+',
-      cmdOrCtrl: true,
+      modifiers: { cmdOrCtrl: true },
       global: true,
       dialogSafe: true,
       handler: () => handlers.zoomIn(),
     }),
     registerShortcut({
       key: '-',
-      cmdOrCtrl: true,
+      modifiers: { cmdOrCtrl: true },
       global: true,
       dialogSafe: true,
       handler: () => handlers.zoomOut(),
@@ -86,8 +97,7 @@ export function registerZoomShortcuts(handlers: ZoomShortcutHandlers): () => voi
     // the registry binding's exact shift-state match without this variant.
     registerShortcut({
       key: '0',
-      cmdOrCtrl: true,
-      shift: true,
+      modifiers: { cmdOrCtrl: true, shift: true },
       global: true,
       dialogSafe: true,
       handler: () => handlers.resetZoom(),
@@ -110,8 +120,7 @@ export function registerJumpToTaskShortcuts(handler: (index: number) => void): (
   const cleanups = Array.from({ length: 9 }, (_, i) =>
     registerShortcut({
       key: `${i + 1}`,
-      cmdOrCtrl: true,
-      shift: true,
+      modifiers: { cmdOrCtrl: true, shift: true },
       global: true,
       handler: () => handler(i),
     }),
@@ -127,7 +136,9 @@ function isDialogOpen(): boolean {
 /** Returns true if the event matches any shortcut that should bypass terminal input. */
 export function matchesGlobalShortcut(e: KeyboardEvent): boolean {
   const dialogOpen = isDialogOpen();
-  return shortcuts.some((s) => (s.global || (dialogOpen && s.dialogSafe)) && matches(e, s));
+  return shortcuts.some(
+    (s) => (s.binding.global || (dialogOpen && s.binding.dialogSafe)) && matches(e, s),
+  );
 }
 
 export function initShortcuts(): () => void {
@@ -140,7 +151,11 @@ export function initShortcuts(): () => void {
     const dialogOpen = isDialogOpen();
 
     for (const s of shortcuts) {
-      if (matches(e, s) && (!inInput || s.global) && (!dialogOpen || s.dialogSafe)) {
+      if (
+        matches(e, s) &&
+        (!inInput || s.binding.global) &&
+        (!dialogOpen || s.binding.dialogSafe)
+      ) {
         e.preventDefault();
         e.stopPropagation();
         s.handler(e);
@@ -166,25 +181,13 @@ export function registerFromRegistry(
     const handler = handlers[binding.action];
     if (!handler) continue;
 
-    const opts: Shortcut = {
+    const opts: ShortcutRegistration = {
       key: binding.key,
+      modifiers: binding.modifiers,
       global: binding.global,
       dialogSafe: binding.dialogSafe,
       handler,
     };
-
-    if (binding.modifiers.cmdOrCtrl) {
-      opts.cmdOrCtrl = true;
-    }
-    if (binding.modifiers.ctrl) {
-      opts.ctrl = true;
-    }
-    if (binding.modifiers.alt) {
-      opts.alt = true;
-    }
-    if (binding.modifiers.shift) {
-      opts.shift = true;
-    }
 
     cleanups.push(registerShortcut(opts));
   }

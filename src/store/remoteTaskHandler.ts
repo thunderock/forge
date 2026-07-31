@@ -5,7 +5,7 @@
 // main-side bridge.
 
 import { store } from './core';
-import { createTask } from './tasks';
+import { createTask, updateTaskNotes } from './tasks';
 import { invoke } from '../lib/ipc';
 import { IPC } from '../../electron/ipc/channels';
 
@@ -17,6 +17,15 @@ interface CreateTaskRequest extends RendererRequest {
   projectId: string;
   name: string;
   prompt: string;
+}
+
+interface GetNotesRequest extends RendererRequest {
+  taskId: string;
+}
+
+interface SetNotesRequest extends RendererRequest {
+  taskId: string;
+  notes: string;
 }
 
 function reply(reqId: string, ok: boolean, data?: unknown, error?: string): void {
@@ -72,6 +81,37 @@ async function handleCreateTask(req: CreateTaskRequest): Promise<void> {
   }
 }
 
+/**
+ * True only when `taskId` is a real, own entry of the tasks record.
+ *
+ * Uses Object.hasOwn, NOT truthiness: `taskId` arrives from a mobile HTTP
+ * request, and Solid's store proxy resolves inherited keys (`__proto__`,
+ * `constructor`, `toString`, …) to prototype objects, which are truthy but are
+ * not tasks. A truthiness guard would let updateTaskNotes → setStore('tasks',
+ * '__proto__', 'notes', …) pollute Object.prototype. hasOwn reports only own
+ * properties, so it rejects every inherited/dangerous/missing key.
+ */
+export function isKnownTask(tasks: Record<string, unknown>, taskId: string): boolean {
+  return Object.hasOwn(tasks, taskId);
+}
+
+function handleGetNotes(req: GetNotesRequest): void {
+  if (!isKnownTask(store.tasks, req.taskId)) {
+    reply(req.reqId, false, undefined, 'Task not found');
+    return;
+  }
+  reply(req.reqId, true, { notes: store.tasks[req.taskId].notes ?? '' });
+}
+
+function handleSetNotes(req: SetNotesRequest): void {
+  if (!isKnownTask(store.tasks, req.taskId)) {
+    reply(req.reqId, false, undefined, 'Task not found');
+    return;
+  }
+  updateTaskNotes(req.taskId, req.notes);
+  reply(req.reqId, true, { ok: true });
+}
+
 /** Subscribe to mobile task-creation requests. Returns an unsubscribe fn. */
 export function startRemoteTaskHandlers(): () => void {
   const offProjects = window.electron.ipcRenderer.on(
@@ -86,8 +126,22 @@ export function startRemoteTaskHandlers(): () => void {
       if (data && typeof data === 'object') void handleCreateTask(data as CreateTaskRequest);
     },
   );
+  const offGetNotes = window.electron.ipcRenderer.on(
+    IPC.Remote_GetNotesRequest,
+    (data: unknown) => {
+      if (data && typeof data === 'object') handleGetNotes(data as GetNotesRequest);
+    },
+  );
+  const offSetNotes = window.electron.ipcRenderer.on(
+    IPC.Remote_SetNotesRequest,
+    (data: unknown) => {
+      if (data && typeof data === 'object') handleSetNotes(data as SetNotesRequest);
+    },
+  );
   return () => {
     offProjects();
     offCreate();
+    offGetNotes();
+    offSetNotes();
   };
 }

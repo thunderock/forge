@@ -16,11 +16,15 @@ import {
   addAgentToTask,
   closeAgentInTask,
   showNotification,
+  toggleAITerminalLayout,
 } from '../store/store';
+import { markDirty, redrawTerminal } from '../lib/terminalFitManager';
+import { isMac } from '../lib/platform';
 import { warn as logWarn } from '../lib/log';
 import { InfoBar } from './InfoBar';
 import { TerminalView } from './TerminalView';
 import { Dialog } from './Dialog';
+import { CloseIcon } from './icons';
 import { theme } from '../lib/theme';
 import { sf } from '../lib/fontScale';
 import { invoke } from '../lib/ipc';
@@ -108,6 +112,28 @@ export function TaskAITerminal(props: TaskAITerminalProps) {
     store.agents[props.selectedAgentId] ?? store.agents[firstAgentId()] ?? undefined;
 
   const fileNameFromPath = (filePath: string) => filePath.split('/').pop() ?? filePath;
+
+  const multipleAgents = () => props.task.agentIds.length > 1;
+  const tabsMode = () => multipleAgents() && props.task.aiTerminalLayout === 'tabs';
+  const visibleAgentId = () =>
+    props.task.agentIds.includes(props.selectedAgentId)
+      ? props.selectedAgentId
+      : (props.task.agentIds[0] ?? '');
+
+  // In tabs mode only the selected pane is shown; the others stay mounted but
+  // hidden (visibility:hidden) so their pty sessions and scrollback survive the
+  // switch. As a pane becomes the visible tab, re-fit it (its container may have
+  // resized while hidden) and, on macOS, force a repaint: a backgrounded WebGL
+  // pane can return with a corrupt glyph atlas, and TerminalView's issue-#121
+  // redraw keys off focus mode — which never toggles for a within-task tab
+  // switch — so it wouldn't fire here.
+  createEffect(() => {
+    if (!tabsMode()) return;
+    const id = visibleAgentId();
+    if (!id) return;
+    markDirty(id);
+    if (isMac) redrawTerminal(id);
+  });
 
   const infoBarStatus = () => {
     if (selectedAgent()?.status === 'exited' && props.task.initialPrompt) {
@@ -309,15 +335,69 @@ export function TaskAITerminal(props: TaskAITerminalProps) {
                             padding: '0',
                           }}
                         >
-                          <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor">
-                            <path d="M3.72 3.72a.75.75 0 0 1 1.06 0L8 6.94l3.22-3.22a.75.75 0 1 1 1.06 1.06L9.06 8l3.22 3.22a.75.75 0 1 1-1.06 1.06L8 9.06l-3.22 3.22a.75.75 0 0 1-1.06-1.06L6.94 8 3.72 4.78a.75.75 0 0 1 0-1.06Z" />
-                          </svg>
+                          <CloseIcon size={11} />
                         </button>
                       </Show>
                     </span>
                   );
                 }}
               </For>
+              <Show when={multipleAgents()}>
+                <button
+                  type="button"
+                  title={
+                    tabsMode() ? 'Show agents side by side' : 'Show one agent at a time (tabs)'
+                  }
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    toggleAITerminalLayout(props.task.id);
+                  }}
+                  style={{
+                    display: 'inline-flex',
+                    'align-items': 'center',
+                    'justify-content': 'center',
+                    width: '22px',
+                    height: '20px',
+                    background: theme.bgInput,
+                    border: `1px solid ${theme.border}`,
+                    color: theme.fgMuted,
+                    'border-radius': '5px',
+                    cursor: 'pointer',
+                    padding: '0',
+                  }}
+                >
+                  <Show
+                    when={tabsMode()}
+                    fallback={
+                      /* Currently side-by-side → click switches to tabs (one panel). */
+                      <svg
+                        width="13"
+                        height="13"
+                        viewBox="0 0 16 16"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="1.3"
+                      >
+                        <rect x="2" y="2.75" width="12" height="10.5" rx="1.25" />
+                        <path d="M2 5.75 H14" />
+                      </svg>
+                    }
+                  >
+                    {/* Currently tabbed → click switches to side-by-side columns. */}
+                    <svg
+                      width="13"
+                      height="13"
+                      viewBox="0 0 16 16"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="1.3"
+                    >
+                      <rect x="2" y="2.75" width="5" height="10.5" rx="1.25" />
+                      <rect x="9" y="2.75" width="5" height="10.5" rx="1.25" />
+                    </svg>
+                  </Show>
+                </button>
+              </Show>
               <AddAgentMenu taskId={props.task.id} />
             </div>
           </div>
@@ -326,9 +406,11 @@ export function TaskAITerminal(props: TaskAITerminalProps) {
           style={{
             flex: '1',
             display: 'flex',
-            gap: props.task.agentIds.length > 1 ? '6px' : '0',
+            // Tabs mode stacks panes absolutely; a positioning context is needed.
+            position: tabsMode() ? 'relative' : 'static',
+            gap: multipleAgents() && !tabsMode() ? '6px' : '0',
             overflow: 'hidden',
-            background: props.task.agentIds.length > 1 ? theme.taskContainerBg : 'transparent',
+            background: multipleAgents() ? theme.taskContainerBg : 'transparent',
           }}
         >
           <For each={props.task.agentIds}>
@@ -336,7 +418,9 @@ export function TaskAITerminal(props: TaskAITerminalProps) {
               <AgentTerminalPane
                 task={props.task}
                 agentId={agentId}
-                canClose={props.task.agentIds.length > 1}
+                canClose={multipleAgents()}
+                tabsMode={tabsMode()}
+                visible={!tabsMode() || visibleAgentId() === agentId}
                 onSelect={() => selectAgent(agentId)}
                 onFileLink={handleFileLink}
                 onReady={registerAgentFocus}
@@ -479,6 +563,9 @@ function AgentTerminalPane(props: {
   task: Task;
   agentId: string;
   canClose: boolean;
+  /** When true the pane is one of several stacked tabs (only `visible` shown). */
+  tabsMode: boolean;
+  visible: boolean;
   onSelect: () => void;
   onFileLink: (filePath: string) => void;
   onReady: (agentId: string, focusFn: () => void) => void;
@@ -499,10 +586,19 @@ function AgentTerminalPane(props: {
         isPanelFocused(props.task.id, aiTerminalPanelId(props.agentId)) ? 'true' : 'false'
       }
       style={{
-        flex: '1',
-        'min-width': props.canClose ? '260px' : '0',
+        ...(props.tabsMode
+          ? {
+              position: 'absolute',
+              inset: '0',
+              visibility: props.visible ? 'visible' : 'hidden',
+              'pointer-events': props.visible ? 'auto' : 'none',
+            }
+          : {
+              flex: '1',
+              'min-width': props.canClose ? '260px' : '0',
+              position: 'relative',
+            }),
         overflow: 'hidden',
-        position: 'relative',
         display: 'flex',
         'flex-direction': 'column',
         background: theme.taskPanelBg,
@@ -723,9 +819,7 @@ function MarkdownViewerDialog(props: {
           }}
           title="Close"
         >
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
-            <path d="M3.72 3.72a.75.75 0 0 1 1.06 0L8 6.94l3.22-3.22a.75.75 0 1 1 1.06 1.06L9.06 8l3.22 3.22a.75.75 0 1 1-1.06 1.06L8 9.06l-3.22 3.22a.75.75 0 0 1-1.06-1.06L6.94 8 3.72 4.78a.75.75 0 0 1 0-1.06Z" />
-          </svg>
+          <CloseIcon />
         </button>
       </div>
       <div

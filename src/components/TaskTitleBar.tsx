@@ -14,6 +14,7 @@ import {
 import { EditableText, type EditableTextHandle } from './EditableText';
 import { IconButton } from './IconButton';
 import { StatusDot } from './StatusDot';
+import { CheckIcon, CloseIcon } from './icons';
 import { theme } from '../lib/theme';
 import { badgeStyle } from '../lib/badgeStyle';
 import { handleDragReorder } from '../lib/dragReorder';
@@ -311,14 +312,10 @@ export function TaskTitleBar(props: TaskTitleBarProps) {
                     <span class="inline-spinner" style={{ width: '12px', height: '12px' }} />
                   </Show>
                   <Show when={c().overall === 'success'}>
-                    <svg width="9" height="9" viewBox="0 0 16 16" fill="currentColor">
-                      <path d="M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.75.75 0 0 1 1.06-1.06L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0Z" />
-                    </svg>
+                    <CheckIcon size={9} />
                   </Show>
                   <Show when={c().overall === 'failure'}>
-                    <svg width="9" height="9" viewBox="0 0 16 16" fill="currentColor">
-                      <path d="M3.72 3.72a.75.75 0 0 1 1.06 0L8 6.94l3.22-3.22a.75.75 0 1 1 1.06 1.06L9.06 8l3.22 3.22a.75.75 0 1 1-1.06 1.06L8 9.06l-3.22 3.22a.75.75 0 0 1-1.06-1.06L6.94 8 3.72 4.78a.75.75 0 0 1 0-1.06Z" />
-                    </svg>
+                    <CloseIcon size={9} />
                   </Show>
                 </div>
               )}
@@ -353,15 +350,7 @@ export function TaskTitleBar(props: TaskTitleBarProps) {
             title="Collapse task"
           />
         </Show>
-        <IconButton
-          icon={
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
-              <path d="M3.72 3.72a.75.75 0 0 1 1.06 0L8 6.94l3.22-3.22a.75.75 0 1 1 1.06 1.06L9.06 8l3.22 3.22a.75.75 0 1 1-1.06 1.06L8 9.06l-3.22 3.22a.75.75 0 0 1-1.06-1.06L6.94 8 3.72 4.78a.75.75 0 0 1 0-1.06Z" />
-            </svg>
-          }
-          onClick={() => props.onClose()}
-          title="Close task"
-        />
+        <IconButton icon={<CloseIcon />} onClick={() => props.onClose()} title="Close task" />
       </div>
     </div>
   );

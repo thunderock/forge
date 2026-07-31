@@ -1,17 +1,13 @@
 import { createSignal, createEffect, For, Show } from 'solid-js';
 import { Dialog } from './Dialog';
-import {
-  updateProject,
-  PASTEL_HUES,
-  isProjectMissing,
-  relinkProject,
-  removeProjectWithTasks,
-} from '../store/store';
+import { updateProject, PASTEL_HUES, isProjectMissing, relinkProject } from '../store/store';
 import { sanitizeBranchPrefix, toBranchName } from '../lib/branch-name';
 import { theme, sectionLabelStyle } from '../lib/theme';
 import type { Project, TerminalBookmark, GitIsolationMode } from '../store/types';
 import { SegmentedButtons } from './SegmentedButtons';
 import { ImportWorktreesDialog } from './ImportWorktreesDialog';
+import { CloseIcon } from './icons';
+import { RemoveProjectConfirm } from './RemoveProjectConfirm';
 
 interface EditProjectDialogProps {
   project: Project | null;
@@ -34,6 +30,7 @@ export function EditProjectDialog(props: EditProjectDialogProps) {
   const [bookmarks, setBookmarks] = createSignal<TerminalBookmark[]>([]);
   const [newCommand, setNewCommand] = createSignal('');
   const [showImportDialog, setShowImportDialog] = createSignal(false);
+  const [confirmRemove, setConfirmRemove] = createSignal(false);
   let nameRef!: HTMLInputElement;
 
   // Sync signals when project prop changes
@@ -49,6 +46,7 @@ export function EditProjectDialog(props: EditProjectDialogProps) {
     setCoverageReportPath(p.coverageReportPath ?? '');
     setBookmarks(p.terminalBookmarks ? [...p.terminalBookmarks] : []);
     setNewCommand('');
+    setConfirmRemove(false);
     requestAnimationFrame(() => nameRef?.focus());
   });
 
@@ -199,10 +197,7 @@ export function EditProjectDialog(props: EditProjectDialogProps) {
                 </button>
                 <button
                   type="button"
-                  onClick={async () => {
-                    await removeProjectWithTasks(project().id);
-                    props.onClose();
-                  }}
+                  onClick={() => setConfirmRemove(true)}
                   style={{
                     padding: '5px 12px',
                     background: 'transparent',
@@ -328,7 +323,7 @@ export function EditProjectDialog(props: EditProjectDialogProps) {
 
             {/* Git-specific settings — hidden for non-git projects */}
             <Show when={props.project?.isGitRepo !== false}>
-              {/* Merge cleanup preference */}
+              {/* Close cleanup preference */}
               <label
                 style={{
                   display: 'flex',
@@ -345,7 +340,7 @@ export function EditProjectDialog(props: EditProjectDialogProps) {
                   onChange={(e) => setDeleteBranchOnClose(e.currentTarget.checked)}
                   style={{ cursor: 'pointer' }}
                 />
-                Always delete branch and worklog on merge
+                Always delete branch and worktree on close
               </label>
 
               {/* Default isolation mode */}
@@ -469,9 +464,7 @@ export function EditProjectDialog(props: EditProjectDialogProps) {
                           }}
                           title="Remove bookmark"
                         >
-                          <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
-                            <path d="M3.72 3.72a.75.75 0 0 1 1.06 0L8 6.94l3.22-3.22a.75.75 0 1 1 1.06 1.06L9.06 8l3.22 3.22a.75.75 0 1 1-1.06 1.06L8 9.06l-3.22 3.22a.75.75 0 0 1-1.06-1.06L6.94 8 3.72 4.78a.75.75 0 0 1 0-1.06Z" />
-                          </svg>
+                          <CloseIcon size={12} />
                         </button>
                       </div>
                     )}
@@ -572,6 +565,11 @@ export function EditProjectDialog(props: EditProjectDialogProps) {
               open={showImportDialog()}
               project={project()}
               onClose={() => setShowImportDialog(false)}
+            />
+            <RemoveProjectConfirm
+              projectId={confirmRemove() ? project().id : null}
+              onDone={() => setConfirmRemove(false)}
+              onRemoved={() => props.onClose()}
             />
           </>
         )}

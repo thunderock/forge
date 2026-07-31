@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest';
+import { mkdtempSync, readFileSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import {
+  buildSubTaskMcpConfig,
   getMCPRemoteServerUrl,
   getSubTaskMcpConfigPath,
   detectStaleDockerMCPUrl,
+  isAllowedSubTaskMcpConfigPath,
+  writeSubTaskMcpConfig,
 } from './config.js';
 
 describe('getMCPRemoteServerUrl', () => {
@@ -49,6 +53,104 @@ describe('getSubTaskMcpConfigPath', () => {
     const serverPath = '/usr/lib/forge/mcp-server.cjs';
     const result = getSubTaskMcpConfigPath(undefined, serverPath, 'task-123');
     expect(result).toBe(join(tmpdir(), 'forge-subtask-task-123.json'));
+  });
+});
+
+describe('buildSubTaskMcpConfig', () => {
+  it('builds a task-scoped stdio server config with subtask and done tokens', () => {
+    const cfg = buildSubTaskMcpConfig({
+      serverPath: '/worktree/.forge/mcp-server.cjs',
+      serverUrl: 'http://127.0.0.1:7777',
+      subtaskToken: 'subtask-token',
+      taskId: 'task-abc',
+      doneToken: 'done-token',
+    });
+
+    expect(cfg).toEqual({
+      mcpServers: {
+        forge: {
+          type: 'stdio',
+          command: 'node',
+          args: [
+            '/worktree/.forge/mcp-server.cjs',
+            '--url',
+            'http://127.0.0.1:7777',
+            '--task-id',
+            'task-abc',
+          ],
+          env: {
+            FORGE_MCP_TOKEN: 'subtask-token',
+            FORGE_MCP_DONE_TOKEN: 'done-token',
+          },
+        },
+      },
+    });
+  });
+});
+
+describe('writeSubTaskMcpConfig', () => {
+  it('writes the sub-task config as readable JSON', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'forge-config-test-'));
+    const configPath = join(dir, 'subtask-task-abc.json');
+    const cfg = buildSubTaskMcpConfig({
+      serverPath: '/srv/mcp-server.cjs',
+      serverUrl: 'http://127.0.0.1:7777',
+      subtaskToken: 'subtask-token',
+      taskId: 'task-abc',
+      doneToken: 'done-token',
+    });
+
+    try {
+      await writeSubTaskMcpConfig(configPath, cfg);
+
+      expect(JSON.parse(readFileSync(configPath, 'utf8'))).toEqual(cfg);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('isAllowedSubTaskMcpConfigPath', () => {
+  it('allows the host temp path generated for the task', () => {
+    expect(
+      isAllowedSubTaskMcpConfigPath('/tmp/forge-subtask-task-abc.json', {
+        taskId: 'task-abc',
+        serverPath: '/worktree/.forge/mcp-server.cjs',
+        tempDir: '/tmp',
+      }),
+    ).toBe(true);
+  });
+
+  it('allows the Docker coordinator .forge path generated for the task', () => {
+    expect(
+      isAllowedSubTaskMcpConfigPath('/worktree/.forge/subtask-task-abc.json', {
+        taskId: 'task-abc',
+        serverPath: '/worktree/.forge/mcp-server.cjs',
+        dockerContainerName: 'forge-coord',
+        tempDir: '/tmp',
+      }),
+    ).toBe(true);
+  });
+
+  it('rejects the Docker coordinator path in host mode even when serverPath is present', () => {
+    expect(
+      isAllowedSubTaskMcpConfigPath('/worktree/.forge/subtask-task-abc.json', {
+        taskId: 'task-abc',
+        serverPath: '/worktree/.forge/mcp-server.cjs',
+        tempDir: '/tmp',
+      }),
+    ).toBe(false);
+  });
+
+  it('rejects basename matches outside the generated host or Docker locations', () => {
+    expect(
+      isAllowedSubTaskMcpConfigPath('/tmp/elsewhere/subtask-task-abc.json', {
+        taskId: 'task-abc',
+        serverPath: '/worktree/.forge/mcp-server.cjs',
+        dockerContainerName: 'forge-coord',
+        tempDir: '/tmp',
+      }),
+    ).toBe(false);
   });
 });
 

@@ -1,4 +1,4 @@
-import { For, Show, createSignal, createEffect, onMount, onCleanup } from 'solid-js';
+import { For, Show, createSignal, createEffect, onMount, onCleanup, untrack } from 'solid-js';
 import type { JSX } from 'solid-js';
 import { theme } from '../lib/theme';
 import { sf } from '../lib/fontScale';
@@ -10,11 +10,13 @@ import { IPC } from '../../electron/ipc/channels';
 import type { FileDiff, Hunk, DiffLine } from '../lib/unified-diff-parser';
 import { debug as logDebug, warn as logWarn } from '../lib/log';
 import type { FileDiffResult } from '../ipc/types';
-import { getDiffSelection, type DiffSelection } from '../lib/diff-selection';
+import { getDiffSelection } from '../lib/diff-selection';
+import { getContextGapLineCount, type ContextGapRange } from '../lib/diff-context-gaps';
 import { AskCodeCard } from './AskCodeCard';
 import { ReviewCommentCard } from './ReviewCommentCard';
 import { InlineInput } from './InlineInput';
-import type { ReviewAnnotation } from './review-types';
+import { useReview, type ActiveQuestion } from './ReviewProvider';
+import type { ReviewAnnotation, DiffInteractionMode } from './review-types';
 
 interface ScrollingDiffViewProps {
   files: FileDiff[];
@@ -23,10 +25,6 @@ interface ScrollingDiffViewProps {
   /** Base branch for diff comparison (e.g. 'main', 'develop'). Undefined = auto-detect. */
   baseBranch?: string;
   searchQuery?: string;
-  reviewAnnotations: ReviewAnnotation[];
-  onAnnotationAdd: (annotation: ReviewAnnotation) => void;
-  onAnnotationDismiss: (id: string) => void;
-  onAnnotationUpdate: (id: string, comment: string) => void;
   scrollToAnnotation?: ReviewAnnotation | null;
   onScrollRef?: (el: HTMLDivElement) => void;
 }
@@ -38,8 +36,8 @@ const STATUS_LABELS: Record<string, string> = {
 };
 
 const LINE_BG: Record<DiffLine['type'], string> = {
-  add: 'rgba(47, 209, 152, 0.10)',
-  remove: 'rgba(255, 95, 115, 0.10)',
+  add: theme.diffAddBg,
+  remove: theme.diffRemoveBg,
   context: 'transparent',
 };
 
@@ -93,22 +91,12 @@ function isLineHighlighted(
   );
 }
 
-interface ActiveQuestion {
-  id: string;
-  filePath: string;
-  afterLine: number;
-  question: string;
-  startLine: number;
-  endLine: number;
-  selectedText: string;
-}
-
 // ---------------------------------------------------------------------------
 // Search highlight helpers
 // ---------------------------------------------------------------------------
 
-const SEARCH_HIGHLIGHT_BG = 'rgba(255, 200, 50, 0.35)';
-const CURRENT_MATCH_BG = 'rgba(100, 160, 255, 0.35)';
+const SEARCH_HIGHLIGHT_BG = `color-mix(in srgb, ${theme.searchMatch} 35%, transparent)`;
+const CURRENT_MATCH_BG = `color-mix(in srgb, ${theme.searchMatchActive} 35%, transparent)`;
 
 function highlightSearchMatches(text: string, query: string | undefined): JSX.Element {
   if (!query || query.length === 0) return <>{text}</>;
@@ -294,13 +282,34 @@ function HunkView(props: {
   );
 }
 
-/** Unified gap view for leading (before first hunk) and between-hunk gaps.
- *  startLine/endLine are 1-based (inclusive/exclusive). oldLineStart is the
- *  corresponding old-file line number for the first gap line. */
-function GapView(props: {
-  startLine: number;
-  endLine: number;
-  oldLineStart: number;
+async function loadContextLines(args: {
+  worktreePath: string;
+  filePath: string;
+  baseBranch?: string;
+  range: ContextGapRange;
+}): Promise<DiffLine[]> {
+  const result = await invoke<FileDiffResult>(IPC.GetFileDiff, {
+    worktreePath: args.worktreePath,
+    filePath: args.filePath,
+    baseBranch: args.baseBranch,
+  });
+  const fileLines = result.newContent.split('\n');
+  const totalLines = result.newContent.endsWith('\n') ? fileLines.length - 1 : fileLines.length;
+  const endLine = args.range.endLine ?? totalLines + 1;
+  const gapLines: DiffLine[] = [];
+  for (let n = args.range.startLine; n < endLine; n++) {
+    gapLines.push({
+      type: 'context',
+      content: fileLines[n - 1] ?? '',
+      oldLine: args.range.oldLineStart + (n - args.range.startLine),
+      newLine: n,
+    });
+  }
+  return gapLines;
+}
+
+function ContextGapView(props: {
+  range: ContextGapRange;
   lang: string;
   worktreePath: string;
   filePath: string;
@@ -314,129 +323,22 @@ function GapView(props: {
   const [lines, setLines] = createSignal<DiffLine[]>([]);
   const [highlighted, setHighlighted] = createSignal<string[] | null>(null);
   const [loading, setLoading] = createSignal(false);
-
-  const hiddenCount = () => props.endLine - props.startLine;
-
-  onMount(() => {
-    if (hiddenCount() > 0 && hiddenCount() <= MIN_COLLAPSE_LINES) expand();
-  });
-
-  async function expand() {
-    if (expanded() || loading()) return;
-    setLoading(true);
-    try {
-      const result = await invoke<FileDiffResult>(IPC.GetFileDiff, {
-        worktreePath: props.worktreePath,
-        filePath: props.filePath,
-        baseBranch: props.baseBranch,
-      });
-      const fileLines = result.newContent.split('\n');
-      const gapLines: DiffLine[] = [];
-      for (let n = props.startLine; n < props.endLine; n++) {
-        gapLines.push({
-          type: 'context',
-          content: fileLines[n - 1] ?? '',
-          oldLine: props.oldLineStart + (n - props.startLine),
-          newLine: n,
-        });
-      }
-      setLines(gapLines);
-      setExpanded(true);
-
-      const code = gapLines.map((l) => l.content).join('\n');
-      highlightLines(code, props.lang)
-        .then(setHighlighted)
-        .catch((err: unknown) => {
-          logDebug('diff.highlight', 'highlightLines failed', { err });
-        });
-    } catch (err) {
-      // fetch failed — keep collapsed; log so verbose users see why
-      logWarn('diff.expand', 'failed to expand context lines', { err });
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  return (
-    <Show when={hiddenCount() > 0}>
-      <Show
-        when={expanded()}
-        fallback={
-          <div
-            onClick={expand}
-            style={{
-              padding: '2px 0',
-              'text-align': 'center',
-              color: theme.fgSubtle,
-              'font-size': sf(12),
-              'font-family': "'JetBrains Mono', monospace",
-              background: theme.bgElevated,
-              'border-top': props.borderTop ? `1px solid ${theme.borderSubtle}` : undefined,
-              'border-bottom': props.borderBottom ? `1px solid ${theme.borderSubtle}` : undefined,
-              'user-select': 'none',
-              cursor: 'pointer',
-            }}
-          >
-            {loading() ? 'Loading...' : `${hiddenCount()} lines hidden`}
-          </div>
-        }
-      >
-        <For each={lines()}>
-          {(line, i) => (
-            <DiffLineView
-              line={line}
-              highlightedHtml={highlighted()?.[i()] ?? null}
-              searchQuery={props.searchQuery}
-              filePath={props.filePath}
-              highlighted={isLineHighlighted(props.highlightedRange, props.filePath, line.newLine)}
-            />
-          )}
-        </For>
-      </Show>
-    </Show>
+  const [hiddenCount, setHiddenCount] = createSignal<number | null>(
+    untrack(() => getContextGapLineCount(props.range)),
   );
-}
+  let cachedGapLines: DiffLine[] | null = null;
 
-function TrailingGap(props: {
-  lastHunk: Hunk;
-  lang: string;
-  worktreePath: string;
-  filePath: string;
-  baseBranch?: string;
-  searchQuery?: string;
-  highlightedRange?: HighlightRange | null;
-}) {
-  const [expanded, setExpanded] = createSignal(false);
-  const [lines, setLines] = createSignal<DiffLine[]>([]);
-  const [highlighted, setHighlighted] = createSignal<string[] | null>(null);
-  const [loading, setLoading] = createSignal(false);
-  const [hiddenCount, setHiddenCount] = createSignal<number | null>(null);
-
-  async function fetchGapLines(): Promise<DiffLine[]> {
-    const result = await invoke<FileDiffResult>(IPC.GetFileDiff, {
-      worktreePath: props.worktreePath,
-      filePath: props.filePath,
-      baseBranch: props.baseBranch,
-    });
-    const fileLines = result.newContent.split('\n');
-    const totalLines = result.newContent.endsWith('\n') ? fileLines.length - 1 : fileLines.length;
-    const startLine = props.lastHunk.newStart + props.lastHunk.newCount;
-    const lastOldEnd = props.lastHunk.oldStart + props.lastHunk.oldCount;
-    const gapLines: DiffLine[] = [];
-    for (let n = startLine; n <= totalLines; n++) {
-      gapLines.push({
-        type: 'context',
-        content: fileLines[n - 1] ?? '',
-        oldLine: lastOldEnd + (n - startLine),
-        newLine: n,
-      });
+  createEffect(() => {
+    if (!expanded()) {
+      setHiddenCount(getContextGapLineCount(props.range));
     }
-    return gapLines;
-  }
+  });
 
   function showLines(gapLines: DiffLine[]) {
     setLines(gapLines);
+    setHiddenCount(gapLines.length);
     setExpanded(true);
+
     const code = gapLines.map((l) => l.content).join('\n');
     highlightLines(code, props.lang)
       .then(setHighlighted)
@@ -445,41 +347,58 @@ function TrailingGap(props: {
       });
   }
 
-  let cachedGapLines: DiffLine[] | null = null;
-
-  onMount(async () => {
-    setLoading(true);
-    try {
-      cachedGapLines = await fetchGapLines();
-      setHiddenCount(cachedGapLines.length);
-      if (cachedGapLines.length > 0 && cachedGapLines.length <= MIN_COLLAPSE_LINES) {
-        showLines(cachedGapLines);
-        cachedGapLines = null;
-      }
-    } catch {
-      setHiddenCount(0);
-    } finally {
-      setLoading(false);
-    }
-  });
-
   async function expand() {
     if (expanded() || loading()) return;
     setLoading(true);
     try {
-      const gapLines = cachedGapLines ?? (await fetchGapLines());
+      const gapLines =
+        cachedGapLines ??
+        (await loadContextLines({
+          worktreePath: props.worktreePath,
+          filePath: props.filePath,
+          baseBranch: props.baseBranch,
+          range: props.range,
+        }));
       cachedGapLines = null;
       if (gapLines.length === 0) {
         setHiddenCount(0);
         return;
       }
       showLines(gapLines);
-    } catch {
-      /* fetch failed — keep collapsed */
+    } catch (err) {
+      logWarn('diff.expand', 'failed to expand context lines', { err });
     } finally {
       setLoading(false);
     }
   }
+
+  onMount(async () => {
+    const count = getContextGapLineCount(props.range);
+    if (count !== null) {
+      if (count > 0 && count <= MIN_COLLAPSE_LINES) await expand();
+      return;
+    }
+
+    setLoading(true);
+    try {
+      cachedGapLines = await loadContextLines({
+        worktreePath: props.worktreePath,
+        filePath: props.filePath,
+        baseBranch: props.baseBranch,
+        range: props.range,
+      });
+      setHiddenCount(cachedGapLines.length);
+      if (cachedGapLines.length > 0 && cachedGapLines.length <= MIN_COLLAPSE_LINES) {
+        showLines(cachedGapLines);
+        cachedGapLines = null;
+      }
+    } catch (err) {
+      logWarn('diff.expand', 'failed to inspect trailing context lines', { err });
+      setHiddenCount(0);
+    } finally {
+      setLoading(false);
+    }
+  });
 
   return (
     <Show when={hiddenCount() !== 0}>
@@ -495,7 +414,8 @@ function TrailingGap(props: {
               'font-size': sf(12),
               'font-family': "'JetBrains Mono', monospace",
               background: theme.bgElevated,
-              'border-top': `1px solid ${theme.borderSubtle}`,
+              'border-top': props.borderTop ? `1px solid ${theme.borderSubtle}` : undefined,
+              'border-bottom': props.borderBottom ? `1px solid ${theme.borderSubtle}` : undefined,
               'user-select': 'none',
               cursor: 'pointer',
             }}
@@ -602,7 +522,7 @@ function FileSection(props: {
             color: getStatusColor(props.file.status),
             background:
               props.file.status === 'M'
-                ? 'rgba(255,255,255,0.06)'
+                ? 'color-mix(in srgb, var(--fg) 6%, transparent)'
                 : `color-mix(in srgb, ${getStatusColor(props.file.status)} 15%, transparent)`,
           }}
         >
@@ -692,10 +612,12 @@ function FileSection(props: {
             }}
           >
             <Show when={props.file.hunks.length > 0 && props.file.status === 'M'}>
-              <GapView
-                startLine={1}
-                endLine={props.file.hunks[0].newStart}
-                oldLineStart={1}
+              <ContextGapView
+                range={{
+                  startLine: 1,
+                  endLine: props.file.hunks[0].newStart,
+                  oldLineStart: 1,
+                }}
                 lang={lang()}
                 worktreePath={props.worktreePath}
                 filePath={props.file.path}
@@ -709,16 +631,16 @@ function FileSection(props: {
               {(hunk, hunkIdx) => (
                 <>
                   <Show when={hunkIdx() > 0 && props.file.status === 'M'}>
-                    <GapView
-                      startLine={
-                        props.file.hunks[hunkIdx() - 1].newStart +
-                        props.file.hunks[hunkIdx() - 1].newCount
-                      }
-                      endLine={hunk.newStart}
-                      oldLineStart={
-                        props.file.hunks[hunkIdx() - 1].oldStart +
-                        props.file.hunks[hunkIdx() - 1].oldCount
-                      }
+                    <ContextGapView
+                      range={{
+                        startLine:
+                          props.file.hunks[hunkIdx() - 1].newStart +
+                          props.file.hunks[hunkIdx() - 1].newCount,
+                        endLine: hunk.newStart,
+                        oldLineStart:
+                          props.file.hunks[hunkIdx() - 1].oldStart +
+                          props.file.hunks[hunkIdx() - 1].oldCount,
+                      }}
                       lang={lang()}
                       worktreePath={props.worktreePath}
                       filePath={props.file.path}
@@ -751,7 +673,7 @@ function FileSection(props: {
                           each={itemsForHunk(
                             props.activeQuestions,
                             props.file.path,
-                            (q) => q.filePath,
+                            (q) => q.source,
                             (q) => q.afterLine,
                             hunk.newStart,
                             nextStart,
@@ -761,7 +683,7 @@ function FileSection(props: {
                             <AskCodeCard
                               requestId={q.id}
                               question={q.question}
-                              filePath={q.filePath}
+                              filePath={q.source}
                               startLine={q.startLine}
                               endLine={q.endLine}
                               selectedText={q.selectedText}
@@ -795,14 +717,22 @@ function FileSection(props: {
               )}
             </For>
             <Show when={props.file.hunks.length > 0 && props.file.status === 'M'}>
-              <TrailingGap
-                lastHunk={props.file.hunks[props.file.hunks.length - 1]}
+              <ContextGapView
+                range={{
+                  startLine:
+                    props.file.hunks[props.file.hunks.length - 1].newStart +
+                    props.file.hunks[props.file.hunks.length - 1].newCount,
+                  oldLineStart:
+                    props.file.hunks[props.file.hunks.length - 1].oldStart +
+                    props.file.hunks[props.file.hunks.length - 1].oldCount,
+                }}
                 lang={lang()}
                 worktreePath={props.worktreePath}
                 filePath={props.file.path}
                 baseBranch={props.baseBranch}
                 searchQuery={props.searchQuery}
                 highlightedRange={props.highlightedRange}
+                borderTop
               />
             </Show>
           </div>
@@ -817,14 +747,22 @@ function FileSection(props: {
 // ---------------------------------------------------------------------------
 
 export function ScrollingDiffView(props: ScrollingDiffViewProps) {
+  const review = useReview();
   const sectionRefs = new Map<string, HTMLDivElement>();
   const [dimOthers, setDimOthers] = createSignal(false);
   let dimTimer: ReturnType<typeof setTimeout> | undefined;
   let containerRef: HTMLDivElement | undefined;
 
-  const [pendingInput, setPendingInput] = createSignal<DiffSelection | null>(null);
-  const [activeQuestions, setActiveQuestions] = createSignal<ActiveQuestion[]>([]);
-  const [highlightedRange, setHighlightedRange] = createSignal<HighlightRange | null>(null);
+  const highlightedRange = (): HighlightRange | null => {
+    const selection = review.pendingSelection();
+    return selection
+      ? {
+          filePath: selection.source,
+          startLine: selection.startLine,
+          endLine: selection.endLine,
+        }
+      : null;
+  };
 
   onCleanup(() => clearTimeout(dimTimer));
 
@@ -899,18 +837,14 @@ export function ScrollingDiffView(props: ScrollingDiffViewProps) {
       requestAnimationFrame(() => {
         const sel = getDiffSelection();
         if (!sel) {
-          // Don't clear if user is interacting with the inline input
-          if (!pendingInput()) {
-            setHighlightedRange(null);
-          }
           return;
         }
 
-        setPendingInput(sel);
-        setHighlightedRange({
-          filePath: sel.filePath,
+        review.handleSelection({
+          source: sel.filePath,
           startLine: sel.startLine,
           endLine: sel.endLine,
+          selectedText: sel.selectedText,
         });
       });
     }
@@ -923,38 +857,10 @@ export function ScrollingDiffView(props: ScrollingDiffViewProps) {
     });
   });
 
-  function handleSubmit(text: string, mode: 'review' | 'ask') {
-    const sel = pendingInput();
-    if (!sel) return;
-
+  function handleSubmit(text: string, mode: DiffInteractionMode) {
     const savedScroll = containerRef?.scrollTop ?? 0;
 
-    if (mode === 'review') {
-      props.onAnnotationAdd({
-        id: crypto.randomUUID(),
-        filePath: sel.filePath,
-        startLine: sel.startLine,
-        endLine: sel.endLine,
-        selectedText: sel.selectedText,
-        comment: text,
-      });
-    } else {
-      setActiveQuestions((prev) => [
-        ...prev,
-        {
-          id: crypto.randomUUID(),
-          filePath: sel.filePath,
-          afterLine: sel.endLine,
-          question: text,
-          startLine: sel.startLine,
-          endLine: sel.endLine,
-          selectedText: sel.selectedText,
-        },
-      ]);
-    }
-    setPendingInput(null);
-    setHighlightedRange(null);
-    window.getSelection()?.removeAllRanges();
+    review.handleSubmit(text, mode);
 
     requestAnimationFrame(() => {
       if (containerRef) containerRef.scrollTop = savedScroll;
@@ -962,12 +868,7 @@ export function ScrollingDiffView(props: ScrollingDiffViewProps) {
   }
 
   function dismissInput() {
-    setPendingInput(null);
-    setHighlightedRange(null);
-  }
-
-  function dismissQuestion(id: string) {
-    setActiveQuestions((prev) => prev.filter((q) => q.id !== id));
+    review.clearPendingSelection();
   }
 
   return (
@@ -992,15 +893,15 @@ export function ScrollingDiffView(props: ScrollingDiffViewProps) {
             ref={(el) => sectionRefs.set(file.path, el)}
             dimmed={dimOthers() && file.path !== props.scrollToPath}
             searchQuery={props.searchQuery}
-            activeQuestions={activeQuestions()}
-            onDismissQuestion={dismissQuestion}
-            reviewAnnotations={props.reviewAnnotations}
-            onDismissAnnotation={props.onAnnotationDismiss}
-            onAnnotationUpdate={props.onAnnotationUpdate}
+            activeQuestions={review.activeQuestions()}
+            onDismissQuestion={review.dismissQuestion}
+            reviewAnnotations={review.annotations()}
+            onDismissAnnotation={review.dismissAnnotation}
+            onAnnotationUpdate={review.updateAnnotation}
             highlightedRange={highlightedRange()}
             pendingInput={(() => {
-              const pi = pendingInput();
-              return pi && pi.filePath === file.path
+              const pi = review.pendingSelection();
+              return pi && pi.source === file.path
                 ? { filePath: file.path, afterLine: pi.endLine }
                 : null;
             })()}

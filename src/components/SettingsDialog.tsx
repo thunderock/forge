@@ -1,4 +1,5 @@
 import { For, Show, Switch, Match, createSignal, createEffect, createUniqueId, on } from 'solid-js';
+import type { JSX } from 'solid-js';
 import { Dialog } from './Dialog';
 import { CustomThemeDialog } from './CustomThemeDialog';
 import {
@@ -9,7 +10,7 @@ import {
 } from '../lib/fonts';
 import { presetsForTone } from '../lib/look';
 import type { AppearanceMode } from '../lib/look';
-import { theme, sectionLabelStyle, readCssVarsForPreset, terminalBackground } from '../lib/theme';
+import { theme, sectionLabelStyle, readCssVarsForPreset } from '../lib/theme';
 import { themeToCss, detectThemeTone } from '../lib/custom-theme';
 import {
   store,
@@ -54,6 +55,199 @@ function ensureSelectedFont(available: string[]): string[] {
 }
 
 type SettingsTab = 'general' | 'themes' | 'experimental';
+type ThemeSlot = 'light' | 'dark';
+
+function SettingsSection(props: { title: string; children: JSX.Element }) {
+  return (
+    <div style={{ display: 'flex', 'flex-direction': 'column', gap: '10px' }}>
+      <div style={{ ...sectionLabelStyle, 'font-weight': '600' }}>{props.title}</div>
+      {props.children}
+    </div>
+  );
+}
+
+export function SettingsCheckboxRow(props: {
+  label: string;
+  description: JSX.Element;
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  align?: 'center' | 'flex-start';
+}) {
+  return (
+    <label
+      style={{
+        display: 'flex',
+        'align-items': props.align ?? 'center',
+        gap: '10px',
+        cursor: 'pointer',
+        padding: '8px 12px',
+        'border-radius': '8px',
+        background: theme.bgInput,
+        border: `1px solid ${theme.border}`,
+      }}
+    >
+      <input
+        type="checkbox"
+        checked={props.checked}
+        onChange={(e) => props.onChange(e.currentTarget.checked)}
+        style={{ 'accent-color': theme.accent, cursor: 'pointer' }}
+      />
+      <div style={{ display: 'flex', 'flex-direction': 'column', gap: '2px' }}>
+        <span style={{ 'font-size': '14px', color: theme.fg }}>{props.label}</span>
+        <span style={{ 'font-size': '12px', color: theme.fgSubtle }}>{props.description}</span>
+      </div>
+    </label>
+  );
+}
+
+export function PresetThemeCard(props: {
+  preset: ReturnType<typeof presetsForTone>[number];
+  active: boolean;
+  onSelect: () => void;
+  onClone: () => void;
+}) {
+  return (
+    <div style={{ position: 'relative' }}>
+      <button
+        type="button"
+        class={`settings-theme-card${props.active ? ' active' : ''}`}
+        onClick={() => props.onSelect()}
+      >
+        <span class="settings-theme-title">{props.preset.label}</span>
+        <span class="settings-theme-desc">{props.preset.description}</span>
+      </button>
+      <button
+        type="button"
+        title="Clone as custom theme"
+        onClick={(e) => {
+          e.stopPropagation();
+          props.onClone();
+        }}
+        style={{
+          position: 'absolute',
+          top: '4px',
+          right: '4px',
+          background: theme.bgElevated,
+          border: `1px solid ${theme.border}`,
+          'border-radius': '4px',
+          color: theme.fgMuted,
+          cursor: 'pointer',
+          'font-size': '10px',
+          padding: '2px 6px',
+          opacity: '0',
+          transition: 'opacity 0.15s',
+        }}
+        class="preset-clone-btn"
+      >
+        Clone
+      </button>
+    </div>
+  );
+}
+
+function CustomThemeCard(props: {
+  customTheme: (typeof store.customThemes)[string];
+  active: boolean;
+  onSelect: () => void;
+  onEdit: () => void;
+}) {
+  return (
+    <div style={{ position: 'relative' }}>
+      <button
+        type="button"
+        class={`settings-theme-card${props.active ? ' active' : ''}`}
+        onClick={() => props.onSelect()}
+      >
+        <span class="settings-theme-title">{props.customTheme.name}</span>
+        <span class="settings-theme-desc">{props.customTheme.description || 'Custom theme'}</span>
+      </button>
+      <button
+        type="button"
+        title="Edit custom theme"
+        onClick={(e) => {
+          e.stopPropagation();
+          props.onEdit();
+        }}
+        style={{
+          position: 'absolute',
+          top: '4px',
+          right: '4px',
+          background: theme.bgElevated,
+          border: `1px solid ${theme.border}`,
+          'border-radius': '4px',
+          color: theme.fgMuted,
+          cursor: 'pointer',
+          'font-size': '10px',
+          padding: '2px 6px',
+          opacity: '0',
+          transition: 'opacity 0.15s',
+        }}
+        class="preset-clone-btn"
+      >
+        Edit
+      </button>
+    </div>
+  );
+}
+
+function ThemeGrid(props: {
+  slot: ThemeSlot;
+  onClonePreset: (presetId: string, label: string) => void;
+  onEditCustom: (themeId: string) => void;
+}) {
+  return (
+    <div class="settings-theme-grid">
+      <For each={presetsForTone(props.slot)}>
+        {(preset) => {
+          const active = () =>
+            props.slot === 'light'
+              ? store.lightThemeCustomId === null && store.lightThemePreset === preset.id
+              : store.darkThemeCustomId === null && store.darkThemePreset === preset.id;
+          return (
+            <PresetThemeCard
+              preset={preset}
+              active={active()}
+              onSelect={() => {
+                if (props.slot === 'light') {
+                  setLightTheme(preset.id, null);
+                } else {
+                  setDarkTheme(preset.id, null);
+                }
+              }}
+              onClone={() => props.onClonePreset(preset.id, preset.label)}
+            />
+          );
+        }}
+      </For>
+      <For
+        each={Object.values(store.customThemes).filter(
+          (customTheme) => detectThemeTone(customTheme.vars) === props.slot,
+        )}
+      >
+        {(customTheme) => {
+          const active = () =>
+            props.slot === 'light'
+              ? store.lightThemeCustomId === customTheme.id
+              : store.darkThemeCustomId === customTheme.id;
+          return (
+            <CustomThemeCard
+              customTheme={customTheme}
+              active={active()}
+              onSelect={() => {
+                if (props.slot === 'light') {
+                  setLightTheme(store.lightThemePreset, customTheme.id);
+                } else {
+                  setDarkTheme(store.darkThemePreset, customTheme.id);
+                }
+              }}
+              onEdit={() => props.onEditCustom(customTheme.id)}
+            />
+          );
+        }}
+      </For>
+    </div>
+  );
+}
 
 export function SettingsDialog(props: SettingsDialogProps) {
   const titleId = createUniqueId();
@@ -65,7 +259,7 @@ export function SettingsDialog(props: SettingsDialogProps) {
 
   function openCloneDialog(presetId: string, label: string) {
     const vars = readCssVarsForPreset(presetId);
-    const bg = terminalBackground[presetId as keyof typeof terminalBackground] ?? '#000000';
+    const bg = vars['--task-panel-bg'] ?? '#000000';
     setCloneCss(themeToCss(`${label} (copy)`, '', bg, vars));
     setEditingThemeId(null);
     setCustomThemeDialogOpen(true);
@@ -225,284 +419,74 @@ export function SettingsDialog(props: SettingsDialogProps) {
           aria-labelledby="settings-tabbutton-general"
           style={{ display: 'flex', 'flex-direction': 'column', gap: '18px' }}
         >
-          <div style={{ display: 'flex', 'flex-direction': 'column', gap: '10px' }}>
-            <div
-              style={{
-                ...sectionLabelStyle,
-                'font-weight': '600',
-              }}
-            >
-              Behavior
-            </div>
-            <label
-              style={{
-                display: 'flex',
-                'align-items': 'center',
-                gap: '10px',
-                cursor: 'pointer',
-                padding: '8px 12px',
-                'border-radius': '8px',
-                background: theme.bgInput,
-                border: `1px solid ${theme.border}`,
-              }}
-            >
-              <input
-                type="checkbox"
-                checked={store.autoTrustFolders}
-                onChange={(e) => setAutoTrustFolders(e.currentTarget.checked)}
-                style={{ 'accent-color': theme.accent, cursor: 'pointer' }}
-              />
-              <div style={{ display: 'flex', 'flex-direction': 'column', gap: '2px' }}>
-                <span style={{ 'font-size': '14px', color: theme.fg }}>Auto-trust folders</span>
-                <span style={{ 'font-size': '12px', color: theme.fgSubtle }}>
-                  Automatically accept trust and permission dialogs from agents
-                </span>
-              </div>
-            </label>
-            <label
-              style={{
-                display: 'flex',
-                'align-items': 'center',
-                gap: '10px',
-                cursor: 'pointer',
-                padding: '8px 12px',
-                'border-radius': '8px',
-                background: theme.bgInput,
-                border: `1px solid ${theme.border}`,
-              }}
-            >
-              <input
-                type="checkbox"
-                checked={store.showPlans}
-                onChange={(e) => setShowPlans(e.currentTarget.checked)}
-                style={{ 'accent-color': theme.accent, cursor: 'pointer' }}
-              />
-              <div style={{ display: 'flex', 'flex-direction': 'column', gap: '2px' }}>
-                <span style={{ 'font-size': '14px', color: theme.fg }}>Show plans</span>
-                <span style={{ 'font-size': '12px', color: theme.fgSubtle }}>
-                  Display Claude Code plan files in a tab next to Notes
-                </span>
-              </div>
-            </label>
-            <label
-              style={{
-                display: 'flex',
-                'align-items': 'center',
-                gap: '10px',
-                cursor: 'pointer',
-                padding: '8px 12px',
-                'border-radius': '8px',
-                background: theme.bgInput,
-                border: `1px solid ${theme.border}`,
-              }}
-            >
-              <input
-                type="checkbox"
-                checked={store.desktopNotificationsEnabled}
-                onChange={(e) => setDesktopNotificationsEnabled(e.currentTarget.checked)}
-                style={{ 'accent-color': theme.accent, cursor: 'pointer' }}
-              />
-              <div style={{ display: 'flex', 'flex-direction': 'column', gap: '2px' }}>
-                <span style={{ 'font-size': '14px', color: theme.fg }}>Desktop notifications</span>
-                <span style={{ 'font-size': '12px', color: theme.fgSubtle }}>
-                  Show native notifications when tasks finish or need attention
-                </span>
-              </div>
-            </label>
-            <label
-              style={{
-                display: 'flex',
-                'align-items': 'center',
-                gap: '10px',
-                cursor: 'pointer',
-                padding: '8px 12px',
-                'border-radius': '8px',
-                background: theme.bgInput,
-                border: `1px solid ${theme.border}`,
-              }}
-            >
-              <input
-                type="checkbox"
-                checked={store.showPromptInput}
-                onChange={(e) => setShowPromptInput(e.currentTarget.checked)}
-                style={{ 'accent-color': theme.accent, cursor: 'pointer' }}
-              />
-              <div style={{ display: 'flex', 'flex-direction': 'column', gap: '2px' }}>
-                <span style={{ 'font-size': '14px', color: theme.fg }}>
-                  Show prompt input box below terminal
-                </span>
-                <span style={{ 'font-size': '12px', color: theme.fgSubtle }}>
-                  When hidden, the terminal occupies the full panel and auto-focuses on activation
-                </span>
-              </div>
-            </label>
-            <label
-              style={{
-                display: 'flex',
-                'align-items': 'center',
-                gap: '10px',
-                cursor: 'pointer',
-                padding: '8px 12px',
-                'border-radius': '8px',
-                background: theme.bgInput,
-                border: `1px solid ${theme.border}`,
-              }}
-            >
-              <input
-                type="checkbox"
-                checked={store.showSidebarProgress}
-                onChange={(e) => setShowSidebarProgress(e.currentTarget.checked)}
-                style={{ 'accent-color': theme.accent, cursor: 'pointer' }}
-              />
-              <div style={{ display: 'flex', 'flex-direction': 'column', gap: '2px' }}>
-                <span style={{ 'font-size': '14px', color: theme.fg }}>
-                  Show progress section in sidebar
-                </span>
-                <span style={{ 'font-size': '12px', color: theme.fgSubtle }}>
-                  Daily completed-task count and merged-line totals at the bottom of the sidebar
-                </span>
-              </div>
-            </label>
-            <label
-              style={{
-                display: 'flex',
-                'align-items': 'center',
-                gap: '10px',
-                cursor: 'pointer',
-                padding: '8px 12px',
-                'border-radius': '8px',
-                background: theme.bgInput,
-                border: `1px solid ${theme.border}`,
-              }}
-            >
-              <input
-                type="checkbox"
-                checked={store.showSidebarTips}
-                onChange={(e) => setShowSidebarTips(e.currentTarget.checked)}
-                style={{ 'accent-color': theme.accent, cursor: 'pointer' }}
-              />
-              <div style={{ display: 'flex', 'flex-direction': 'column', gap: '2px' }}>
-                <span style={{ 'font-size': '14px', color: theme.fg }}>
-                  Show tips section in sidebar
-                </span>
-                <span style={{ 'font-size': '12px', color: theme.fgSubtle }}>
-                  Keyboard shortcut hints at the bottom of the sidebar
-                </span>
-              </div>
-            </label>
-            <label
-              style={{
-                display: 'flex',
-                'align-items': 'flex-start',
-                gap: '10px',
-                cursor: 'pointer',
-                padding: '8px 12px',
-                'border-radius': '8px',
-                background: theme.bgInput,
-                border: `1px solid ${theme.border}`,
-              }}
-            >
-              <input
-                type="checkbox"
-                checked={store.fontSmoothing}
-                onChange={(e) => setFontSmoothing(e.currentTarget.checked)}
-                style={{ 'accent-color': theme.accent, cursor: 'pointer' }}
-              />
-              <div style={{ display: 'flex', 'flex-direction': 'column', gap: '2px' }}>
-                <span style={{ 'font-size': '14px', color: theme.fg }}>Font smoothing</span>
-                <span style={{ 'font-size': '12px', color: theme.fgSubtle }}>
-                  Enable antialiasing and geometric text rendering
-                </span>
-              </div>
-            </label>
-          </div>
+          <SettingsSection title="Behavior">
+            <SettingsCheckboxRow
+              label="Auto-trust folders"
+              checked={store.autoTrustFolders}
+              onChange={setAutoTrustFolders}
+              description="Automatically accept trust and permission dialogs from agents"
+            />
+            <SettingsCheckboxRow
+              label="Show plans"
+              checked={store.showPlans}
+              onChange={setShowPlans}
+              description="Display Claude Code plan files in a tab next to Notes"
+            />
+            <SettingsCheckboxRow
+              label="Desktop notifications"
+              checked={store.desktopNotificationsEnabled}
+              onChange={setDesktopNotificationsEnabled}
+              description="Show native notifications when tasks finish or need attention"
+            />
+            <SettingsCheckboxRow
+              label="Show prompt input box below terminal"
+              checked={store.showPromptInput}
+              onChange={setShowPromptInput}
+              description="When hidden, the terminal occupies the full panel and auto-focuses on activation"
+            />
+            <SettingsCheckboxRow
+              label="Show progress section in sidebar"
+              checked={store.showSidebarProgress}
+              onChange={setShowSidebarProgress}
+              description="Daily completed-task count and merged-line totals at the bottom of the sidebar"
+            />
+            <SettingsCheckboxRow
+              label="Show tips section in sidebar"
+              checked={store.showSidebarTips}
+              onChange={setShowSidebarTips}
+              description="Keyboard shortcut hints at the bottom of the sidebar"
+            />
+            <SettingsCheckboxRow
+              label="Font smoothing"
+              checked={store.fontSmoothing}
+              onChange={setFontSmoothing}
+              description="Enable antialiasing and geometric text rendering"
+              align="flex-start"
+            />
+          </SettingsSection>
 
-          <div style={{ display: 'flex', 'flex-direction': 'column', gap: '10px' }}>
-            <div style={{ ...sectionLabelStyle, 'font-weight': '600' }}>New Task Defaults</div>
-            <label
-              style={{
-                display: 'flex',
-                'align-items': 'center',
-                gap: '10px',
-                cursor: 'pointer',
-                padding: '8px 12px',
-                'border-radius': '8px',
-                background: theme.bgInput,
-                border: `1px solid ${theme.border}`,
-              }}
-            >
-              <input
-                type="checkbox"
-                checked={store.defaultStepsEnabled}
-                onChange={(e) => setDefaultStepsEnabled(e.currentTarget.checked)}
-                style={{ 'accent-color': theme.accent, cursor: 'pointer' }}
-              />
-              <div style={{ display: 'flex', 'flex-direction': 'column', gap: '2px' }}>
-                <span style={{ 'font-size': '14px', color: theme.fg }}>Steps tracking</span>
-                <span style={{ 'font-size': '12px', color: theme.fgSubtle }}>
-                  Pre-tick Steps tracking in the New Task dialog
-                </span>
-              </div>
-            </label>
-            <label
-              style={{
-                display: 'flex',
-                'align-items': 'center',
-                gap: '10px',
-                cursor: 'pointer',
-                padding: '8px 12px',
-                'border-radius': '8px',
-                background: theme.bgInput,
-                border: `1px solid ${theme.border}`,
-              }}
-            >
-              <input
-                type="checkbox"
-                checked={store.defaultSkipPermissions}
-                onChange={(e) => setDefaultSkipPermissions(e.currentTarget.checked)}
-                style={{ 'accent-color': theme.accent, cursor: 'pointer' }}
-              />
-              <div style={{ display: 'flex', 'flex-direction': 'column', gap: '2px' }}>
-                <span style={{ 'font-size': '14px', color: theme.fg }}>
-                  Dangerously skip all confirms by default
-                </span>
-                <span style={{ 'font-size': '12px', color: theme.fgSubtle }}>
-                  Pre-tick skip-permissions for every new task. The agent will run without asking
-                  for confirmation. Only honoured when the selected agent supports it.
-                </span>
-              </div>
-            </label>
+          <SettingsSection title="New Task Defaults">
+            <SettingsCheckboxRow
+              label="Steps tracking"
+              checked={store.defaultStepsEnabled}
+              onChange={setDefaultStepsEnabled}
+              description="Pre-tick Steps tracking in the New Task dialog"
+            />
+            <SettingsCheckboxRow
+              label="Dangerously skip all confirms by default"
+              checked={store.defaultSkipPermissions}
+              onChange={setDefaultSkipPermissions}
+              description="Pre-tick skip-permissions for every new task. The agent will run without asking for confirmation. Only honoured when the selected agent supports it."
+            />
             <Show when={store.coordinatorModeEnabled}>
-              <label
-                style={{
-                  display: 'flex',
-                  'align-items': 'center',
-                  gap: '10px',
-                  cursor: 'pointer',
-                  padding: '8px 12px',
-                  'border-radius': '8px',
-                  background: theme.bgInput,
-                  border: `1px solid ${theme.border}`,
-                }}
-              >
-                <input
-                  type="checkbox"
-                  checked={store.defaultPropagateSkipPermissions}
-                  onChange={(e) => setDefaultPropagateSkipPermissions(e.currentTarget.checked)}
-                  style={{ 'accent-color': theme.accent, cursor: 'pointer' }}
-                />
-                <div style={{ display: 'flex', 'flex-direction': 'column', gap: '2px' }}>
-                  <span style={{ 'font-size': '14px', color: theme.fg }}>
-                    Propagate skip-permissions to sub-tasks
-                  </span>
-                  <span style={{ 'font-size': '12px', color: theme.fgSubtle }}>
-                    Pre-tick Propagate to sub-tasks when both coordinator mode and skip-permissions
-                    are enabled for a task
-                  </span>
-                </div>
-              </label>
+              <SettingsCheckboxRow
+                label="Propagate skip-permissions to sub-tasks"
+                checked={store.defaultPropagateSkipPermissions}
+                onChange={setDefaultPropagateSkipPermissions}
+                description="Pre-tick Propagate to sub-tasks when both coordinator mode and skip-permissions are enabled for a task"
+              />
             </Show>
-          </div>
+          </SettingsSection>
 
           <div style={{ display: 'flex', 'flex-direction': 'column', gap: '10px' }}>
             <div
@@ -713,35 +697,12 @@ export function SettingsDialog(props: SettingsDialogProps) {
                   will use a project-specific image instead.
                 </div>
               </div>
-              <label
-                style={{
-                  display: 'flex',
-                  'align-items': 'center',
-                  gap: '10px',
-                  cursor: 'pointer',
-                  padding: '8px 12px',
-                  'border-radius': '8px',
-                  background: theme.bgInput,
-                  border: `1px solid ${theme.border}`,
-                }}
-              >
-                <input
-                  type="checkbox"
-                  checked={store.shareDockerAgentAuth}
-                  onChange={(e) => setShareDockerAgentAuth(e.currentTarget.checked)}
-                  style={{ 'accent-color': theme.accent, cursor: 'pointer' }}
-                />
-                <div style={{ display: 'flex', 'flex-direction': 'column', gap: '2px' }}>
-                  <span style={{ 'font-size': '14px', color: theme.fg }}>
-                    Share agent auth across Linux containers
-                  </span>
-                  <span style={{ 'font-size': '12px', color: theme.fgSubtle }}>
-                    Persist agent credentials in a user-owned host directory so you only need to
-                    sign in once per agent type. Auth on first run is saved automatically for future
-                    containers.
-                  </span>
-                </div>
-              </label>
+              <SettingsCheckboxRow
+                label="Share agent auth across Linux containers"
+                checked={store.shareDockerAgentAuth}
+                onChange={setShareDockerAgentAuth}
+                description="Persist agent credentials in a user-owned host directory so you only need to sign in once per agent type. Auth on first run is saved automatically for future containers."
+              />
             </div>
           </Show>
 
@@ -861,36 +822,14 @@ export function SettingsDialog(props: SettingsDialogProps) {
             </Show>
           </div>
 
-          <div style={{ display: 'flex', 'flex-direction': 'column', gap: '10px' }}>
-            <div style={{ ...sectionLabelStyle, 'font-weight': '600' }}>Diagnostics</div>
-            <label
-              style={{
-                display: 'flex',
-                'align-items': 'center',
-                gap: '10px',
-                cursor: 'pointer',
-                padding: '8px 12px',
-                'border-radius': '8px',
-                background: theme.bgInput,
-                border: `1px solid ${theme.border}`,
-              }}
-            >
-              <input
-                type="checkbox"
-                checked={store.verboseLogging}
-                onChange={(e) => setVerboseLogging(e.currentTarget.checked)}
-                style={{ 'accent-color': theme.accent, cursor: 'pointer' }}
-              />
-              <div style={{ display: 'flex', 'flex-direction': 'column', gap: '2px' }}>
-                <span style={{ 'font-size': '14px', color: theme.fg }}>Verbose logging</span>
-                <span style={{ 'font-size': '12px', color: theme.fgSubtle }}>
-                  Emit debug-level logs to the developer console. Verbose logs may include file
-                  paths, branch names, commit messages, IPC channel activity, and pty lifecycle
-                  events. Review the contents before sharing.
-                </span>
-              </div>
-            </label>
-          </div>
+          <SettingsSection title="Diagnostics">
+            <SettingsCheckboxRow
+              label="Verbose logging"
+              checked={store.verboseLogging}
+              onChange={setVerboseLogging}
+              description="Emit debug-level logs to the developer console. Verbose logs may include file paths, branch names, commit messages, IPC channel activity, and pty lifecycle events. Review the contents before sharing."
+            />
+          </SettingsSection>
 
           <div style={{ display: 'flex', 'flex-direction': 'column', gap: '10px' }}>
             <div style={{ ...sectionLabelStyle, 'font-weight': '600' }}>Updates</div>
@@ -1067,116 +1006,15 @@ export function SettingsDialog(props: SettingsDialogProps) {
 
           {/* Single mode (Light or Dark): built-ins + matching custom themes in one grid */}
           <Show when={store.appearanceMode !== 'system'}>
-            <div class="settings-theme-grid">
-              <For each={presetsForTone(store.appearanceMode as 'light' | 'dark')}>
-                {(preset) => {
-                  const isActive = () =>
-                    store.appearanceMode === 'light'
-                      ? store.lightThemeCustomId === null && store.lightThemePreset === preset.id
-                      : store.darkThemeCustomId === null && store.darkThemePreset === preset.id;
-                  return (
-                    <div style={{ position: 'relative' }}>
-                      <button
-                        type="button"
-                        class={`settings-theme-card${isActive() ? ' active' : ''}`}
-                        onClick={() => {
-                          if (store.appearanceMode === 'light') {
-                            setLightTheme(preset.id, null);
-                          } else {
-                            setDarkTheme(preset.id, null);
-                          }
-                        }}
-                      >
-                        <span class="settings-theme-title">{preset.label}</span>
-                        <span class="settings-theme-desc">{preset.description}</span>
-                      </button>
-                      <button
-                        type="button"
-                        title="Clone as custom theme"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          openCloneDialog(preset.id, preset.label);
-                        }}
-                        style={{
-                          position: 'absolute',
-                          top: '4px',
-                          right: '4px',
-                          background: theme.bgElevated,
-                          border: `1px solid ${theme.border}`,
-                          'border-radius': '4px',
-                          color: theme.fgMuted,
-                          cursor: 'pointer',
-                          'font-size': '10px',
-                          padding: '2px 6px',
-                          opacity: '0',
-                          transition: 'opacity 0.15s',
-                        }}
-                        class="preset-clone-btn"
-                      >
-                        Clone
-                      </button>
-                    </div>
-                  );
-                }}
-              </For>
-              <For
-                each={Object.values(store.customThemes).filter(
-                  (ct) => detectThemeTone(ct.vars) === store.appearanceMode,
-                )}
-              >
-                {(ct) => {
-                  const isActive = () =>
-                    store.appearanceMode === 'light'
-                      ? store.lightThemeCustomId === ct.id
-                      : store.darkThemeCustomId === ct.id;
-                  return (
-                    <div style={{ position: 'relative' }}>
-                      <button
-                        type="button"
-                        class={`settings-theme-card${isActive() ? ' active' : ''}`}
-                        onClick={() => {
-                          if (store.appearanceMode === 'light') {
-                            setLightTheme(store.lightThemePreset, ct.id);
-                          } else {
-                            setDarkTheme(store.darkThemePreset, ct.id);
-                          }
-                        }}
-                      >
-                        <span class="settings-theme-title">{ct.name}</span>
-                        <span class="settings-theme-desc">{ct.description || 'Custom theme'}</span>
-                      </button>
-                      <button
-                        type="button"
-                        title="Edit custom theme"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setCloneCss(undefined);
-                          setEditingThemeId(ct.id);
-                          setCustomThemeDialogOpen(true);
-                        }}
-                        style={{
-                          position: 'absolute',
-                          top: '4px',
-                          right: '4px',
-                          background: theme.bgElevated,
-                          border: `1px solid ${theme.border}`,
-                          'border-radius': '4px',
-                          color: theme.fgMuted,
-                          cursor: 'pointer',
-                          'font-size': '10px',
-                          padding: '2px 6px',
-                          opacity: '0',
-                          transition: 'opacity 0.15s',
-                        }}
-                        class="preset-clone-btn"
-                      >
-                        Edit
-                      </button>
-                    </div>
-                  );
-                }}
-              </For>
-            </div>
+            <ThemeGrid
+              slot={store.appearanceMode as ThemeSlot}
+              onClonePreset={openCloneDialog}
+              onEditCustom={(themeId) => {
+                setCloneCss(undefined);
+                setEditingThemeId(themeId);
+                setCustomThemeDialogOpen(true);
+              }}
+            />
           </Show>
 
           {/* System mode: dual grids, each with built-ins + tone-matching custom themes */}
@@ -1187,120 +1025,15 @@ export function SettingsDialog(props: SettingsDialogProps) {
                   <div style={{ ...sectionLabelStyle, 'font-weight': '600' }}>
                     {slot === 'dark' ? 'Dark Theme' : 'Light Theme'}
                   </div>
-                  <div class="settings-theme-grid">
-                    <For each={presetsForTone(slot)}>
-                      {(preset) => {
-                        const isActive = () =>
-                          slot === 'light'
-                            ? store.lightThemeCustomId === null &&
-                              store.lightThemePreset === preset.id
-                            : store.darkThemeCustomId === null &&
-                              store.darkThemePreset === preset.id;
-                        return (
-                          <div style={{ position: 'relative' }}>
-                            <button
-                              type="button"
-                              class={`settings-theme-card${isActive() ? ' active' : ''}`}
-                              onClick={() => {
-                                if (slot === 'light') {
-                                  setLightTheme(preset.id, null);
-                                } else {
-                                  setDarkTheme(preset.id, null);
-                                }
-                              }}
-                            >
-                              <span class="settings-theme-title">{preset.label}</span>
-                              <span class="settings-theme-desc">{preset.description}</span>
-                            </button>
-                            <button
-                              type="button"
-                              title="Clone as custom theme"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                openCloneDialog(preset.id, preset.label);
-                              }}
-                              style={{
-                                position: 'absolute',
-                                top: '4px',
-                                right: '4px',
-                                background: theme.bgElevated,
-                                border: `1px solid ${theme.border}`,
-                                'border-radius': '4px',
-                                color: theme.fgMuted,
-                                cursor: 'pointer',
-                                'font-size': '10px',
-                                padding: '2px 6px',
-                                opacity: '0',
-                                transition: 'opacity 0.15s',
-                              }}
-                              class="preset-clone-btn"
-                            >
-                              Clone
-                            </button>
-                          </div>
-                        );
-                      }}
-                    </For>
-                    <For
-                      each={Object.values(store.customThemes).filter(
-                        (ct) => detectThemeTone(ct.vars) === slot,
-                      )}
-                    >
-                      {(ct) => {
-                        const isActive = () =>
-                          slot === 'light'
-                            ? store.lightThemeCustomId === ct.id
-                            : store.darkThemeCustomId === ct.id;
-                        return (
-                          <div style={{ position: 'relative' }}>
-                            <button
-                              type="button"
-                              class={`settings-theme-card${isActive() ? ' active' : ''}`}
-                              onClick={() => {
-                                if (slot === 'light') {
-                                  setLightTheme(store.lightThemePreset, ct.id);
-                                } else {
-                                  setDarkTheme(store.darkThemePreset, ct.id);
-                                }
-                              }}
-                            >
-                              <span class="settings-theme-title">{ct.name}</span>
-                              <span class="settings-theme-desc">
-                                {ct.description || 'Custom theme'}
-                              </span>
-                            </button>
-                            <button
-                              type="button"
-                              title="Edit custom theme"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setCloneCss(undefined);
-                                setEditingThemeId(ct.id);
-                                setCustomThemeDialogOpen(true);
-                              }}
-                              style={{
-                                position: 'absolute',
-                                top: '4px',
-                                right: '4px',
-                                background: theme.bgElevated,
-                                border: `1px solid ${theme.border}`,
-                                'border-radius': '4px',
-                                color: theme.fgMuted,
-                                cursor: 'pointer',
-                                'font-size': '10px',
-                                padding: '2px 6px',
-                                opacity: '0',
-                                transition: 'opacity 0.15s',
-                              }}
-                              class="preset-clone-btn"
-                            >
-                              Edit
-                            </button>
-                          </div>
-                        );
-                      }}
-                    </For>
-                  </div>
+                  <ThemeGrid
+                    slot={slot}
+                    onClonePreset={openCloneDialog}
+                    onEditCustom={(themeId) => {
+                      setCloneCss(undefined);
+                      setEditingThemeId(themeId);
+                      setCustomThemeDialogOpen(true);
+                    }}
+                  />
                 </div>
               )}
             </For>
@@ -1322,35 +1055,13 @@ export function SettingsDialog(props: SettingsDialogProps) {
           aria-labelledby="settings-tabbutton-experimental"
           style={{ display: 'flex', 'flex-direction': 'column', gap: '18px' }}
         >
-          <div style={{ display: 'flex', 'flex-direction': 'column', gap: '10px' }}>
-            <div style={{ ...sectionLabelStyle, 'font-weight': '600' }}>Coordinator</div>
-            <label
-              style={{
-                display: 'flex',
-                'align-items': 'center',
-                gap: '10px',
-                cursor: 'pointer',
-                padding: '8px 12px',
-                'border-radius': '8px',
-                background: theme.bgInput,
-                border: `1px solid ${theme.border}`,
-              }}
-            >
-              <input
-                type="checkbox"
-                checked={store.coordinatorModeEnabled}
-                onChange={(e) => setCoordinatorModeEnabled(e.currentTarget.checked)}
-                style={{ 'accent-color': theme.accent, cursor: 'pointer' }}
-              />
-              <div style={{ display: 'flex', 'flex-direction': 'column', gap: '2px' }}>
-                <span style={{ 'font-size': '14px', color: theme.fg }}>Coordinator mode</span>
-                <span style={{ 'font-size': '12px', color: theme.fgSubtle }}>
-                  Enable the Coordinator option when creating tasks. Coordinators can spawn
-                  sub-tasks, send prompts, and merge branches automatically via MCP tools. Requires
-                  app restart to fully disable.
-                </span>
-              </div>
-            </label>
+          <SettingsSection title="Coordinator">
+            <SettingsCheckboxRow
+              label="Coordinator mode"
+              checked={store.coordinatorModeEnabled}
+              onChange={setCoordinatorModeEnabled}
+              description="Enable the Coordinator option when creating tasks. Coordinators can spawn sub-tasks, send prompts, and merge branches automatically via MCP tools. Requires app restart to fully disable."
+            />
             <div
               style={{
                 display: 'flex',
@@ -1403,7 +1114,7 @@ export function SettingsDialog(props: SettingsDialogProps) {
                 completes. Default: 60s. Failed sub-tasks use max(10s, delay ÷ 4).
               </span>
             </div>
-          </div>
+          </SettingsSection>
         </div>
       </Show>
     </Dialog>

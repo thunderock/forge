@@ -40,29 +40,18 @@ export const theme = {
   islandRadius: 'var(--island-radius)',
   taskContainerBg: 'var(--task-container-bg)',
   taskPanelBg: 'var(--task-panel-bg)',
-} as const;
 
-/** Opaque terminal background per preset — matches --task-panel-bg */
-export const terminalBackground: Record<LookPreset, string> = {
-  classic: '#2d2e32',
-  graphite: '#1c2630',
-  midnight: '#000000',
-  indigo: '#1c2038',
-  ember: '#211918',
-  glacier: '#232e3a',
-  minimal: '#252520',
-  zenburnesque: '#2e2d2a',
-  'catppuccin-mocha': '#1e1e2e',
-  'islands-dark': '#181a1d',
-  'islands-light': '#ffffff',
-  workbench: '#1f1f1f',
-};
+  diffAddBg: 'var(--diff-add-bg)',
+  diffRemoveBg: 'var(--diff-remove-bg)',
+  searchMatch: 'var(--search-match)',
+  searchMatchActive: 'var(--search-match-active)',
+} as const;
 
 // GitHub-light-ish xterm palette (text, cursor, selection + 16 ANSI colors)
 // for light terminal backgrounds, so colored output (claude prompts,
 // ls --color, git status) stays legible on white. Shared by the built-in
 // islands-light preset and any custom theme with a light background.
-const LIGHT_TERMINAL_PALETTE = {
+export const LIGHT_TERMINAL_THEME = {
   foreground: '#1f2329',
   cursor: '#1f2329',
   cursorAccent: '#ffffff',
@@ -91,12 +80,11 @@ const LIGHT_TERMINAL_PALETTE = {
  * white-ish bright ANSI palette) so plain output stays readable.
  */
 export function getTerminalTheme(preset: LookPreset) {
+  const background = readCssVarsForPreset(preset)['--task-panel-bg'] ?? '#000000';
   if (preset === 'islands-light') {
-    return { background: '#ffffff', ...LIGHT_TERMINAL_PALETTE };
+    return { background, ...LIGHT_TERMINAL_THEME };
   }
-  return {
-    background: terminalBackground[preset],
-  };
+  return { background };
 }
 
 /**
@@ -148,9 +136,24 @@ export function getTerminalThemeForCustom(bg: string) {
   })();
 
   if (isLight) {
-    return { background: bg, ...LIGHT_TERMINAL_PALETTE };
+    return { background: bg, ...LIGHT_TERMINAL_THEME };
   }
   return { background: bg };
+}
+
+export function getTerminalSearchDecorations() {
+  const style = getComputedStyle(document.documentElement);
+  const rawMatch = style.getPropertyValue('--search-match').trim();
+  const rawActive = style.getPropertyValue('--search-match-active').trim();
+  const match = colord(rawMatch).isValid() ? rawMatch : '#ffd54f';
+  const active = colord(rawActive).isValid() ? rawActive : '#ff8a00';
+
+  return {
+    matchBackground: colord(match).alpha(0.4).toRgbString(),
+    matchOverviewRuler: match,
+    activeMatchBackground: colord(active).alpha(0.85).toRgbString(),
+    activeMatchColorOverviewRuler: active,
+  } as const;
 }
 
 /** Generates a styled banner (warning/error/info) using color-mix for background+border. */

@@ -9,11 +9,11 @@ const config: KnipConfig = {
   ],
   project: ['electron/**/*.ts', 'src/**/*.{ts,tsx}'],
   ignoreBinaries: [
-    // Optional security tooling invoked from npm scripts; installed on demand
+    // Optional security tooling invoked from npm scripts; installed on demand.
     'semgrep',
     'gitleaks',
   ],
-  // Test files are allowed to have unused exports (test helpers, fixtures)
+  // Test files are allowed to have unused exports (test helpers, fixtures).
   ignoreExportsUsedInFile: true,
 };
 

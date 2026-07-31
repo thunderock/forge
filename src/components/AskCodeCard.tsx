@@ -103,7 +103,7 @@ export function AskCodeCard(props: AskCodeCardProps) {
           'justify-content': 'space-between',
           padding: '4px 10px',
           'border-bottom': `1px solid ${theme.borderSubtle}`,
-          background: 'rgba(255,255,255,0.03)',
+          background: 'color-mix(in srgb, var(--fg) 3%, transparent)',
         }}
       >
         <span
@@ -149,6 +149,7 @@ export function AskCodeCard(props: AskCodeCardProps) {
       >
         <Show when={loading() && !response()}>
           <span
+            class="askcode-loading-pulse"
             style={{
               color: theme.fgSubtle,
               animation: 'askcode-pulse 1.5s ease-in-out infinite',
@@ -160,6 +161,7 @@ export function AskCodeCard(props: AskCodeCardProps) {
         <Show when={response()}>{response()}</Show>
         <Show when={loading() && response()}>
           <span
+            class="askcode-loading-pulse"
             style={{
               color: theme.accent,
               'font-size': sf(11),

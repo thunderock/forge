@@ -6,6 +6,14 @@ import {
   cancelAskAboutCodeMinimax,
   isMinimaxRequestActive,
 } from './ask-code-minimax.js';
+import {
+  AskCodeSession,
+  ASK_CODE_MAX_CONCURRENT,
+  ASK_CODE_TIMEOUT_MS,
+  RequestRegistry,
+  assertCanStart,
+  assertPromptWithinLimit,
+} from './request-registry.js';
 
 export type AskCodeProvider = 'claude' | 'minimax';
 
@@ -17,28 +25,23 @@ interface AskCodeRequest {
   provider?: AskCodeProvider;
 }
 
-const MAX_PROMPT_LENGTH = 50_000;
-const MAX_CONCURRENT = 5;
-const TIMEOUT_MS = 120_000;
-
-const activeRequests = new Map<string, ChildProcess>();
-const activeTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const activeRequests = new RequestRegistry<ChildProcess>({
+  maxConcurrent: ASK_CODE_MAX_CONCURRENT,
+  timeoutMs: ASK_CODE_TIMEOUT_MS,
+});
 
 export function askAboutCode(win: BrowserWindow, args: AskCodeRequest): void {
   const { requestId, channelId, prompt, cwd, provider } = args;
 
   // Route to MiniMax backend when configured
   if (provider === 'minimax') {
+    activeRequests.cancel(requestId);
     askAboutCodeMinimax(win, { requestId, channelId, prompt });
     return;
   }
 
-  if (prompt.length > MAX_PROMPT_LENGTH) {
-    throw new Error(`Prompt too long (${prompt.length} chars, max ${MAX_PROMPT_LENGTH})`);
-  }
-  if (activeRequests.size >= MAX_CONCURRENT) {
-    throw new Error('Too many concurrent ask-about-code requests');
-  }
+  assertPromptWithinLimit(prompt);
+  assertCanStart(activeRequests, requestId);
 
   // Cancel any existing request with the same ID
   cancelAskAboutCode(requestId);
@@ -77,24 +80,15 @@ export function askAboutCode(win: BrowserWindow, args: AskCodeRequest): void {
     },
   );
 
-  activeRequests.set(requestId, proc);
-
   const send = (msg: unknown) => {
     if (!win.isDestroyed()) {
       win.webContents.send(`channel:${channelId}`, msg);
     }
   };
 
-  let finished = false;
-
-  function cleanup() {
-    activeRequests.delete(requestId);
-    const timer = activeTimers.get(requestId);
-    if (timer) {
-      clearTimeout(timer);
-      activeTimers.delete(requestId);
-    }
-  }
+  const session = AskCodeSession.start(activeRequests, requestId, proc, send, (request) =>
+    request.kill('SIGTERM'),
+  );
 
   proc.stdout?.on('data', (chunk: Buffer) => {
     send({ type: 'chunk', text: chunk.toString('utf8') });
@@ -105,51 +99,25 @@ export function askAboutCode(win: BrowserWindow, args: AskCodeRequest): void {
   });
 
   proc.on('close', (code) => {
-    cleanup();
-    if (!finished) {
-      finished = true;
+    session.cleanup();
+    if (session.complete()) {
       send({ type: 'done', exitCode: code });
     }
   });
 
   proc.on('error', (err) => {
-    cleanup();
-    if (!finished) {
-      finished = true;
+    session.cleanup();
+    if (session.complete()) {
       send({ type: 'error', text: err.message });
       send({ type: 'done', exitCode: 1 });
     }
   });
-
-  // Safety timeout: kill after 2 minutes.
-  // Set finished BEFORE cancel to prevent the async close handler from
-  // also sending a done message (race between timeout and process exit).
-  const timer = setTimeout(() => {
-    activeTimers.delete(requestId);
-    if (activeRequests.has(requestId)) {
-      finished = true;
-      send({ type: 'error', text: 'Request timed out after 2 minutes.' });
-      cancelAskAboutCode(requestId);
-      send({ type: 'done', exitCode: 1 });
-    }
-  }, TIMEOUT_MS);
-  activeTimers.set(requestId, timer);
 }
 
 export function cancelAskAboutCode(requestId: string): void {
   if (isMinimaxRequestActive(requestId)) {
     cancelAskAboutCodeMinimax(requestId);
-    return;
   }
 
-  const proc = activeRequests.get(requestId);
-  if (proc) {
-    proc.kill('SIGTERM');
-    activeRequests.delete(requestId);
-  }
-  const timer = activeTimers.get(requestId);
-  if (timer) {
-    clearTimeout(timer);
-    activeTimers.delete(requestId);
-  }
+  activeRequests.cancel(requestId);
 }

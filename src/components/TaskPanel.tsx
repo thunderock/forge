@@ -30,6 +30,7 @@ import { TaskChangedFilesSection } from './TaskChangedFilesSection';
 import { isCommitHashSelection, type CommitSelection } from './CommitNavBar';
 import { TaskShellSection } from './TaskShellSection';
 import { TaskStepsSection } from './TaskStepsSection';
+import { TaskCurrentStateLine } from './TaskCurrentStateLine';
 import { TaskAITerminal } from './TaskAITerminal';
 import { TaskClosingOverlay } from './TaskClosingOverlay';
 import { invoke } from '../lib/ipc';
@@ -40,6 +41,7 @@ import { isMac } from '../lib/platform';
 import type { Task } from '../store/types';
 import type { CommitInfo } from '../ipc/types';
 import { isLandedTaskState } from '../store/landing';
+import { shouldPollTaskCommits } from './task-commit-polling';
 
 interface TaskPanelProps {
   task: Task;
@@ -61,8 +63,9 @@ export function TaskPanel(props: TaskPanelProps) {
   const [nowMs, setNowMs] = createSignal(Date.now());
   createEffect(() => {
     const n = props.task.stagedNotification;
-    if (!n || n.userEdited) return;
-    const id = window.setInterval(() => setNowMs(Date.now()), 1_000);
+    const hasActiveCountdown = Boolean(n && !n.userEdited);
+    if (!props.task.stepsEnabled && !hasActiveCountdown) return;
+    const id = window.setInterval(() => setNowMs(Date.now()), hasActiveCountdown ? 1_000 : 30_000);
     onCleanup(() => clearInterval(id));
   });
   const stagedCountdown = () => {
@@ -191,16 +194,27 @@ export function TaskPanel(props: TaskPanelProps) {
     }
   });
 
-  // Poll for branch commits for worktree-isolated and direct-mode tasks (not just
-  // the active one), so CommitNavBar shows correct state regardless of which column
-  // is focused. For direct mode, request recent commits as fallback since there are
-  // no branch-specific commits when working on main.
+  // Poll for branch commits for visible worktree-isolated and direct-mode tasks.
+  // This includes inactive columns in the tiled layout, while hidden and offscreen
+  // panels restart with an immediate refresh when they become visible again. For
+  // direct mode, request recent commits since there are no branch-specific commits
+  // when working on main.
   createEffect(() => {
     const worktreePath = props.task.worktreePath;
     const baseBranch = props.task.baseBranch;
     const isolation = props.task.gitIsolation;
     if (isLandedTask()) return;
     if (isolation !== 'worktree' && isolation !== 'direct') return;
+    const focusMode = store.focusMode;
+    if (
+      !shouldPollTaskCommits(
+        focusMode,
+        focusMode ? props.isActive : false,
+        focusMode ? undefined : store.taskViewportVisibility[props.task.id],
+      )
+    ) {
+      return;
+    }
     let cancelled = false;
 
     async function fetchCommits() {
@@ -498,7 +512,7 @@ export function TaskPanel(props: TaskPanelProps) {
       <div
         class="task-header-stack"
         style={{
-          flex: '0 0 78px',
+          flex: `0 0 ${props.task.stepsEnabled ? 102 : 78}px`,
           display: 'flex',
           'flex-direction': 'column',
           overflow: 'hidden',
@@ -517,6 +531,9 @@ export function TaskPanel(props: TaskPanelProps) {
             onTitleEditRef={(h) => (titleEditHandle = h)}
           />
         </div>
+        <Show when={props.task.stepsEnabled}>
+          <TaskCurrentStateLine task={props.task} nowMs={nowMs()} variant="card" />
+        </Show>
         <div style={{ flex: '0 0 28px', overflow: 'hidden' }}>
           <TaskBranchInfoBar task={props.task} onEditProject={(id) => setEditingProjectId(id)} />
         </div>

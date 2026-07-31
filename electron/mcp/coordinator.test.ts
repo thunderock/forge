@@ -5060,11 +5060,35 @@ describe('Coordinator hydrateTask — mcpConfigPath directory scoping', () => {
     expect(configWrite).toBeDefined();
   });
 
+  it('host mode: dirname(serverPath)/subtask-{id}.json is rejected even when serverPath is present', () => {
+    const taskId = 'task-host-docker-path';
+    const serverPath = '/srv/app/.parallel-code/mcp-server.js';
+    const dockerPath = join(dirname(serverPath), `subtask-${taskId}.json`);
+
+    mockAtomicWriteFileSync.mockClear();
+    coordinator.hydrateTask({
+      id: taskId,
+      name: 'host-docker-path',
+      projectId: 'proj-1',
+      projectRoot: '/tmp/project',
+      branchName: 'task/host-docker-path',
+      worktreePath: '/tmp/host-docker-path',
+      agentId: 'agent-host-docker-path',
+      coordinatorTaskId: 'coord-1',
+      mcpConfigPath: dockerPath,
+    });
+
+    expect(coordinator.getTask(taskId)?.mcpConfigPath).toBeUndefined();
+    const configWrite = mockAtomicWriteFileSync.mock.calls.find((c) => c[0] === dockerPath);
+    expect(configWrite).toBeUndefined();
+  });
+
   it('Docker mode: dirname(serverPath)/subtask-{id}.json is accepted and config write occurs', () => {
     const taskId = 'task-valid-docker';
     const serverPath = '/srv/app/.forge/mcp-server.js';
     const dockerPath = join(dirname(serverPath), `subtask-${taskId}.json`);
 
+    coordinator.setDockerContainerName('coord-1', 'parallel-code-coord');
     mockAtomicWriteFileSync.mockClear();
     coordinator.hydrateTask({
       id: taskId,
@@ -5087,6 +5111,7 @@ describe('Coordinator hydrateTask — mcpConfigPath directory scoping', () => {
     const taskId = 'task-evil-docker';
     const wrongPath = `/some/other/dir/subtask-${taskId}.json`;
 
+    coordinator.setDockerContainerName('coord-1', 'parallel-code-coord');
     coordinator.hydrateTask({
       id: taskId,
       name: 'evil-docker',
@@ -5751,7 +5776,17 @@ describe('preload.cjs MCP channel allowlist', () => {
       '..',
       'preload.cjs',
     );
+    const manifestPath = path.join(
+      path.dirname(new URL(import.meta.url).pathname),
+      '..',
+      'ipc',
+      'channel-manifest.json',
+    );
     const preload = readFileSync(preloadPath, 'utf8') as string;
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8') as string) as Record<
+      string,
+      string
+    >;
 
     const required = [
       'mcp_task_created',
@@ -5767,69 +5802,16 @@ describe('preload.cjs MCP channel allowlist', () => {
       'mcp_coordinated_task_closed',
     ];
 
+    const channels = new Set(Object.values(manifest));
+    const allowlistMatch = /new Set\(\[([\s\S]*?)\]\)/.exec(preload);
+    expect(allowlistMatch).not.toBeNull();
+    const preloadChannels = new Set(
+      [...(allowlistMatch?.[1] ?? '').matchAll(/'([^']+)'/g)].map((match) => match[1]),
+    );
     for (const channel of required) {
-      expect(preload, `preload.cjs missing channel: ${channel}`).toContain(`'${channel}'`);
+      expect(channels.has(channel), `manifest missing channel: ${channel}`).toBe(true);
+      expect(preloadChannels.has(channel), `preload missing channel: ${channel}`).toBe(true);
     }
-  });
-});
-
-// ─── validateUUID / hydrateTask path-traversal rejection ─────────────────────
-
-describe('validateUUID — rejects non-UUID ids in MCP IPC handler', () => {
-  it('rejects ids containing path separators', async () => {
-    const { validateUUID } = await import('./validation.js');
-    expect(() => validateUUID('../../etc/passwd', 'id')).toThrow('must be a valid UUID');
-  });
-
-  it('rejects ids containing slashes', async () => {
-    const { validateUUID } = await import('./validation.js');
-    expect(() => validateUUID('task/1', 'id')).toThrow('must be a valid UUID');
-  });
-
-  it('accepts a valid UUID', async () => {
-    const { validateUUID } = await import('./validation.js');
-    const id = '550e8400-e29b-41d4-a716-446655440000';
-    expect(validateUUID(id, 'id')).toBe(id);
-  });
-});
-
-// ─── validateBranchName — additional git check-ref-format rules ───────────────
-
-describe('validateBranchName — extended git rules', () => {
-  it('rejects names starting with "/"', async () => {
-    const { validateBranchName } = await import('./validation.js');
-    expect(() => validateBranchName('/feat/bad')).toThrow('must not start with "/"');
-  });
-
-  it('rejects names ending with "/"', async () => {
-    const { validateBranchName } = await import('./validation.js');
-    expect(() => validateBranchName('feat/bad/')).toThrow('must not end with "/"');
-  });
-
-  it('rejects names ending with ".lock"', async () => {
-    const { validateBranchName } = await import('./validation.js');
-    expect(() => validateBranchName('feat.lock')).toThrow('.lock');
-  });
-
-  it('rejects names containing "@{"', async () => {
-    const { validateBranchName } = await import('./validation.js');
-    // { is caught by the shell metacharacter check
-    expect(() => validateBranchName('feat@{bad}')).toThrow('invalid characters');
-  });
-
-  it('rejects names containing "//"', async () => {
-    const { validateBranchName } = await import('./validation.js');
-    expect(() => validateBranchName('feat//bad')).toThrow('must not contain "//"');
-  });
-
-  it('rejects names starting with "."', async () => {
-    const { validateBranchName } = await import('./validation.js');
-    expect(() => validateBranchName('.hidden')).toThrow('must not start with "."');
-  });
-
-  it('still accepts normal branch names', async () => {
-    const { validateBranchName } = await import('./validation.js');
-    expect(validateBranchName('feat/my-feature')).toBe('feat/my-feature');
   });
 });
 

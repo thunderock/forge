@@ -2,7 +2,13 @@ import { randomUUID } from 'crypto';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { writeFileSync, readFileSync, existsSync, unlinkSync } from 'fs';
-import { readFile as fsReadFile, unlink as fsUnlink } from 'fs/promises';
+import {
+  readFile as fsReadFile,
+  writeFile as fsWriteFile,
+  unlink as fsUnlink,
+  access as fsAccess,
+  mkdir as fsMkdir,
+} from 'fs/promises';
 import { atomicWriteFile } from './atomic.js';
 import { join } from 'path';
 import os from 'os';
@@ -13,6 +19,121 @@ const PREAMBLE_START = '<sub-task-mode>';
 const PREAMBLE_END = '</sub-task-mode>';
 
 const PREAMBLE_MD_FILES = ['AGENTS.md', 'GEMINI.md', '.agent.md'] as const;
+
+export const SUB_TASK_MODE_PREAMBLE = `<sub-task-mode>
+These rules override all skills and hooks:
+- When your work is complete, commit your changes and call the \`land_self\` MCP tool with the verification checks you ran. A successful \`land_self\` call is the finish line — do NOT call \`signal_done\` afterward, use finishing-a-development-branch, or offer merge/PR options.
+- Use \`signal_done\` only if the coordinator explicitly asks for manual review instead of self-landing.
+- Asking questions is fine when requirements are unclear or an action is risky.
+</sub-task-mode>`;
+
+export type PreambleWriteQueue = Map<string, Promise<void>>;
+
+export interface InjectedSubTaskPreamble {
+  filePath?: string;
+  originalContent: string | null;
+  existedBefore: boolean;
+  restoreOnFailure: boolean;
+}
+
+export async function queueFileMutation(
+  queue: PreambleWriteQueue,
+  filePath: string,
+  mutate: () => Promise<void>,
+): Promise<void> {
+  const prior = queue.get(filePath) ?? Promise.resolve();
+  const next = prior.then(mutate);
+  const cleanup = next
+    .catch(() => {})
+    .then(() => {
+      if (queue.get(filePath) === cleanup) {
+        queue.delete(filePath);
+      }
+    });
+  queue.set(filePath, cleanup);
+  await next;
+}
+
+async function injectMarkdownPreamble(
+  queue: PreambleWriteQueue,
+  filePath: string,
+): Promise<InjectedSubTaskPreamble> {
+  let originalContent: string | null = null;
+  await queueFileMutation(queue, filePath, async () => {
+    try {
+      await fsAccess(filePath);
+      originalContent = await fsReadFile(filePath, 'utf8');
+    } catch {
+      originalContent = null;
+    }
+    await atomicWriteFile(
+      filePath,
+      originalContent ? `${originalContent}\n\n${SUB_TASK_MODE_PREAMBLE}` : SUB_TASK_MODE_PREAMBLE,
+    );
+  });
+  return {
+    filePath,
+    originalContent,
+    existedBefore: originalContent !== null,
+    restoreOnFailure: true,
+  };
+}
+
+export async function injectSubTaskPreamble(args: {
+  worktreePath: string;
+  agentCommand: string;
+  queue: PreambleWriteQueue;
+}): Promise<InjectedSubTaskPreamble> {
+  const agentCmd = args.agentCommand.toLowerCase();
+  if (agentCmd.includes('codex') || agentCmd.includes('opencode')) {
+    return injectMarkdownPreamble(args.queue, join(args.worktreePath, 'AGENTS.md'));
+  }
+  if (agentCmd.includes('gemini')) {
+    return injectMarkdownPreamble(args.queue, join(args.worktreePath, 'GEMINI.md'));
+  }
+  if (agentCmd.includes('copilot')) {
+    return injectMarkdownPreamble(args.queue, join(args.worktreePath, '.agent.md'));
+  }
+
+  const settingsDir = join(args.worktreePath, '.claude');
+  const settingsPath = join(settingsDir, 'settings.local.json');
+  await fsMkdir(settingsDir, { recursive: true });
+  let originalContent: string | null = null;
+  await queueFileMutation(args.queue, settingsPath, async () => {
+    let existingSettings: Record<string, unknown> = {};
+    try {
+      originalContent = await fsReadFile(settingsPath, 'utf8');
+      existingSettings = JSON.parse(originalContent) as Record<string, unknown>;
+    } catch {
+      existingSettings = {};
+    }
+    existingSettings.systemPrompt = existingSettings.systemPrompt
+      ? `${existingSettings.systemPrompt}\n\n${SUB_TASK_MODE_PREAMBLE}`
+      : SUB_TASK_MODE_PREAMBLE;
+    await atomicWriteFile(settingsPath, JSON.stringify(existingSettings, null, 2));
+  });
+  return {
+    filePath: settingsPath,
+    originalContent,
+    existedBefore: originalContent !== null,
+    restoreOnFailure: false,
+  };
+}
+
+export async function restoreSubTaskPreambleInjection(
+  injection: InjectedSubTaskPreamble | undefined,
+): Promise<void> {
+  if (!injection?.filePath || !injection.restoreOnFailure) return;
+  try {
+    if (injection.originalContent !== null) {
+      await fsWriteFile(injection.filePath, injection.originalContent);
+    } else {
+      await fsUnlink(injection.filePath);
+    }
+  } catch {
+    /* ignore — worktree cleanup follows */
+  }
+}
 
 /** Remove the injected `<sub-task-mode>…</sub-task-mode>` block and its surrounding
  *  blank-line separators. Content before and after the block is preserved. */

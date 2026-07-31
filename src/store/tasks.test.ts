@@ -152,6 +152,9 @@ import {
   retryTaskMcpStartup,
   clearTaskLandingReview,
   updateTaskBranch,
+  toggleAITerminalLayout,
+  createAgentRecord,
+  selectActiveNeighborAfterRemoval,
 } from './tasks';
 import { getCoordinatorChildren } from './sidebar-order';
 import { recordMergedLines, recordTaskMerged } from './completion';
@@ -167,6 +170,63 @@ const taskCreatedHandler = ipcHandlers.get('mcp_task_created');
 if (!taskCreatedHandler) throw new Error('mcp_task_created handler not registered');
 const taskStateSyncHandler = ipcHandlers.get('mcp_task_state_sync');
 if (!taskStateSyncHandler) throw new Error('mcp_task_state_sync handler not registered');
+
+describe('task record helpers', () => {
+  const agentDef = {
+    id: 'agent-def',
+    name: 'Claude',
+    command: 'claude',
+    args: [],
+    resume_args: [],
+    skip_permissions_args: [],
+    description: 'Claude',
+  };
+
+  it('creates running agent records with default state', () => {
+    expect(createAgentRecord({ id: 'agent-1', taskId: 'task-1', def: agentDef })).toEqual({
+      id: 'agent-1',
+      taskId: 'task-1',
+      def: agentDef,
+      resumed: false,
+      status: 'running',
+      exitCode: null,
+      signal: null,
+      lastOutput: [],
+      generation: 0,
+      attachExisting: undefined,
+      spawnDelayMs: undefined,
+    });
+  });
+
+  it('preserves resume and attachment metadata on agent records', () => {
+    expect(
+      createAgentRecord({
+        id: 'agent-1',
+        taskId: 'task-1',
+        def: agentDef,
+        resumed: true,
+        attachExisting: true,
+        spawnDelayMs: 250,
+      }),
+    ).toMatchObject({
+      resumed: true,
+      attachExisting: true,
+      spawnDelayMs: 250,
+    });
+  });
+
+  it.each([
+    { order: ['task-1', 'task-2', 'task-3'], removedTaskId: 'task-1', expected: 'task-2' },
+    { order: ['task-1', 'task-2', 'task-3'], removedTaskId: 'task-2', expected: 'task-1' },
+    { order: ['task-1', 'task-2', 'task-3'], removedTaskId: 'task-3', expected: 'task-2' },
+    { order: ['task-1'], removedTaskId: 'task-1', expected: null },
+  ])(
+    'selects $expected after removing $removedTaskId from $order',
+    ({ order, removedTaskId, expected }) => {
+      expect(selectActiveNeighborAfterRemoval(order, removedTaskId)).toBe(expected);
+    },
+  );
+});
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -208,6 +268,23 @@ describe('updateTaskBranch', () => {
     updateTaskBranch('task-1', 'task/same');
 
     expect(mockTasks['task-1'].prUrl).toBe('https://github.com/acme/app/pull/12');
+  });
+});
+
+describe('toggleAITerminalLayout', () => {
+  it('flips an unset (split) layout to tabs and back', () => {
+    mockTasks['task-1'] = { agentIds: ['a', 'b'], shellAgentIds: [] };
+
+    toggleAITerminalLayout('task-1');
+    expect(mockTasks['task-1'].aiTerminalLayout).toBe('tabs');
+
+    toggleAITerminalLayout('task-1');
+    expect(mockTasks['task-1'].aiTerminalLayout).toBe('split');
+  });
+
+  it('is a no-op for an unknown task', () => {
+    toggleAITerminalLayout('missing');
+    expect(mockTasks['missing']).toBeUndefined();
   });
 });
 
@@ -992,6 +1069,23 @@ describe('sendPrompt', () => {
     await sendPrompt('task-1', 'agent-1', 'hello Codex');
 
     expect(writePayloads()).toEqual(['\x1b[I', 'hello Codex', '\r']);
+  });
+
+  it('asks tracked active steps to describe what is happening now', async () => {
+    mockTasks['task-1'].stepsEnabled = true;
+
+    await sendPrompt('task-1', 'agent-1', 'hello Codex');
+
+    const injectedPrompt = writePayloads()[1];
+    expect(injectedPrompt).toContain(
+      'For active statuses, describe what is happening now in present tense.',
+    );
+    expect(injectedPrompt).toContain(
+      'For awaiting_review and done, describe the outcome or decision.',
+    );
+    expect(injectedPrompt).toContain('must always contain one valid JSON array');
+    expect(injectedPrompt).toContain('rewrite the complete array');
+    expect(injectedPrompt).not.toContain('Outcome-oriented, not action-oriented.');
   });
 
   it('keeps Enter outside the bracketed paste block', async () => {

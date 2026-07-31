@@ -14,6 +14,7 @@ import {
 import { EditableText, type EditableTextHandle } from './EditableText';
 import { IconButton } from './IconButton';
 import { TerminalView } from './TerminalView';
+import { CloseIcon } from './icons';
 import { theme } from '../lib/theme';
 import { handleDragReorder } from '../lib/dragReorder';
 import type { Terminal } from '../store/types';
@@ -117,11 +118,7 @@ export function TerminalPanel(props: TerminalPanelProps) {
         </div>
         <div style={{ display: 'flex', gap: '4px', 'margin-left': '8px', 'flex-shrink': '0' }}>
           <IconButton
-            icon={
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
-                <path d="M3.72 3.72a.75.75 0 0 1 1.06 0L8 6.94l3.22-3.22a.75.75 0 1 1 1.06 1.06L9.06 8l3.22 3.22a.75.75 0 1 1-1.06 1.06L8 9.06l-3.22 3.22a.75.75 0 0 1-1.06-1.06L6.94 8 3.72 4.78a.75.75 0 0 1 0-1.06Z" />
-              </svg>
-            }
+            icon={<CloseIcon />}
             onClick={() => closeTerminal(props.terminal.id)}
             title="Close terminal"
           />
