@@ -86,11 +86,14 @@ export function isEffortSupported(effort: string | undefined, efforts: string[])
  * Claude dropdown options (MDL-08): value = the bare alias stored and later
  * passed to `--model`; label carries the host-resolved concrete ID when
  * IPC.ResolveClaudeModels declared one, else the plain alias (MDL-09).
+ * `aliases` is the entitlement-filtered list from IPC.ListClaudeModels
+ * (MDL-11); omitted/empty means "no entitlement signal" → full curated list.
  */
 export function claudeModelOptions(
   resolved: Record<string, string>,
+  aliases: readonly string[] = CLAUDE_MODELS,
 ): { value: string; label: string }[] {
-  return CLAUDE_MODELS.map((alias) => ({
+  return aliases.map((alias) => ({
     value: alias,
     label: resolved[alias] ? `${alias} — ${resolved[alias]}` : alias,
   }));

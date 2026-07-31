@@ -48,6 +48,7 @@ export function ModelSelector(props: ModelSelectorProps) {
   const [openCodeModels, setOpenCodeModels] = createSignal<string[]>([]);
   const [codexModels, setCodexModels] = createSignal<CodexModelInfo[]>([]);
   const [claudeResolved, setClaudeResolved] = createSignal<Record<string, string>>({});
+  const [claudeAliases, setClaudeAliases] = createSignal<string[]>([]);
   const [loadingModels, setLoadingModels] = createSignal(false);
 
   // Fetch dynamic opencode models when opencode is the selected agent.
@@ -79,12 +80,15 @@ export function ModelSelector(props: ModelSelectorProps) {
       .finally(() => setLoadingModels(false));
   });
 
-  // Resolve claude alias -> concrete-ID labels (MDL-08) when claude is selected;
-  // missing resolution leaves labels as plain aliases (MDL-09).
+  // Resolve claude alias -> concrete-ID labels (MDL-08) and the entitlement-
+  // filtered alias list (MDL-11) when claude is selected; missing resolution
+  // leaves labels as plain aliases, an empty list falls back to the curated
+  // aliases (MDL-09).
   createEffect(() => {
     const def = props.agentDef;
     if (!isClaude(def)) {
       setClaudeResolved({});
+      setClaudeAliases([]);
       return;
     }
     void invoke<Record<string, string>>(IPC.ResolveClaudeModels)
@@ -92,6 +96,15 @@ export function ModelSelector(props: ModelSelectorProps) {
         setClaudeResolved(resolved && typeof resolved === 'object' ? resolved : {}),
       )
       .catch(() => setClaudeResolved({}));
+    void invoke<string[]>(IPC.ListClaudeModels)
+      .then((aliases) => setClaudeAliases(Array.isArray(aliases) ? aliases : []))
+      .catch(() => setClaudeAliases([]));
+  });
+
+  // Entitlement-filtered aliases, or the curated list when no signal (MDL-11).
+  const effectiveClaudeAliases = createMemo(() => {
+    const fetched = claudeAliases();
+    return fetched.length > 0 ? fetched : curatedModelsFor(props.agentDef);
   });
 
   const listedModels = createMemo(() => {
@@ -100,6 +113,7 @@ export function ModelSelector(props: ModelSelectorProps) {
       const fetched = codexModels();
       return fetched.length > 0 ? fetched.map((m) => m.slug) : curatedModelsFor(props.agentDef);
     }
+    if (isClaude(props.agentDef)) return effectiveClaudeAliases();
     return curatedModelsFor(props.agentDef);
   });
 
@@ -111,7 +125,9 @@ export function ModelSelector(props: ModelSelectorProps) {
   });
 
   const showOtherInput = createMemo(() => selectValue() === OTHER);
-  const claudeOptions = createMemo(() => claudeModelOptions(claudeResolved()));
+  const claudeOptions = createMemo(() =>
+    claudeModelOptions(claudeResolved(), effectiveClaudeAliases()),
+  );
   const efforts = createMemo(() =>
     effortsForModel(props.agentDef, props.selection.model?.trim() || undefined, codexModels()),
   );

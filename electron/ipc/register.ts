@@ -77,6 +77,7 @@ import {
   listAgents,
   listOpenCodeModels,
   listCodexModels,
+  listClaudeModels,
   resolveClaudeModelIds,
   listAgentSkills,
 } from './agents.js';
@@ -504,6 +505,7 @@ export function registerAllHandlers(win: BrowserWindow): void {
   ipcMain.handle(IPC.ListAgents, () => listAgents());
   ipcMain.handle(IPC.ListOpenCodeModels, () => listOpenCodeModels());
   ipcMain.handle(IPC.ListCodexModels, () => listCodexModels());
+  ipcMain.handle(IPC.ListClaudeModels, () => listClaudeModels());
   ipcMain.handle(IPC.ResolveClaudeModels, () => resolveClaudeModelIds());
   ipcMain.handle(IPC.ListAgentSkills, () => listAgentSkills());
   ipcMain.handle(IPC.CheckDockerAvailable, () => isDockerAvailable());

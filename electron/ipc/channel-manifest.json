@@ -10,6 +10,7 @@
   "ListAgents": "list_agents",
   "ListOpenCodeModels": "list_opencode_models",
   "ListCodexModels": "list_codex_models",
+  "ListClaudeModels": "list_claude_models",
   "ResolveClaudeModels": "resolve_claude_models",
   "ListAgentSkills": "list_agent_skills",
   "CreateTask": "create_task",

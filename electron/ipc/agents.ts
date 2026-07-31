@@ -217,6 +217,91 @@ export async function listCodexModels(): Promise<CodexModelInfo[]> {
 
 const CLAUDE_ALIASES = ['fable', 'opus', 'sonnet', 'haiku'] as const;
 
+// --- Claude dynamic model entitlements (MDL-11) ---
+
+export interface ClaudeModelAccess {
+  apiName: string;
+  entitled: boolean;
+}
+
+/**
+ * Parse the raw contents of `~/.claude.json` — the claude CLI's state file, whose
+ * `modelAccessCache` drives its own /model picker filtering — into per-model
+ * entitlement entries. Pure and tolerant: any parse/shape failure yields `[]` so
+ * the renderer falls back to the curated list instead of crashing; malformed
+ * entries are skipped individually.
+ */
+export function parseClaudeModelAccessCache(raw: string): ClaudeModelAccess[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return [];
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return [];
+  const cache = (parsed as { modelAccessCache?: unknown }).modelAccessCache;
+  if (!Array.isArray(cache)) return [];
+
+  const access: ClaudeModelAccess[] = [];
+  for (const entry of cache) {
+    if (typeof entry !== 'object' || entry === null) continue;
+    const e = entry as Record<string, unknown>;
+    if (typeof e.apiName !== 'string' || typeof e.entitled !== 'boolean') continue;
+    access.push({ apiName: e.apiName, entitled: e.entitled });
+  }
+  return access;
+}
+
+/**
+ * Keep an alias when the entitlement cache has no opinion on its model family
+ * (tolerant default), or when at least one matching model is entitled. Drop it
+ * only when every matching model is explicitly unentitled — mirroring how the
+ * claude CLI hides such models from its own /model picker.
+ */
+export function filterEntitledClaudeAliases(
+  aliases: readonly string[],
+  access: readonly ClaudeModelAccess[],
+): string[] {
+  return aliases.filter((alias) => {
+    const matches = access.filter((a) => a.apiName.includes(alias));
+    return matches.length === 0 || matches.some((a) => a.entitled);
+  });
+}
+
+let cachedClaudeModels: string[] | null = null;
+let claudeModelsCacheTime = 0;
+const CLAUDE_MODELS_TTL = 5 * 60_000;
+
+/** Test-only: clear the module-level cache so cases don't leak into each other. */
+export function resetClaudeModelsCacheForTests(): void {
+  cachedClaudeModels = null;
+  claudeModelsCacheTime = 0;
+}
+
+/**
+ * Discover which claude model aliases the host is actually entitled to by
+ * reading `~/.claude.json`'s `modelAccessCache` (MDL-11). TTL-cached; returns
+ * `[]` when the file is missing / unreadable / carries no entitlement data —
+ * never throws, and the renderer then falls back to the curated alias list.
+ * Failures are not cached so a later read can recover.
+ */
+export async function listClaudeModels(): Promise<string[]> {
+  const now = Date.now();
+  if (cachedClaudeModels && now - claudeModelsCacheTime < CLAUDE_MODELS_TTL) {
+    return cachedClaudeModels;
+  }
+  try {
+    const raw = await fs.readFile(path.join(os.homedir(), '.claude.json'), 'utf8');
+    const access = parseClaudeModelAccessCache(raw);
+    cachedClaudeModels =
+      access.length > 0 ? filterEntitledClaudeAliases(CLAUDE_ALIASES, access) : [];
+    claudeModelsCacheTime = now;
+    return cachedClaudeModels;
+  } catch {
+    return [];
+  }
+}
+
 /**
  * Resolve claude model aliases to the concrete IDs declared via
  * `ANTHROPIC_DEFAULT_<ALIAS>_MODEL`. Pure over the injected env objects: live
