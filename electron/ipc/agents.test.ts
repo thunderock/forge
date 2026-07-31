@@ -27,10 +27,14 @@ import {
   getSkipPermissionsArgs,
   listOpenCodeModels,
   listCodexModels,
+  listClaudeModels,
   parseOpenCodeModels,
   parseCodexModelsCache,
+  parseClaudeModelAccessCache,
+  filterEntitledClaudeAliases,
   resetOpenCodeModelsCacheForTests,
   resetCodexModelsCacheForTests,
+  resetClaudeModelsCacheForTests,
   resolveClaudeModelIds,
   resolveClaudeModelIdsFrom,
   mergeSkillNames,
@@ -239,6 +243,145 @@ describe('listCodexModels (MDL-06/09)', () => {
     expect(await listCodexModels()).toEqual([]);
     const retry = await listCodexModels();
     expect(retry.map((m) => m.slug)).toContain('gpt-5.6-sol');
+    expect(spy).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('parseClaudeModelAccessCache (MDL-11)', () => {
+  const fixture = readFileSync(path.join(__dirname, 'claude-state.fixture.json'), 'utf8');
+
+  it('extracts apiName/entitled entries from a ~/.claude.json snapshot', () => {
+    const access = parseClaudeModelAccessCache(fixture);
+    expect(access).toContainEqual({ apiName: 'claude-fable-5', entitled: false });
+    expect(access).toContainEqual({ apiName: 'claude-opus-4-8', entitled: true });
+    expect(access).toHaveLength(8);
+  });
+
+  it('returns [] for garbage, non-object JSON, or a missing modelAccessCache key', () => {
+    expect(parseClaudeModelAccessCache('')).toEqual([]);
+    expect(parseClaudeModelAccessCache('not json')).toEqual([]);
+    expect(parseClaudeModelAccessCache('{}')).toEqual([]);
+    expect(parseClaudeModelAccessCache('{"modelAccessCache":"nope"}')).toEqual([]);
+    expect(parseClaudeModelAccessCache('[]')).toEqual([]);
+  });
+
+  it('skips malformed entries but keeps valid ones (per-entry tolerance)', () => {
+    const raw = JSON.stringify({
+      modelAccessCache: [
+        { apiName: 'claude-opus-4-8', entitled: true },
+        { apiName: 42, entitled: true },
+        { apiName: 'claude-fable-5' },
+        'garbage',
+        null,
+        { apiName: 'claude-fable-5', entitled: false },
+      ],
+    });
+    expect(parseClaudeModelAccessCache(raw)).toEqual([
+      { apiName: 'claude-opus-4-8', entitled: true },
+      { apiName: 'claude-fable-5', entitled: false },
+    ]);
+  });
+});
+
+describe('filterEntitledClaudeAliases (MDL-11)', () => {
+  const ALIASES = ['fable', 'opus', 'sonnet', 'haiku'] as const;
+
+  it('drops an alias whose matching models are all unentitled (fable)', () => {
+    const access = [
+      { apiName: 'claude-fable-5', entitled: false },
+      { apiName: 'claude-opus-4-8', entitled: true },
+      { apiName: 'claude-sonnet-5', entitled: true },
+      { apiName: 'claude-haiku-4-5-20251001', entitled: true },
+    ];
+    expect(filterEntitledClaudeAliases(ALIASES, access)).toEqual(['opus', 'sonnet', 'haiku']);
+  });
+
+  it('keeps an alias when at least one matching model is entitled', () => {
+    const access = [
+      { apiName: 'claude-opus-5', entitled: false },
+      { apiName: 'claude-opus-4-8', entitled: true },
+    ];
+    expect(filterEntitledClaudeAliases(['opus'], access)).toEqual(['opus']);
+  });
+
+  it('matches aliases in date-suffixed and legacy claude-3-* names', () => {
+    const access = [{ apiName: 'claude-3-opus-20240229', entitled: true }];
+    expect(filterEntitledClaudeAliases(['opus'], access)).toEqual(['opus']);
+  });
+
+  it('keeps an alias absent from the cache (tolerant default)', () => {
+    const access = [{ apiName: 'claude-opus-4-8', entitled: true }];
+    expect(filterEntitledClaudeAliases(ALIASES, access)).toEqual([
+      'fable',
+      'opus',
+      'sonnet',
+      'haiku',
+    ]);
+  });
+
+  it('keeps everything when the access list is empty', () => {
+    expect(filterEntitledClaudeAliases(ALIASES, [])).toEqual(['fable', 'opus', 'sonnet', 'haiku']);
+  });
+});
+
+describe('listClaudeModels (MDL-11)', () => {
+  const fixture = readFileSync(path.join(__dirname, 'claude-state.fixture.json'), 'utf8');
+
+  beforeEach(() => {
+    resetClaudeModelsCacheForTests();
+    vi.restoreAllMocks();
+  });
+
+  it('filters the curated aliases by ~/.claude.json entitlements (fable dropped)', async () => {
+    vi.spyOn(fs, 'readFile').mockResolvedValue(fixture);
+
+    expect(await listClaudeModels()).toEqual(['opus', 'sonnet', 'haiku']);
+  });
+
+  it('reads the claude CLI state file ~/.claude.json', async () => {
+    const spy = vi.spyOn(fs, 'readFile').mockResolvedValue(fixture);
+
+    await listClaudeModels();
+    expect(spy).toHaveBeenCalledWith(path.join(os.homedir(), '.claude.json'), 'utf8');
+  });
+
+  it('returns [] when the state file is missing (ENOENT)', async () => {
+    vi.spyOn(fs, 'readFile').mockRejectedValue(
+      Object.assign(new Error('ENOENT: no such file'), { code: 'ENOENT' }),
+    );
+
+    expect(await listClaudeModels()).toEqual([]);
+  });
+
+  it('returns [] when the state file contains garbage', async () => {
+    vi.spyOn(fs, 'readFile').mockResolvedValue('not json at all');
+
+    expect(await listClaudeModels()).toEqual([]);
+  });
+
+  it('returns [] when modelAccessCache is absent (no filtering signal)', async () => {
+    vi.spyOn(fs, 'readFile').mockResolvedValue('{"numStartups": 3}');
+
+    expect(await listClaudeModels()).toEqual([]);
+  });
+
+  it('caches the filtered result within the TTL (single file read)', async () => {
+    const spy = vi.spyOn(fs, 'readFile').mockResolvedValue(fixture);
+
+    const first = await listClaudeModels();
+    const second = await listClaudeModels();
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(second).toEqual(first);
+  });
+
+  it('does not cache failures — a later call re-reads the file', async () => {
+    const spy = vi
+      .spyOn(fs, 'readFile')
+      .mockRejectedValueOnce(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }))
+      .mockResolvedValueOnce(fixture);
+
+    expect(await listClaudeModels()).toEqual([]);
+    expect(await listClaudeModels()).toEqual(['opus', 'sonnet', 'haiku']);
     expect(spy).toHaveBeenCalledTimes(2);
   });
 });

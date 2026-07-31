@@ -205,3 +205,31 @@ describe('claudeModelOptions — golden label parity (MDL-08/09)', () => {
     expect(claudeModelOptions({}).map((o) => o.value)).toEqual(curatedModelsFor(agent('claude')));
   });
 });
+
+describe('claudeModelOptions — entitlement-filtered alias list (MDL-11)', () => {
+  it('renders only the aliases the host is entitled to when a fetched list is given', () => {
+    expect(claudeModelOptions({}, ['opus', 'sonnet', 'haiku'])).toEqual([
+      { value: 'opus', label: 'opus' },
+      { value: 'sonnet', label: 'sonnet' },
+      { value: 'haiku', label: 'haiku' },
+    ]);
+  });
+
+  it('still labels filtered aliases with host-resolved IDs', () => {
+    expect(
+      claudeModelOptions({ opus: 'us.anthropic.claude-opus-4-8[1m]' }, ['opus', 'haiku']),
+    ).toEqual([
+      { value: 'opus', label: 'opus — us.anthropic.claude-opus-4-8[1m]' },
+      { value: 'haiku', label: 'haiku' },
+    ]);
+  });
+
+  it('defaults to the full curated list when no fetched list is given (fallback)', () => {
+    expect(claudeModelOptions({}).map((o) => o.value)).toEqual([
+      'fable',
+      'opus',
+      'sonnet',
+      'haiku',
+    ]);
+  });
+});

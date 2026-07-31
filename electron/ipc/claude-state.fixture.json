@@ -1,0 +1,20 @@
+{
+  "numStartups": 100,
+  "modelAccessCache": [
+    { "apiName": "claude-3-opus-20240229", "entitled": true },
+    { "apiName": "claude-fable-5", "entitled": false },
+    { "apiName": "claude-haiku-4-5-20251001", "entitled": true },
+    { "apiName": "claude-opus-4-1-20250805-claude-ai", "entitled": true },
+    { "apiName": "claude-opus-4-8", "entitled": true },
+    { "apiName": "claude-opus-5", "entitled": false },
+    { "apiName": "claude-sonnet-4-6", "entitled": true },
+    { "apiName": "claude-sonnet-5", "entitled": true }
+  ],
+  "additionalModelOptionsCache": [
+    {
+      "value": "claude-fable-5[1m]",
+      "label": "Fable",
+      "description": "Fable 5 · Most capable for your hardest and longest-running tasks"
+    }
+  ]
+}
