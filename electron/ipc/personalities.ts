@@ -1,5 +1,8 @@
 import { createHash } from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import { isMap, isScalar, parseDocument } from 'yaml';
+import { atomicWriteFileSync } from '../mcp/atomic.js';
 
 export type PersonalityParseMode = 'seed' | 'library';
 
@@ -87,6 +90,12 @@ const PERSONALITY_COLOR = /^#(?:[0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$/;
 const SHA256_HEX = /^[a-f0-9]{64}$/;
 
 export const MAX_PERSONALITY_FILE_BYTES = 2 * 1024 * 1024;
+const MAX_SEED_ERROR_MESSAGE_CHARS = 500;
+
+type CandidateReadResult =
+  | { status: 'ok'; raw: string }
+  | { status: 'missing' }
+  | { status: 'invalid'; message: string };
 
 function fail(message: string): never {
   throw new PersonalityParseError(message);
@@ -310,6 +319,72 @@ function sha256(raw: string): string {
   return createHash('sha256').update(raw, 'utf8').digest('hex');
 }
 
+function errorDetail(error: unknown): string {
+  const detail = error instanceof Error ? error.message : String(error);
+  return detail.slice(0, MAX_SEED_ERROR_MESSAGE_CHARS);
+}
+
+function isFileNotFound(error: unknown): boolean {
+  return (error as NodeJS.ErrnoException | null)?.code === 'ENOENT';
+}
+
+function readRegularCandidate(filePath: string): CandidateReadResult {
+  let stats: fs.Stats;
+  try {
+    stats = fs.lstatSync(filePath);
+  } catch (error: unknown) {
+    if (isFileNotFound(error)) return { status: 'missing' };
+    return { status: 'invalid', message: `lstat failed: ${errorDetail(error)}` };
+  }
+
+  if (stats.isSymbolicLink()) {
+    return { status: 'invalid', message: 'candidate is a symbolic link' };
+  }
+  if (!stats.isFile()) {
+    return { status: 'invalid', message: 'candidate is not a regular file' };
+  }
+  if (stats.size > MAX_PERSONALITY_FILE_BYTES) {
+    return {
+      status: 'invalid',
+      message: `candidate exceeds ${MAX_PERSONALITY_FILE_BYTES} bytes`,
+    };
+  }
+
+  try {
+    return { status: 'ok', raw: fs.readFileSync(filePath, 'utf8') };
+  } catch (error: unknown) {
+    return { status: 'invalid', message: `read failed: ${errorDetail(error)}` };
+  }
+}
+
+function addSeedError(
+  report: PersonalitySeedReport,
+  id: string | undefined,
+  message: string,
+): void {
+  const boundedMessage = message.slice(0, MAX_SEED_ERROR_MESSAGE_CHARS);
+  report.errors.push(
+    id === undefined ? { message: boundedMessage } : { id, message: boundedMessage },
+  );
+}
+
+function preserveWithError(report: PersonalitySeedReport, id: string, message: string): void {
+  report.preserved.push(id);
+  addSeedError(report, id, message);
+}
+
+function backupInstalledPersonalityBestEffort(installedPath: string): void {
+  try {
+    const stats = fs.lstatSync(installedPath);
+    if (stats.isSymbolicLink() || !stats.isFile() || stats.size > MAX_PERSONALITY_FILE_BYTES) {
+      return;
+    }
+    fs.copyFileSync(installedPath, `${installedPath}.bak`);
+  } catch {
+    // A backup failure must not block an otherwise safe atomic upgrade.
+  }
+}
+
 export function parsePersonalityMarkdown(
   raw: string,
   options: ParsePersonalityMarkdownOptions,
@@ -347,12 +422,153 @@ export function isPersonalityId(id: unknown): id is string {
   return typeof id === 'string' && PERSONALITY_ID.test(id);
 }
 
-export function resolvePersonalitySeedDir(_options: ResolvePersonalitySeedDirOptions): string {
-  throw new Error('Personality seed directory resolution is not implemented');
+export function resolvePersonalitySeedDir(options: ResolvePersonalitySeedDirOptions): string {
+  if (options.isPackaged) {
+    return path.join(options.resourcesPath, 'seeds', 'personalities');
+  }
+  return path.join(options.mainModuleDir, '..', 'seeds', 'personalities');
 }
 
 export function seedBuiltInPersonalities(
-  _options: SeedBuiltInPersonalitiesOptions,
+  options: SeedBuiltInPersonalitiesOptions,
 ): PersonalitySeedReport {
-  throw new Error('Personality seed reconciliation is not implemented');
+  const report: PersonalitySeedReport = {
+    seeded: [],
+    upgraded: [],
+    preserved: [],
+    unchanged: [],
+    errors: [],
+  };
+
+  let seedFilenames: string[];
+  try {
+    seedFilenames = fs
+      .readdirSync(options.seedDir)
+      .filter((filename) => filename.endsWith('.md'))
+      .sort();
+  } catch (error: unknown) {
+    addSeedError(report, undefined, `Unable to enumerate personality seeds: ${errorDetail(error)}`);
+    return report;
+  }
+
+  for (const filename of seedFilenames) {
+    const id = filename.slice(0, -3);
+    if (!isPersonalityId(id)) {
+      addSeedError(report, undefined, `Invalid packaged personality filename: ${filename}`);
+      continue;
+    }
+
+    const seedPath = path.join(options.seedDir, filename);
+    const seedRead = readRegularCandidate(seedPath);
+    if (seedRead.status !== 'ok') {
+      const message =
+        seedRead.status === 'missing'
+          ? 'Packaged personality disappeared before it could be read'
+          : `Invalid packaged personality: ${seedRead.message}`;
+      addSeedError(report, id, message);
+      continue;
+    }
+
+    let parsedSeed: ParsedPersonalityMarkdown;
+    let materializedSeed: string;
+    try {
+      parsedSeed = parsePersonalityMarkdown(seedRead.raw, { mode: 'seed', expectedId: id });
+      materializedSeed = materializePersonalitySeed(seedRead.raw);
+    } catch (error: unknown) {
+      addSeedError(report, id, `Invalid packaged personality: ${errorDetail(error)}`);
+      continue;
+    }
+
+    const packagedRevision = parsedSeed.metadata.seedRevision;
+    if (packagedRevision === undefined) {
+      addSeedError(report, id, 'Packaged personality is missing seedRevision');
+      continue;
+    }
+
+    const installedPath = path.join(options.libraryDir, filename);
+    const installedRead = readRegularCandidate(installedPath);
+    if (installedRead.status === 'missing') {
+      try {
+        fs.mkdirSync(options.libraryDir, { recursive: true });
+        atomicWriteFileSync(installedPath, materializedSeed);
+        report.seeded.push(id);
+      } catch (error: unknown) {
+        addSeedError(report, id, `Unable to seed personality: ${errorDetail(error)}`);
+      }
+      continue;
+    }
+    if (installedRead.status === 'invalid') {
+      preserveWithError(
+        report,
+        id,
+        `Installed personality was preserved: ${installedRead.message}`,
+      );
+      continue;
+    }
+
+    let parsedInstalled: ParsedPersonalityMarkdown;
+    try {
+      parsedInstalled = parsePersonalityMarkdown(installedRead.raw, {
+        mode: 'library',
+        expectedId: id,
+      });
+    } catch (error: unknown) {
+      preserveWithError(
+        report,
+        id,
+        `Installed personality was preserved because it is invalid: ${errorDetail(error)}`,
+      );
+      continue;
+    }
+
+    const installedMetadata = parsedInstalled.metadata;
+    if (
+      !installedMetadata.builtin ||
+      installedMetadata.seedRevision === undefined ||
+      installedMetadata.pristineHash === undefined
+    ) {
+      preserveWithError(
+        report,
+        id,
+        'Installed personality was preserved because it is not a versioned built-in',
+      );
+      continue;
+    }
+
+    if (packagedRevision <= installedMetadata.seedRevision) {
+      report.unchanged.push(id);
+      continue;
+    }
+
+    let installedPayloadHash: string;
+    try {
+      installedPayloadHash = computeInstalledPersonalityPayloadHash(installedRead.raw);
+    } catch (error: unknown) {
+      preserveWithError(
+        report,
+        id,
+        `Installed personality was preserved because its payload could not be hashed: ${errorDetail(error)}`,
+      );
+      continue;
+    }
+
+    if (installedPayloadHash !== installedMetadata.pristineHash) {
+      preserveWithError(
+        report,
+        id,
+        'Installed personality was preserved because its content has been edited',
+      );
+      continue;
+    }
+
+    backupInstalledPersonalityBestEffort(installedPath);
+    try {
+      atomicWriteFileSync(installedPath, materializedSeed);
+      report.upgraded.push(id);
+    } catch (error: unknown) {
+      preserveWithError(report, id, `Personality upgrade failed: ${errorDetail(error)}`);
+    }
+  }
+
+  return report;
 }
