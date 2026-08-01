@@ -38,6 +38,18 @@ export interface CodexModelInfo {
   efforts: string[];
 }
 
+export interface PersonalitySummary {
+  id: string;
+  name: string;
+  badge: string;
+  color: string;
+  builtin: boolean;
+}
+
+export interface PersonalityDetail extends PersonalitySummary {
+  markdown: string;
+}
+
 export interface CreateTaskResult {
   id: string;
   branch_name: string;

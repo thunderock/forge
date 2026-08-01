@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { isMap, isScalar, parseDocument } from 'yaml';
 import { atomicWriteFileSync } from '../mcp/atomic.js';
+import type { PersonalityDetail, PersonalitySummary } from './shared-types.js';
 
 export type PersonalityParseMode = 'seed' | 'library';
 
@@ -420,6 +421,21 @@ export function computeInstalledPersonalityPayloadHash(installedRaw: string): st
 
 export function isPersonalityId(id: unknown): id is string {
   return typeof id === 'string' && PERSONALITY_ID.test(id);
+}
+
+export function listPersonalities(
+  _libraryDir: string,
+  _warn?: (message: string) => void,
+): PersonalitySummary[] {
+  throw new Error('Personality catalog listing is not implemented');
+}
+
+export function readPersonality(
+  _libraryDir: string,
+  _id: string,
+  _warn?: (message: string) => void,
+): PersonalityDetail | null {
+  throw new Error('Personality catalog reads are not implemented');
 }
 
 export function resolvePersonalitySeedDir(options: ResolvePersonalitySeedDirOptions): string {

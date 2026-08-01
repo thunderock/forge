@@ -9,8 +9,10 @@ import {
   PersonalityParseError,
   computeInstalledPersonalityPayloadHash,
   isPersonalityId,
+  listPersonalities,
   materializePersonalitySeed,
   parsePersonalityMarkdown,
+  readPersonality,
   seedBuiltInPersonalities,
   type ParsePersonalityMarkdownOptions,
 } from './personalities.js';
@@ -186,9 +188,9 @@ function syntheticSeed({
   );
 }
 
-function customPersonality(id: string, body = 'Local custom guidance'): string {
+function customPersonality(id: string, body = 'Local custom guidance', name = id): string {
   return personalityDocument(
-    [`id: ${id}`, `name: ${id}`, 'badge: LC', "color: '#ABC'", 'builtin: false'],
+    [`id: ${id}`, `name: ${name}`, 'badge: LC', "color: '#ABC'", 'builtin: false'],
     { body },
   );
 }
@@ -1007,4 +1009,246 @@ describe('D-05/D-09/D-10/D-11/D-12 startup personality seed reconciliation', () 
     expect(report.preserved).toContain(id);
     expectReportedError(report.errors, id);
   });
+});
+
+describe('D-07/D-15/D-16 bounded personality catalog reads', () => {
+  let temporaryRoot: string;
+  let libraryDir: string;
+
+  beforeEach(() => {
+    temporaryRoot = fs.mkdtempSync(join(os.tmpdir(), 'personality-catalog-'));
+    libraryDir = join(temporaryRoot, 'library');
+    fs.mkdirSync(libraryDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    fs.rmSync(temporaryRoot, { recursive: true, force: true });
+  });
+
+  function writeLibraryFile(id: string, raw: string): string {
+    const filePath = join(libraryDir, `${id}.md`);
+    fs.writeFileSync(filePath, raw, 'utf8');
+    return filePath;
+  }
+
+  it('lists the real seeds by name and projects exact summary DTO keys', () => {
+    const seedDir = join(temporaryRoot, 'packaged');
+    copyRepositorySeeds(seedDir);
+    expect(seedBuiltInPersonalities({ seedDir, libraryDir }).errors).toEqual([]);
+
+    const summaries = listPersonalities(libraryDir);
+
+    expect(summaries.map(({ name }) => name)).toEqual([
+      'AI Engineer',
+      'Code Quality Engineer',
+      'Principal Engineer',
+    ]);
+    expect(summaries.map(({ id }) => id)).toEqual([
+      'ai-engineer',
+      'code-quality-engineer',
+      'principal-engineer',
+    ]);
+    for (const summary of summaries) {
+      expect(Object.keys(summary)).toEqual(['id', 'name', 'badge', 'color', 'builtin']);
+    }
+  });
+
+  it('sorts equal display names by stable ID and re-reads hand edits on every list call', () => {
+    const zuluPath = writeLibraryFile(
+      'zulu-personality',
+      customPersonality('zulu-personality', 'Zulu body', 'Zulu'),
+    );
+    writeLibraryFile('same-zulu', customPersonality('same-zulu', 'Same zulu body', 'Same Name'));
+    writeLibraryFile('same-alpha', customPersonality('same-alpha', 'Same alpha body', 'Same Name'));
+
+    expect(listPersonalities(libraryDir).map(({ id }) => id)).toEqual([
+      'same-alpha',
+      'same-zulu',
+      'zulu-personality',
+    ]);
+
+    fs.writeFileSync(
+      zuluPath,
+      customPersonality('zulu-personality', 'Edited body', 'Aaron'),
+      'utf8',
+    );
+    expect(listPersonalities(libraryDir).map(({ id }) => id)).toEqual([
+      'zulu-personality',
+      'same-alpha',
+      'same-zulu',
+    ]);
+  });
+
+  it('isolates malformed, mismatched, invalid-name, and oversized entries from a valid sibling', () => {
+    writeLibraryFile(
+      'valid-sibling',
+      customPersonality('valid-sibling', 'Valid sibling body', 'Valid Sibling'),
+    );
+    writeLibraryFile('malformed', '---\nid: [broken\n---\nBroken');
+    writeLibraryFile('mismatched', customPersonality('different-id'));
+    fs.writeFileSync(join(libraryDir, 'invalid name.md'), customPersonality('invalid-name'));
+    const oversizedPath = writeLibraryFile(
+      'oversized',
+      padUtf8(customPersonality('oversized'), MAX_PERSONALITY_FILE_BYTES + 1),
+    );
+    fs.writeFileSync(join(libraryDir, 'notes.txt'), 'not a personality');
+    const readSpy = guardReadPaths([oversizedPath]);
+    const warnings: string[] = [];
+
+    const summaries = listPersonalities(libraryDir, (message) => warnings.push(message));
+
+    expect(summaries.map(({ id }) => id)).toEqual(['valid-sibling']);
+    expect(warnings.length).toBeGreaterThanOrEqual(4);
+    expect(warnings.every((message) => message.length > 0 && message.length <= 500)).toBe(true);
+    expect(readSpy.mock.calls.some(([filePath]) => String(filePath) === oversizedPath)).toBe(false);
+  });
+
+  it.each(['symlink', 'directory', 'fifo'] as const)(
+    'rejects a list %s before read while preserving a valid sibling',
+    (type) => {
+      const blockedId = `catalog-${type}`;
+      const blockedPath = join(libraryDir, `${blockedId}.md`);
+      writeLibraryFile(
+        'valid-sibling',
+        customPersonality('valid-sibling', 'Valid body', 'Valid Sibling'),
+      );
+
+      if (type === 'symlink') {
+        const target = join(temporaryRoot, 'outside.md');
+        fs.writeFileSync(target, customPersonality(blockedId), 'utf8');
+        fs.symlinkSync(target, blockedPath);
+      } else if (type === 'directory') {
+        fs.mkdirSync(blockedPath);
+      } else if (!makeFifo(blockedPath)) {
+        return;
+      }
+
+      const readSpy = guardReadPaths([blockedPath]);
+      const warnings: string[] = [];
+      const summaries = listPersonalities(libraryDir, (message) => warnings.push(message));
+
+      expect(summaries.map(({ id }) => id)).toEqual(['valid-sibling']);
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0].length).toBeLessThanOrEqual(500);
+      expect(readSpy.mock.calls.some(([filePath]) => String(filePath) === blockedPath)).toBe(false);
+    },
+  );
+
+  it('allows exactly 2 MiB and rejects 2 MiB plus one before reading it', () => {
+    const boundaryPath = writeLibraryFile(
+      'boundary',
+      padUtf8(customPersonality('boundary'), MAX_PERSONALITY_FILE_BYTES),
+    );
+    const oversizedPath = writeLibraryFile(
+      'too-large',
+      padUtf8(customPersonality('too-large'), MAX_PERSONALITY_FILE_BYTES + 1),
+    );
+    const readSpy = guardReadPaths([oversizedPath]);
+
+    expect(listPersonalities(libraryDir).map(({ id }) => id)).toEqual(['boundary']);
+    expect(fs.statSync(boundaryPath).size).toBe(MAX_PERSONALITY_FILE_BYTES);
+    expect(readSpy.mock.calls.some(([filePath]) => String(filePath) === boundaryPath)).toBe(true);
+    expect(readSpy.mock.calls.some(([filePath]) => String(filePath) === oversizedPath)).toBe(false);
+  });
+
+  it('reads an exact detail DTO and observes metadata and Markdown edits on the next call', () => {
+    const filePath = writeLibraryFile(
+      'local-builder',
+      customPersonality('local-builder', 'Original guidance', 'Local Builder'),
+    );
+
+    const first = readPersonality(libraryDir, 'local-builder');
+    expect(first).toEqual({
+      id: 'local-builder',
+      name: 'Local Builder',
+      badge: 'LC',
+      color: '#ABC',
+      builtin: false,
+      markdown: 'Original guidance',
+    });
+    expect(Object.keys(first ?? {})).toEqual([
+      'id',
+      'name',
+      'badge',
+      'color',
+      'builtin',
+      'markdown',
+    ]);
+
+    fs.writeFileSync(
+      filePath,
+      customPersonality('local-builder', 'Hand-edited guidance', 'Renamed Builder'),
+      'utf8',
+    );
+    expect(readPersonality(libraryDir, 'local-builder')).toMatchObject({
+      name: 'Renamed Builder',
+      markdown: 'Hand-edited guidance',
+    });
+  });
+
+  it.each(['../state.json', 'nested/personality', 'nested\\personality', `a${'b'.repeat(64)}`])(
+    'rejects invalid read ID %s before filesystem access',
+    (id) => {
+      const lstatSpy = vi.spyOn(fs, 'lstatSync');
+
+      expect(() => readPersonality(libraryDir, id)).toThrow(/invalid personality id/i);
+      expect(lstatSpy).not.toHaveBeenCalled();
+    },
+  );
+
+  it('returns null when a detail is absent or disappears between lstat and read', () => {
+    expect(readPersonality(libraryDir, 'missing-personality')).toBeNull();
+
+    const disappearingPath = writeLibraryFile('disappearing', customPersonality('disappearing'));
+    const originalReadFileSync = fs.readFileSync;
+    vi.spyOn(fs, 'readFileSync').mockImplementation((...args) => {
+      if (String(args[0]) === disappearingPath) fs.unlinkSync(disappearingPath);
+      return Reflect.apply(originalReadFileSync, fs, args);
+    });
+
+    expect(readPersonality(libraryDir, 'disappearing')).toBeNull();
+  });
+
+  it.each(['symlink', 'directory', 'fifo', 'oversized', 'malformed'] as const)(
+    'rejects an invalid detail %s with a bounded error and never reads unsafe file types',
+    (type) => {
+      const id = `detail-${type}`;
+      const filePath = join(libraryDir, `${id}.md`);
+      let mustRejectBeforeRead = false;
+
+      if (type === 'symlink') {
+        const target = join(temporaryRoot, 'detail-outside.md');
+        fs.writeFileSync(target, customPersonality(id), 'utf8');
+        fs.symlinkSync(target, filePath);
+        mustRejectBeforeRead = true;
+      } else if (type === 'directory') {
+        fs.mkdirSync(filePath);
+        mustRejectBeforeRead = true;
+      } else if (type === 'fifo') {
+        if (!makeFifo(filePath)) return;
+        mustRejectBeforeRead = true;
+      } else if (type === 'oversized') {
+        fs.writeFileSync(filePath, padUtf8(customPersonality(id), MAX_PERSONALITY_FILE_BYTES + 1));
+        mustRejectBeforeRead = true;
+      } else {
+        fs.writeFileSync(filePath, '---\nid: [broken\n---\nBroken');
+      }
+
+      const readSpy = mustRejectBeforeRead ? guardReadPaths([filePath]) : null;
+      let thrown: unknown;
+      try {
+        readPersonality(libraryDir, id);
+      } catch (error: unknown) {
+        thrown = error;
+      }
+
+      expect(thrown).toBeInstanceOf(Error);
+      expect((thrown as Error).message.length).toBeGreaterThan(0);
+      expect((thrown as Error).message.length).toBeLessThanOrEqual(500);
+      if (readSpy) {
+        expect(readSpy.mock.calls.some(([readPath]) => String(readPath) === filePath)).toBe(false);
+      }
+    },
+  );
 });

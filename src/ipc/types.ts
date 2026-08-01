@@ -12,6 +12,8 @@ export type {
   ImportableWorktree,
   MergeResult,
   MergeStatus,
+  PersonalityDetail,
+  PersonalitySummary,
   PrCheckBucket,
   PrCheckRun,
   PrChecksOverall,
