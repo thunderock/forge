@@ -354,8 +354,38 @@ function readRegularCandidate(filePath: string): CandidateReadResult {
   try {
     return { status: 'ok', raw: fs.readFileSync(filePath, 'utf8') };
   } catch (error: unknown) {
+    if (isFileNotFound(error)) return { status: 'missing' };
     return { status: 'invalid', message: `read failed: ${errorDetail(error)}` };
   }
+}
+
+function catalogMessage(message: string): string {
+  return message.slice(0, MAX_SEED_ERROR_MESSAGE_CHARS);
+}
+
+function warnAboutCatalogEntry(
+  warn: ((message: string) => void) | undefined,
+  filename: string,
+  message: string,
+): void {
+  warn?.(catalogMessage(`Skipping personality "${filename}": ${message}`));
+}
+
+function personalitySummary(personality: ParsedPersonalityMarkdown): PersonalitySummary {
+  const { id, name, badge, color, builtin } = personality.metadata;
+  return { id, name, badge, color, builtin };
+}
+
+function personalityDetail(personality: ParsedPersonalityMarkdown): PersonalityDetail {
+  return { ...personalitySummary(personality), markdown: personality.markdown };
+}
+
+function compareCatalogEntries(a: PersonalitySummary, b: PersonalitySummary): number {
+  if (a.name < b.name) return -1;
+  if (a.name > b.name) return 1;
+  if (a.id < b.id) return -1;
+  if (a.id > b.id) return 1;
+  return 0;
 }
 
 function addSeedError(
@@ -424,18 +454,78 @@ export function isPersonalityId(id: unknown): id is string {
 }
 
 export function listPersonalities(
-  _libraryDir: string,
-  _warn?: (message: string) => void,
+  libraryDir: string,
+  warn?: (message: string) => void,
 ): PersonalitySummary[] {
-  throw new Error('Personality catalog listing is not implemented');
+  let filenames: string[];
+  try {
+    filenames = fs.readdirSync(libraryDir).filter((filename) => filename.endsWith('.md'));
+  } catch (error: unknown) {
+    if (!isFileNotFound(error)) {
+      warn?.(catalogMessage(`Unable to enumerate personality library: ${errorDetail(error)}`));
+    }
+    return [];
+  }
+
+  const summaries: PersonalitySummary[] = [];
+  for (const filename of filenames) {
+    const id = filename.slice(0, -3);
+    if (!isPersonalityId(id)) {
+      warnAboutCatalogEntry(warn, filename, 'filename stem is not a valid personality ID');
+      continue;
+    }
+
+    const candidate = readRegularCandidate(path.join(libraryDir, filename));
+    if (candidate.status !== 'ok') {
+      warnAboutCatalogEntry(
+        warn,
+        filename,
+        candidate.status === 'missing'
+          ? 'file disappeared before it could be read'
+          : candidate.message,
+      );
+      continue;
+    }
+
+    try {
+      summaries.push(
+        personalitySummary(
+          parsePersonalityMarkdown(candidate.raw, { mode: 'library', expectedId: id }),
+        ),
+      );
+    } catch (error: unknown) {
+      warnAboutCatalogEntry(warn, filename, `invalid document: ${errorDetail(error)}`);
+    }
+  }
+
+  return summaries.sort(compareCatalogEntries);
 }
 
 export function readPersonality(
-  _libraryDir: string,
-  _id: string,
-  _warn?: (message: string) => void,
+  libraryDir: string,
+  id: string,
+  warn?: (message: string) => void,
 ): PersonalityDetail | null {
-  throw new Error('Personality catalog reads are not implemented');
+  if (!isPersonalityId(id)) throw new PersonalityParseError('Invalid personality ID');
+
+  const filename = `${id}.md`;
+  const candidate = readRegularCandidate(path.join(libraryDir, filename));
+  if (candidate.status === 'missing') return null;
+  if (candidate.status === 'invalid') {
+    const message = catalogMessage(`Invalid personality "${id}": ${candidate.message}`);
+    warn?.(message);
+    throw new PersonalityParseError(message);
+  }
+
+  try {
+    return personalityDetail(
+      parsePersonalityMarkdown(candidate.raw, { mode: 'library', expectedId: id }),
+    );
+  } catch (error: unknown) {
+    const message = catalogMessage(`Invalid personality "${id}": ${errorDetail(error)}`);
+    warn?.(message);
+    throw new PersonalityParseError(message);
+  }
 }
 
 export function resolvePersonalitySeedDir(options: ResolvePersonalitySeedDirOptions): string {
