@@ -22,6 +22,7 @@ import { TilingLayout } from './components/TilingLayout';
 import { NewTaskDialog } from './components/NewTaskDialog';
 import { BroadcastDialog } from './components/BroadcastDialog';
 import { HelpDialog } from './components/HelpDialog';
+import { PersonalityLibraryDialog } from './components/PersonalityLibraryDialog';
 import { SettingsDialog } from './components/SettingsDialog';
 import { WindowTitleBar } from './components/WindowTitleBar';
 import { FocusModeTaskIndicators } from './components/FocusModeTaskIndicators';
@@ -47,6 +48,7 @@ import {
   navigateTask,
   setPendingAction,
   toggleHelpDialog,
+  togglePersonalityLibraryDialog,
   toggleSettingsDialog,
   sendActivePrompt,
   spawnShellForTask,
@@ -551,6 +553,7 @@ function App() {
       if (
         store.showNewTaskDialog ||
         store.showHelpDialog ||
+        store.showPersonalityLibraryDialog ||
         store.showSettingsDialog ||
         store.showBroadcastDialog
       )
@@ -683,8 +686,13 @@ function App() {
       toggleSidebar: () => toggleSidebar(),
       toggleFocusMode: () => toggleTaskFocusMode(),
       toggleHelp: () => toggleHelpDialog(),
+      togglePersonalityLibrary: () => togglePersonalityLibraryDialog(),
       toggleSettings: () => toggleSettingsDialog(),
       closeDialogs: () => {
+        if (store.showPersonalityLibraryDialog) {
+          togglePersonalityLibraryDialog(false);
+          return;
+        }
         if (store.showArena) {
           closeArena();
           return;
@@ -912,6 +920,10 @@ function App() {
         <SettingsDialog
           open={store.showSettingsDialog}
           onClose={() => toggleSettingsDialog(false)}
+        />
+        <PersonalityLibraryDialog
+          open={store.showPersonalityLibraryDialog}
+          onClose={() => togglePersonalityLibraryDialog(false)}
         />
         <Show when={store.showArena}>
           <ArenaOverlay onClose={closeArena} />

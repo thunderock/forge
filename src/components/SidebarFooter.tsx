@@ -5,18 +5,32 @@ import {
   getMergedLineTotals,
   toggleHelpDialog,
   toggleArena,
+  togglePersonalityLibraryDialog,
   hasAnyCoordinatorTask,
+  resolvedBindings,
   startMCPStatusPolling,
   stopMCPStatusPolling,
 } from '../store/store';
 import { theme } from '../lib/theme';
 import { sf } from '../lib/fontScale';
 import { alt, mod } from '../lib/platform';
+import { formatKeyCombo } from '../lib/keybindings';
+import { LibraryIcon } from './icons';
 
 export function SidebarFooter() {
   const mergedTasksToday = createMemo(() => getMergedTasksTodayCount());
   const mergedLines = createMemo(() => getMergedLineTotals());
   const hasCoordinator = createMemo(() => hasAnyCoordinatorTask());
+  const personalityShortcut = createMemo(() =>
+    resolvedBindings().find((binding) => binding.id === 'app.personality-library'),
+  );
+  const personalityShortcutLabel = createMemo(() => {
+    const binding = personalityShortcut();
+    return binding ? formatKeyCombo(binding) : 'Unbound';
+  });
+  const personalityButtonLabel = createMemo(
+    () => `Open Personality Library (${personalityShortcutLabel()})`,
+  );
 
   createEffect(() => {
     if (hasCoordinator()) {
@@ -171,6 +185,33 @@ export function SidebarFooter() {
             <path d="M13 3L3 13M4 9L7 12" />
           </svg>
           Arena
+        </button>
+        <button
+          type="button"
+          class="personality-library-footer-button"
+          onClick={() => togglePersonalityLibraryDialog(true)}
+          title={personalityButtonLabel()}
+          aria-label={personalityButtonLabel()}
+          style={{
+            width: '100%',
+            'min-height': '40px',
+            display: 'flex',
+            'align-items': 'center',
+            'justify-content': 'center',
+            gap: '8px',
+            background: 'transparent',
+            border: `1px solid ${theme.border}`,
+            'border-radius': '8px',
+            padding: '8px 16px',
+            'font-size': sf(14),
+            color: theme.fgMuted,
+            cursor: 'pointer',
+            'font-family': 'inherit',
+            'font-weight': '600',
+          }}
+        >
+          <LibraryIcon size={14} />
+          Personalities
         </button>
       </div>
 

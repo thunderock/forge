@@ -78,3 +78,17 @@ export function GitGraphIcon(props: IconProps): JSX.Element {
     </SvgIcon>
   );
 }
+
+export function LibraryIcon(props: IconProps): JSX.Element {
+  return (
+    <SvgIcon {...props}>
+      <path
+        d="M1.75 2.25h3.5A2.75 2.75 0 0 1 8 5v8.75A2.75 2.75 0 0 0 5.25 11h-3.5V2.25Zm12.5 0h-3.5A2.75 2.75 0 0 0 8 5v8.75A2.75 2.75 0 0 1 10.75 11h3.5V2.25Z"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.25"
+        stroke-linejoin="round"
+      />
+    </SvgIcon>
+  );
+}

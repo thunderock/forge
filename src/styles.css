@@ -2303,6 +2303,12 @@ body.dragging-task * {
   color: var(--fg);
 }
 
+.personality-library-footer-button:hover {
+  border-color: color-mix(in srgb, var(--accent) 36%, var(--border)) !important;
+  background: color-mix(in srgb, var(--accent) 8%, var(--bg-hover)) !important;
+  color: var(--fg) !important;
+}
+
 .personality-library-body {
   min-height: 0;
   flex: 1;
