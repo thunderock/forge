@@ -1,4 +1,6 @@
 import { createHash } from 'node:crypto';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   PersonalityParseError,
@@ -11,6 +13,71 @@ import {
 
 const BOM = '\uFEFF';
 const VALID_HASH = 'a'.repeat(64);
+const REPOSITORY_ROOT = join(__dirname, '..', '..');
+const PACKAGED_SEED_DIR = join(REPOSITORY_ROOT, 'seeds', 'personalities');
+const OCR_LICENSE_PATH = join(REPOSITORY_ROOT, 'LICENSES', 'open-code-review-Apache-2.0.txt');
+const OCR_LICENSE_SHA256 = '1037b28673801f723501d895d0b440a9738c357e83e9f2bdbdba3a7d3baa4b62';
+const REQUIRED_BODY_HEADINGS = [
+  '## Focus Areas',
+  '## Approach',
+  '## Standards',
+  '## Anti-Patterns',
+] as const;
+const PROHIBITED_BODY_PHRASES = [
+  'conducting a code review',
+  'What You Look For',
+  'Your Review Approach',
+  'Your Output Style',
+  'Agency Reminder',
+  'Forge',
+  'pane',
+  'worktree',
+  'sibling',
+  'Combine',
+] as const;
+const PACKAGED_SEED_CONTRACTS = [
+  {
+    filename: 'code-quality-engineer.md',
+    id: 'code-quality-engineer',
+    name: 'Code Quality Engineer',
+    badge: 'QE',
+    color: '#2FD198',
+    sourcePersona: 'quality.md',
+    topics: ['readability', 'naming', 'complexity', 'consistent error handling'],
+  },
+  {
+    filename: 'principal-engineer.md',
+    id: 'principal-engineer',
+    name: 'Principal Engineer',
+    badge: 'PE',
+    color: '#7A78FF',
+    sourcePersona: 'principal.md',
+    topics: [
+      'architecture',
+      'maintainability',
+      'scalability',
+      'api design',
+      'cross-cutting concerns',
+    ],
+  },
+  {
+    filename: 'ai-engineer.md',
+    id: 'ai-engineer',
+    name: 'AI Engineer',
+    badge: 'AI',
+    color: '#FF944D',
+    sourcePersona: 'ai.md',
+    topics: [
+      'prompt design',
+      'robust model integration',
+      'guardrails',
+      'cost',
+      'latency',
+      'evaluation',
+      'data handling',
+    ],
+  },
+] as const;
 const SEED_METADATA = [
   'id: code-quality-engineer',
   'name: "  Code Quality Engineer  "',
@@ -71,6 +138,11 @@ function replaceMetadataLine(
 
 function sha256(raw: string): string {
   return createHash('sha256').update(raw, 'utf8').digest('hex');
+}
+
+function readRequiredRepositoryFile(filePath: string): string {
+  if (!existsSync(filePath)) throw new Error(`Missing required repository file: ${filePath}`);
+  return readFileSync(filePath, 'utf8');
 }
 
 function expectParseError(raw: string, options: ParsePersonalityMarkdownOptions): void {
@@ -398,5 +470,102 @@ describe('strict frontmatter and field validation', () => {
 
   it.each(invalidCases)('rejects $name', ({ raw, options }) => {
     expectParseError(raw, options);
+  });
+});
+
+describe('D-01/D-02/D-03/D-04 packaged personality seed contract', () => {
+  it('contains exactly the three canonical built-in seed filenames', () => {
+    if (!existsSync(PACKAGED_SEED_DIR)) {
+      throw new Error(`Missing canonical seed directory: ${PACKAGED_SEED_DIR}`);
+    }
+
+    expect(readdirSync(PACKAGED_SEED_DIR).sort()).toEqual(
+      PACKAGED_SEED_CONTRACTS.map(({ filename }) => filename).sort(),
+    );
+  });
+
+  it('honors D-04 with exact revision-one identity metadata and attribution comments', () => {
+    for (const contract of PACKAGED_SEED_CONTRACTS) {
+      const raw = readRequiredRepositoryFile(join(PACKAGED_SEED_DIR, contract.filename));
+      const parsed = parsePersonalityMarkdown(raw, { mode: 'seed', expectedId: contract.id });
+      const expectedNotice = [
+        '---',
+        `# Modified from the Open Code Review ${contract.sourcePersona} persona for code-writing use.`,
+        '# Source: https://github.com/spencermarx/open-code-review',
+        '# License: Apache-2.0; see LICENSES/open-code-review-Apache-2.0.txt',
+      ].join('\n');
+
+      expect(raw.startsWith(`${expectedNotice}\n`)).toBe(true);
+      expect(raw).not.toMatch(/\/opt\/homebrew|@open-code-review\//);
+      expect(parsed.metadata).toEqual({
+        id: contract.id,
+        name: contract.name,
+        badge: contract.badge,
+        color: contract.color,
+        builtin: true,
+        seedRevision: 1,
+      });
+      expect(parsed.metadata).not.toHaveProperty('pristineHash');
+      expect(parsed.markdown).not.toContain('Open Code Review');
+      expect(parsed.markdown).not.toContain('Apache-2.0');
+    }
+  });
+
+  it('honors D-01 and D-02 with coding identities, retained topics, and normalized bodies', () => {
+    for (const contract of PACKAGED_SEED_CONTRACTS) {
+      const raw = readRequiredRepositoryFile(join(PACKAGED_SEED_DIR, contract.filename));
+      const { markdown } = parsePersonalityMarkdown(raw, {
+        mode: 'seed',
+        expectedId: contract.id,
+      });
+      const focusHeadingOffset = markdown.indexOf('\n\n## Focus Areas\n');
+      const roleParagraph = markdown.slice(0, focusHeadingOffset).trim();
+
+      expect(focusHeadingOffset).toBeGreaterThan(0);
+      expect(roleParagraph).toContain(`You are a **${contract.name}**`);
+      expect(roleParagraph).not.toContain('\n\n');
+      expect(markdown.match(/^#{1,6} .+$/gm)).toEqual(REQUIRED_BODY_HEADINGS);
+      expect(markdown).not.toMatch(/^# /m);
+
+      const normalizedBody = markdown.toLowerCase();
+      for (const topic of contract.topics) expect(normalizedBody).toContain(topic);
+    }
+  });
+
+  it('honors D-03 by excluding review-pipeline and application-workflow authority', () => {
+    for (const contract of PACKAGED_SEED_CONTRACTS) {
+      const raw = readRequiredRepositoryFile(join(PACKAGED_SEED_DIR, contract.filename));
+      const { markdown } = parsePersonalityMarkdown(raw, {
+        mode: 'seed',
+        expectedId: contract.id,
+      });
+      const normalizedBody = markdown.toLowerCase();
+
+      for (const phrase of PROHIBITED_BODY_PHRASES) {
+        expect(normalizedBody).not.toContain(phrase.toLowerCase());
+      }
+    }
+  });
+
+  it('pins the complete repository Apache-2.0 license to the canonical OCR bytes', () => {
+    const license = readRequiredRepositoryFile(OCR_LICENSE_PATH);
+    const requiredSections = [
+      '1. Definitions.',
+      '2. Grant of Copyright License.',
+      '3. Grant of Patent License.',
+      '4. Redistribution.',
+      '5. Submission of Contributions.',
+      '6. Trademarks.',
+      '7. Disclaimer of Warranty.',
+      '8. Limitation of Liability.',
+      '9. Accepting Warranty or Additional Liability.',
+    ];
+
+    expect(sha256(license)).toBe(OCR_LICENSE_SHA256);
+    expect(license).toContain('Apache License');
+    expect(license).toContain('Version 2.0, January 2004');
+    for (const section of requiredSections) expect(license).toContain(section);
+    expect(license).toContain('END OF TERMS AND CONDITIONS');
+    expect(license).toContain('Copyright 2026 Open Code Review Contributors');
   });
 });
