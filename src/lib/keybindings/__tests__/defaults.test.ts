@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { DEFAULT_BINDINGS } from '../defaults';
+import { modifiersMatch } from '../match';
 
 const APP_LAYER_IDS = [
   'app.nav.row-up',
@@ -25,6 +26,7 @@ const APP_LAYER_IDS = [
   'app.toggle-help',
   'app.toggle-help-f1',
   'app.toggle-settings',
+  'app.personality-library',
   'app.close-dialogs',
   'app.reset-zoom',
   ...Array.from({ length: 9 }, (_, i) => `app.nav.jump-to-task-${i + 1}`),
@@ -96,6 +98,46 @@ describe('DEFAULT_BINDINGS', () => {
           `${b.id} uses meta on platform:both — should use cmdOrCtrl`,
         ).toBe(true);
       }
+    }
+  });
+
+  it('defines one exact, conflict-free Personality Library shortcut on macOS and Linux', () => {
+    const matches = DEFAULT_BINDINGS.filter((binding) => binding.id === 'app.personality-library');
+
+    expect(matches).toEqual([
+      {
+        id: 'app.personality-library',
+        layer: 'app',
+        category: 'App',
+        description: 'Toggle Personality Library',
+        platform: 'both',
+        key: 'Y',
+        modifiers: { cmdOrCtrl: true, shift: true },
+        action: 'togglePersonalityLibrary',
+        global: true,
+        dialogSafe: true,
+      },
+    ]);
+
+    const personalityBinding = matches[0];
+    for (const isMac of [true, false]) {
+      const conflicts = DEFAULT_BINDINGS.filter((binding) => {
+        const platformMatches =
+          binding.platform === 'both' ||
+          (isMac && binding.platform === 'mac') ||
+          (!isMac && binding.platform === 'linux');
+        return (
+          binding.id !== personalityBinding.id &&
+          platformMatches &&
+          binding.key.toLowerCase() === personalityBinding.key.toLowerCase() &&
+          modifiersMatch(binding.modifiers, personalityBinding.modifiers, isMac)
+        );
+      });
+
+      expect(
+        conflicts,
+        `Personality Library default conflicts on ${isMac ? 'macOS' : 'Linux'}`,
+      ).toEqual([]);
     }
   });
 });

@@ -346,6 +346,18 @@ export const DEFAULT_BINDINGS: KeyBinding[] = [
     dialogSafe: true,
   },
   {
+    id: 'app.personality-library',
+    layer: 'app',
+    category: 'App',
+    description: 'Toggle Personality Library',
+    platform: 'both',
+    key: 'Y',
+    modifiers: { cmdOrCtrl: true, shift: true },
+    action: 'togglePersonalityLibrary',
+    global: true,
+    dialogSafe: true,
+  },
+  {
     id: 'app.close-dialogs',
     layer: 'app',
     category: 'App',

@@ -168,6 +168,63 @@ describe('registerFromRegistry — jump-to-task bindings', () => {
   });
 });
 
+describe('registerFromRegistry — dialog-safe Personality Library binding', () => {
+  let keydownHandler: ((event: KeyboardEvent) => void) | undefined;
+
+  beforeEach(() => {
+    vi.stubGlobal('document', {
+      querySelector: (selector: string) => (selector === '.dialog-overlay' ? {} : null),
+    });
+    vi.stubGlobal('window', {
+      addEventListener: (type: string, handler: EventListenerOrEventListenerObject) => {
+        if (type === 'keydown' && typeof handler === 'function') {
+          keydownHandler = handler as (event: KeyboardEvent) => void;
+        }
+      },
+      removeEventListener: vi.fn(),
+    });
+  });
+
+  afterEach(() => {
+    keydownHandler = undefined;
+    vi.unstubAllGlobals();
+  });
+
+  it('fires Ctrl+Shift+Y over a dialog and rejects the wrong modifiers', () => {
+    const togglePersonalityLibrary = vi.fn();
+    const cleanupRegistry = registerFromRegistry(DEFAULT_BINDINGS, { togglePersonalityLibrary });
+    const cleanupShortcuts = initShortcuts();
+    const wrongModifiers: KeyboardEventStub = {
+      key: 'Y',
+      ctrlKey: true,
+      metaKey: false,
+      altKey: false,
+      shiftKey: false,
+      target: null,
+      preventDefault: vi.fn(),
+      stopPropagation: vi.fn(),
+    };
+    const event: KeyboardEventStub = {
+      ...wrongModifiers,
+      shiftKey: true,
+      preventDefault: vi.fn(),
+      stopPropagation: vi.fn(),
+    };
+
+    keydownHandler?.(wrongModifiers as KeyboardEvent);
+    keydownHandler?.(event as KeyboardEvent);
+
+    expect(togglePersonalityLibrary).toHaveBeenCalledTimes(1);
+    expect(wrongModifiers.preventDefault).not.toHaveBeenCalled();
+    expect(wrongModifiers.stopPropagation).not.toHaveBeenCalled();
+    expect(event.preventDefault).toHaveBeenCalledTimes(1);
+    expect(event.stopPropagation).toHaveBeenCalledTimes(1);
+
+    cleanupShortcuts();
+    cleanupRegistry();
+  });
+});
+
 describe('registerZoomShortcuts', () => {
   let keydownHandler: ((event: KeyboardEvent) => void) | undefined;
 
