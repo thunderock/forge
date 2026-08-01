@@ -130,6 +130,14 @@
       {
         "from": "docker/",
         "to": "docker/"
+      },
+      {
+        "from": "seeds/personalities/",
+        "to": "seeds/personalities/"
+      },
+      {
+        "from": "LICENSES/open-code-review-Apache-2.0.txt",
+        "to": "LICENSES/open-code-review-Apache-2.0.txt"
       }
     ],
     "linux": {

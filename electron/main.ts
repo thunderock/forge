@@ -10,6 +10,8 @@ import { killAllAgents } from './ipc/pty.js';
 import { stopAllPlanWatchers } from './ipc/plans.js';
 import { stopAllStepsWatchers } from './ipc/steps.js';
 import { IPC } from './ipc/channels.js';
+import { getStateDir } from './ipc/persistence.js';
+import { resolvePersonalitySeedDir, seedBuiltInPersonalities } from './ipc/personalities.js';
 import { resolveUserShell } from './user-shell.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -210,6 +212,21 @@ app.whenReady().then(() => {
       callback(false);
     },
   );
+
+  try {
+    const personalitySeedReport = seedBuiltInPersonalities({
+      seedDir: resolvePersonalitySeedDir({
+        isPackaged: app.isPackaged,
+        resourcesPath: process.resourcesPath,
+        mainModuleDir: __dirname,
+      }),
+      libraryDir: path.join(getStateDir(), 'personalities'),
+    });
+    // eslint-disable-next-line no-console -- Emit one startup report for support diagnostics.
+    console.info('[personalities] Seed reconciliation:', personalitySeedReport);
+  } catch (error: unknown) {
+    console.warn('[personalities] Seed reconciliation failed:', error);
+  }
 
   createWindow();
 });

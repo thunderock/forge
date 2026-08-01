@@ -2,7 +2,7 @@ import { app } from 'electron';
 import fs from 'fs';
 import path from 'path';
 
-function getStateDir(): string {
+export function getStateDir(): string {
   let dir = app.getPath('userData');
   // Use separate dir for dev mode
   if (!app.isPackaged) {

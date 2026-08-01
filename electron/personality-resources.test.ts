@@ -95,6 +95,7 @@ describe('D-05/D-11 packaged personality startup contract', () => {
     const readyOffset = main.indexOf('app.whenReady().then(() => {');
     const seedOffset = main.indexOf('seedBuiltInPersonalities(', readyOffset);
     const windowOffset = main.indexOf('createWindow();', readyOffset);
+    const startupBeforeWindow = main.slice(readyOffset, windowOffset);
 
     expect(readyOffset).toBeGreaterThanOrEqual(0);
     expect(seedOffset).toBeGreaterThan(readyOffset);
@@ -104,5 +105,11 @@ describe('D-05/D-11 packaged personality startup contract', () => {
     expect(main).toContain('resourcesPath: process.resourcesPath');
     expect(main).toContain('mainModuleDir: __dirname');
     expect(main).not.toContain('process.cwd()');
+    expect(startupBeforeWindow).toMatch(
+      /try\s*{[\s\S]*seedBuiltInPersonalities\([\s\S]*}\s*catch\s*\(/,
+    );
+    expect(startupBeforeWindow).toContain(
+      "console.warn('[personalities] Seed reconciliation failed:'",
+    );
   });
 });
