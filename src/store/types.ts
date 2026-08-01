@@ -1,4 +1,4 @@
-import type { AgentDef, StepEntry, WorktreeStatus } from '../ipc/types';
+import type { AgentDef, PersonalitySummary, StepEntry, WorktreeStatus } from '../ipc/types';
 import type { DockerSource } from '../lib/docker';
 import type { LookPreset, AppearanceMode } from '../lib/look';
 import type { KeyBinding } from '../lib/keybindings';
@@ -332,6 +332,7 @@ export interface AppStore {
   customAgents: AgentDef[];
   /** Global per-agent last-model memory, keyed by agent id (MDL-05). */
   lastModelSelectionByAgentId: Record<string, ModelSelection>;
+  personalities: PersonalitySummary[];
   showNewTaskDialog: boolean;
   /** Broadcast-prompt dialog visibility. Targets live running agents (not a new
    *  task), so it opens regardless of whether any project is linked. */
@@ -352,6 +353,7 @@ export interface AppStore {
   placeholderFocusedButton: 'add-task' | 'add-terminal';
   showHelpDialog: boolean;
   showSettingsDialog: boolean;
+  showPersonalityLibraryDialog: boolean;
   pendingAction: PendingAction | null;
   notification: string | null;
   completedTaskDate: string;

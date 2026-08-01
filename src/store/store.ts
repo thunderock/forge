@@ -82,6 +82,11 @@ export {
 } from './navigation';
 export { broadcast, getBroadcastTargetCount, getBroadcastPending } from './broadcast';
 export {
+  readPersonality,
+  refreshPersonalities,
+  togglePersonalityLibraryDialog,
+} from './personalities';
+export {
   registerFocusFn,
   unregisterFocusFn,
   triggerFocus,

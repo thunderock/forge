@@ -1,15 +1,26 @@
+import { IPC } from '../../electron/ipc/channels';
+import { invoke } from '../lib/ipc';
 import type { PersonalityDetail, PersonalitySummary } from '../ipc/types';
+import { setStore, store } from './core';
 
 export async function refreshPersonalities(
-  _commitIf: () => boolean,
+  commitIf: () => boolean,
 ): Promise<PersonalitySummary[] | null> {
-  throw new Error('Not implemented');
+  const response = await invoke<unknown>(IPC.ListPersonalities);
+  if (!Array.isArray(response)) {
+    throw new Error('Invalid personality catalog response');
+  }
+
+  const personalities = response as PersonalitySummary[];
+  if (!commitIf()) return null;
+  setStore('personalities', personalities);
+  return personalities;
 }
 
-export async function readPersonality(_id: string): Promise<PersonalityDetail | null> {
-  throw new Error('Not implemented');
+export async function readPersonality(id: string): Promise<PersonalityDetail | null> {
+  return invoke<PersonalityDetail | null>(IPC.ReadPersonality, { id });
 }
 
-export function togglePersonalityLibraryDialog(_show?: boolean): void {
-  throw new Error('Not implemented');
+export function togglePersonalityLibraryDialog(show?: boolean): void {
+  setStore('showPersonalityLibraryDialog', show ?? !store.showPersonalityLibraryDialog);
 }
