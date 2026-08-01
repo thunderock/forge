@@ -40,6 +40,7 @@ const PACKAGED_SEED_CONTRACTS = [
     filename: 'code-quality-engineer.md',
     id: 'code-quality-engineer',
     name: 'Code Quality Engineer',
+    article: 'a',
     badge: 'QE',
     color: '#2FD198',
     sourcePersona: 'quality.md',
@@ -49,6 +50,7 @@ const PACKAGED_SEED_CONTRACTS = [
     filename: 'principal-engineer.md',
     id: 'principal-engineer',
     name: 'Principal Engineer',
+    article: 'a',
     badge: 'PE',
     color: '#7A78FF',
     sourcePersona: 'principal.md',
@@ -64,6 +66,7 @@ const PACKAGED_SEED_CONTRACTS = [
     filename: 'ai-engineer.md',
     id: 'ai-engineer',
     name: 'AI Engineer',
+    article: 'an',
     badge: 'AI',
     color: '#FF944D',
     sourcePersona: 'ai.md',
@@ -522,7 +525,7 @@ describe('D-01/D-02/D-03/D-04 packaged personality seed contract', () => {
       const roleParagraph = markdown.slice(0, focusHeadingOffset).trim();
 
       expect(focusHeadingOffset).toBeGreaterThan(0);
-      expect(roleParagraph).toContain(`You are a **${contract.name}**`);
+      expect(roleParagraph).toContain(`You are ${contract.article} **${contract.name}**`);
       expect(roleParagraph).not.toContain('\n\n');
       expect(markdown.match(/^#{1,6} .+$/gm)).toEqual(REQUIRED_BODY_HEADINGS);
       expect(markdown).not.toMatch(/^# /m);
