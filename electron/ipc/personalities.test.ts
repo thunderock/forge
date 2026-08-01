@@ -1210,6 +1210,28 @@ describe('D-07/D-15/D-16 bounded personality catalog reads', () => {
     expect(readPersonality(libraryDir, 'disappearing')).toBeNull();
   });
 
+  it('keeps filesystem paths out of public read errors while retaining a bounded warning', () => {
+    const id = 'unreadable-detail';
+    const filePath = writeLibraryFile(id, customPersonality(id));
+    const originalReadFileSync = fs.readFileSync;
+    const warnings: string[] = [];
+    vi.spyOn(fs, 'readFileSync').mockImplementation((...args) => {
+      if (String(args[0]) === filePath) {
+        throw Object.assign(new Error(`EACCES: permission denied, open '${filePath}'`), {
+          code: 'EACCES',
+        });
+      }
+      return Reflect.apply(originalReadFileSync, fs, args);
+    });
+
+    expect(() => readPersonality(libraryDir, id, (message) => warnings.push(message))).toThrowError(
+      `Invalid personality "${id}"`,
+    );
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('read failed');
+    expect(warnings[0].length).toBeLessThanOrEqual(500);
+  });
+
   it.each(['symlink', 'directory', 'fifo', 'oversized', 'malformed'] as const)(
     'rejects an invalid detail %s with a bounded error and never reads unsafe file types',
     (type) => {
@@ -1244,7 +1266,7 @@ describe('D-07/D-15/D-16 bounded personality catalog reads', () => {
       }
 
       expect(thrown).toBeInstanceOf(Error);
-      expect((thrown as Error).message.length).toBeGreaterThan(0);
+      expect((thrown as Error).message).toBe(`Invalid personality "${id}"`);
       expect((thrown as Error).message.length).toBeLessThanOrEqual(500);
       if (readSpy) {
         expect(readSpy.mock.calls.some(([readPath]) => String(readPath) === filePath)).toBe(false);

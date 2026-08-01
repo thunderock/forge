@@ -100,6 +100,7 @@ describe('personality IPC contract', () => {
     const readHandler = handlerSource(register, 'ReadPersonality');
 
     expect(readHandler).toContain("assertString(args?.id, 'id')");
+    expect(readHandler).toMatch(/Object\.keys\(args\)\.some\(\(key\) => key !== 'id'\)/);
     expect(readHandler).toMatch(/if \(!isPersonalityId\(args\.id\)\)/);
     expect(readHandler).toMatch(/readPersonality\([^,]+, args\.id/);
     for (const field of FORBIDDEN_CONTRACT_FIELDS) {

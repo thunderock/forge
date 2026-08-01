@@ -762,6 +762,9 @@ export function registerAllHandlers(win: BrowserWindow): void {
   );
   ipcMain.handle(IPC.ReadPersonality, (_e, args) => {
     assertString(args?.id, 'id');
+    if (Object.keys(args).some((key) => key !== 'id')) {
+      throw new Error('Invalid personality request');
+    }
     if (!isPersonalityId(args.id)) throw new Error('Invalid personality id');
     return readPersonality(personalityLibraryDir, args.id, (message) =>
       logWarn('personalities', message),

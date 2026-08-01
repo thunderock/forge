@@ -380,6 +380,15 @@ function personalityDetail(personality: ParsedPersonalityMarkdown): PersonalityD
   return { ...personalitySummary(personality), markdown: personality.markdown };
 }
 
+function invalidCatalogRead(
+  id: string,
+  internalDetail: string,
+  warn: ((message: string) => void) | undefined,
+): never {
+  warn?.(catalogMessage(`Invalid personality "${id}": ${internalDetail}`));
+  throw new PersonalityParseError(`Invalid personality "${id}"`);
+}
+
 function compareCatalogEntries(a: PersonalitySummary, b: PersonalitySummary): number {
   if (a.name < b.name) return -1;
   if (a.name > b.name) return 1;
@@ -512,9 +521,7 @@ export function readPersonality(
   const candidate = readRegularCandidate(path.join(libraryDir, filename));
   if (candidate.status === 'missing') return null;
   if (candidate.status === 'invalid') {
-    const message = catalogMessage(`Invalid personality "${id}": ${candidate.message}`);
-    warn?.(message);
-    throw new PersonalityParseError(message);
+    return invalidCatalogRead(id, candidate.message, warn);
   }
 
   try {
@@ -522,9 +529,7 @@ export function readPersonality(
       parsePersonalityMarkdown(candidate.raw, { mode: 'library', expectedId: id }),
     );
   } catch (error: unknown) {
-    const message = catalogMessage(`Invalid personality "${id}": ${errorDetail(error)}`);
-    warn?.(message);
-    throw new PersonalityParseError(message);
+    return invalidCatalogRead(id, errorDetail(error), warn);
   }
 }
 
