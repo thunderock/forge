@@ -23,6 +23,30 @@ export interface ParsePersonalityMarkdownOptions {
   expectedId?: string;
 }
 
+export interface ResolvePersonalitySeedDirOptions {
+  isPackaged: boolean;
+  resourcesPath: string;
+  mainModuleDir: string;
+}
+
+export interface SeedBuiltInPersonalitiesOptions {
+  seedDir: string;
+  libraryDir: string;
+}
+
+export interface PersonalitySeedError {
+  id?: string;
+  message: string;
+}
+
+export interface PersonalitySeedReport {
+  seeded: string[];
+  upgraded: string[];
+  preserved: string[];
+  unchanged: string[];
+  errors: PersonalitySeedError[];
+}
+
 export class PersonalityParseError extends Error {
   constructor(message: string) {
     super(message);
@@ -61,6 +85,8 @@ const PERSONALITY_ID = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 const PERSONALITY_BADGE = /^[A-Z0-9]{1,4}$/;
 const PERSONALITY_COLOR = /^#(?:[0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$/;
 const SHA256_HEX = /^[a-f0-9]{64}$/;
+
+export const MAX_PERSONALITY_FILE_BYTES = 2 * 1024 * 1024;
 
 function fail(message: string): never {
   throw new PersonalityParseError(message);
@@ -319,4 +345,14 @@ export function computeInstalledPersonalityPayloadHash(installedRaw: string): st
 
 export function isPersonalityId(id: unknown): id is string {
   return typeof id === 'string' && PERSONALITY_ID.test(id);
+}
+
+export function resolvePersonalitySeedDir(_options: ResolvePersonalitySeedDirOptions): string {
+  throw new Error('Personality seed directory resolution is not implemented');
+}
+
+export function seedBuiltInPersonalities(
+  _options: SeedBuiltInPersonalitiesOptions,
+): PersonalitySeedReport {
+  throw new Error('Personality seed reconciliation is not implemented');
 }

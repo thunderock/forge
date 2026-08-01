@@ -1,13 +1,17 @@
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import fs, { existsSync, readFileSync, readdirSync } from 'node:fs';
+import os from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  MAX_PERSONALITY_FILE_BYTES,
   PersonalityParseError,
   computeInstalledPersonalityPayloadHash,
   isPersonalityId,
   materializePersonalitySeed,
   parsePersonalityMarkdown,
+  seedBuiltInPersonalities,
   type ParsePersonalityMarkdownOptions,
 } from './personalities.js';
 
@@ -150,6 +154,87 @@ function readRequiredRepositoryFile(filePath: string): string {
 
 function expectParseError(raw: string, options: ParsePersonalityMarkdownOptions): void {
   expect(() => parsePersonalityMarkdown(raw, options)).toThrowError(PersonalityParseError);
+}
+
+interface SyntheticSeedOptions {
+  id: string;
+  revision?: number;
+  name?: string;
+  badge?: string;
+  color?: string;
+  body?: string;
+}
+
+function syntheticSeed({
+  id,
+  revision = 1,
+  name = id,
+  badge = 'TS',
+  color = '#123ABC',
+  body = `You are **${name}**.\n\n## Focus Areas\n\n- Safe changes`,
+}: SyntheticSeedOptions): string {
+  return personalityDocument(
+    [
+      `id: ${id}`,
+      `name: ${name}`,
+      `badge: ${badge}`,
+      `color: '${color}'`,
+      'builtin: true',
+      `seedRevision: ${revision}`,
+    ],
+    { body },
+  );
+}
+
+function customPersonality(id: string, body = 'Local custom guidance'): string {
+  return personalityDocument(
+    [`id: ${id}`, `name: ${id}`, 'badge: LC', "color: '#ABC'", 'builtin: false'],
+    { body },
+  );
+}
+
+function padUtf8(raw: string, targetBytes: number): string {
+  const currentBytes = Buffer.byteLength(raw, 'utf8');
+  if (currentBytes > targetBytes) throw new Error('Fixture exceeds requested byte length');
+  return raw + 'x'.repeat(targetBytes - currentBytes);
+}
+
+function sorted(values: readonly string[]): string[] {
+  return [...values].sort();
+}
+
+function expectReportedError(
+  errors: ReadonlyArray<{ id?: string; message: string }>,
+  id: string,
+): void {
+  expect(errors.some((error) => error.id === id && error.message.length > 0)).toBe(true);
+}
+
+function writeSeed(seedDir: string, id: string, raw: string): string {
+  fs.mkdirSync(seedDir, { recursive: true });
+  const filePath = join(seedDir, `${id}.md`);
+  fs.writeFileSync(filePath, raw, 'utf8');
+  return filePath;
+}
+
+function copyRepositorySeeds(seedDir: string): void {
+  fs.mkdirSync(seedDir, { recursive: true });
+  for (const filename of readdirSync(PACKAGED_SEED_DIR)) {
+    fs.copyFileSync(join(PACKAGED_SEED_DIR, filename), join(seedDir, filename));
+  }
+}
+
+function guardReadPaths(blockedPaths: readonly string[]) {
+  const blocked = new Set(blockedPaths);
+  const originalReadFileSync = fs.readFileSync;
+  return vi.spyOn(fs, 'readFileSync').mockImplementation((...args) => {
+    if (blocked.has(String(args[0]))) throw new Error(`Unexpected read: ${String(args[0])}`);
+    return Reflect.apply(originalReadFileSync, fs, args);
+  });
+}
+
+function makeFifo(filePath: string): boolean {
+  return spawnSync('mkfifo', [filePath], { stdio: 'ignore' }).status === 0;
 }
 
 describe('D-06 seed parse mode personality document contract', () => {
@@ -570,5 +655,356 @@ describe('D-01/D-02/D-03/D-04 packaged personality seed contract', () => {
     for (const section of requiredSections) expect(license).toContain(section);
     expect(license).toContain('END OF TERMS AND CONDITIONS');
     expect(license).toContain('Copyright 2026 Open Code Review Contributors');
+  });
+});
+
+describe('D-05/D-09/D-10/D-11/D-12 startup personality seed reconciliation', () => {
+  let temporaryRoot: string;
+  let seedDir: string;
+  let libraryDir: string;
+
+  beforeEach(() => {
+    temporaryRoot = fs.mkdtempSync(join(os.tmpdir(), 'personality-seed-'));
+    seedDir = join(temporaryRoot, 'packaged');
+    libraryDir = join(temporaryRoot, 'library');
+    fs.mkdirSync(seedDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    try {
+      fs.chmodSync(libraryDir, 0o700);
+    } catch {
+      // The fixture may not have created a library directory.
+    }
+    fs.rmSync(temporaryRoot, { recursive: true, force: true });
+  });
+
+  it('materializes the exact canonical set, is idempotent, and restores a deleted built-in', () => {
+    copyRepositorySeeds(seedDir);
+    const ids = PACKAGED_SEED_CONTRACTS.map(({ id }) => id).sort();
+
+    const first = seedBuiltInPersonalities({ seedDir, libraryDir });
+
+    expect(sorted(first.seeded)).toEqual(ids);
+    expect(first.upgraded).toEqual([]);
+    expect(first.preserved).toEqual([]);
+    expect(first.unchanged).toEqual([]);
+    expect(first.errors).toEqual([]);
+    for (const contract of PACKAGED_SEED_CONTRACTS) {
+      const rawSeed = readFileSync(join(seedDir, contract.filename), 'utf8');
+      const installed = readFileSync(join(libraryDir, contract.filename), 'utf8');
+      expect(installed).toBe(materializePersonalitySeed(rawSeed));
+      expect(computeInstalledPersonalityPayloadHash(installed)).toBe(sha256(rawSeed));
+    }
+
+    const second = seedBuiltInPersonalities({ seedDir, libraryDir });
+    expect(sorted(second.unchanged)).toEqual(ids);
+    expect(second.seeded).toEqual([]);
+    expect(second.upgraded).toEqual([]);
+    expect(second.preserved).toEqual([]);
+    expect(second.errors).toEqual([]);
+
+    const deletedId = 'principal-engineer';
+    fs.unlinkSync(join(libraryDir, `${deletedId}.md`));
+    const restored = seedBuiltInPersonalities({ seedDir, libraryDir });
+    expect(restored.seeded).toEqual([deletedId]);
+    expect(sorted(restored.unchanged)).toEqual(ids.filter((id) => id !== deletedId));
+    expect(readFileSync(join(libraryDir, `${deletedId}.md`), 'utf8')).toBe(
+      materializePersonalitySeed(readFileSync(join(seedDir, `${deletedId}.md`), 'utf8')),
+    );
+  });
+
+  it('backs up and atomically upgrades only a pristine strictly older built-in', () => {
+    const id = 'upgrade-target';
+    const oldSeed = syntheticSeed({ id, revision: 1, body: 'Old pristine guidance' });
+    const newSeed = syntheticSeed({ id, revision: 2, body: 'New pristine guidance' });
+    writeSeed(seedDir, id, oldSeed);
+    seedBuiltInPersonalities({ seedDir, libraryDir });
+    const installedPath = join(libraryDir, `${id}.md`);
+    const oldInstalled = readFileSync(installedPath, 'utf8');
+    writeSeed(seedDir, id, newSeed);
+
+    const report = seedBuiltInPersonalities({ seedDir, libraryDir });
+
+    expect(report.upgraded).toEqual([id]);
+    expect(report.seeded).toEqual([]);
+    expect(report.preserved).toEqual([]);
+    expect(report.unchanged).toEqual([]);
+    expect(report.errors).toEqual([]);
+    expect(readFileSync(`${installedPath}.bak`, 'utf8')).toBe(oldInstalled);
+    expect(readFileSync(installedPath, 'utf8')).toBe(materializePersonalitySeed(newSeed));
+    expect(computeInstalledPersonalityPayloadHash(readFileSync(installedPath, 'utf8'))).toBe(
+      sha256(newSeed),
+    );
+  });
+
+  it('leaves same and lower packaged revisions byte-identical even when seed bytes differ', () => {
+    const sameId = 'same-revision';
+    const lowerId = 'lower-revision';
+    writeSeed(seedDir, sameId, syntheticSeed({ id: sameId, revision: 2, body: 'Same original' }));
+    writeSeed(
+      seedDir,
+      lowerId,
+      syntheticSeed({ id: lowerId, revision: 2, body: 'Lower original' }),
+    );
+    seedBuiltInPersonalities({ seedDir, libraryDir });
+    const samePath = join(libraryDir, `${sameId}.md`);
+    const lowerPath = join(libraryDir, `${lowerId}.md`);
+    const sameBefore = readFileSync(samePath, 'utf8');
+    const lowerEdited = readFileSync(lowerPath, 'utf8').replace(
+      'Lower original',
+      'Locally edited newer revision',
+    );
+    fs.writeFileSync(lowerPath, lowerEdited, 'utf8');
+
+    writeSeed(
+      seedDir,
+      sameId,
+      syntheticSeed({ id: sameId, revision: 2, body: 'Same changed without bump' }),
+    );
+    writeSeed(
+      seedDir,
+      lowerId,
+      syntheticSeed({ id: lowerId, revision: 1, body: 'Attempted downgrade' }),
+    );
+    const report = seedBuiltInPersonalities({ seedDir, libraryDir });
+
+    expect(sorted(report.unchanged)).toEqual([lowerId, sameId].sort());
+    expect(report.upgraded).toEqual([]);
+    expect(report.preserved).toEqual([]);
+    expect(report.errors).toEqual([]);
+    expect(readFileSync(samePath, 'utf8')).toBe(sameBefore);
+    expect(readFileSync(lowerPath, 'utf8')).toBe(lowerEdited);
+  });
+
+  it.each([
+    {
+      label: 'body edit',
+      mutate: (raw: string) => raw.replace('Original guidance', 'Hand-edited guidance'),
+    },
+    {
+      label: 'metadata edit',
+      mutate: (raw: string) => raw.replace('name: edited-target', 'name: Locally Renamed'),
+    },
+    {
+      label: 'hash-line edit',
+      mutate: (raw: string) =>
+        raw.replace(/pristineHash: "[a-f0-9]{64}"/, `pristineHash: "${'f'.repeat(64)}"`),
+    },
+    {
+      label: 'malformed YAML',
+      mutate: () => '---\nid: [broken\n---\nLocal work',
+    },
+    {
+      label: 'wrong installed ID',
+      mutate: (raw: string) => raw.replace('id: edited-target', 'id: other-built-in'),
+    },
+  ])('preserves a $label when a newer packaged revision exists', ({ mutate }) => {
+    const id = 'edited-target';
+    writeSeed(seedDir, id, syntheticSeed({ id, revision: 1, body: 'Original guidance' }));
+    seedBuiltInPersonalities({ seedDir, libraryDir });
+    const installedPath = join(libraryDir, `${id}.md`);
+    const edited = mutate(readFileSync(installedPath, 'utf8'));
+    fs.writeFileSync(installedPath, edited, 'utf8');
+    writeSeed(seedDir, id, syntheticSeed({ id, revision: 2, body: 'Upstream revision two' }));
+
+    const report = seedBuiltInPersonalities({ seedDir, libraryDir });
+
+    expect(report.preserved).toEqual([id]);
+    expect(report.upgraded).toEqual([]);
+    expect(readFileSync(installedPath, 'utf8')).toBe(edited);
+    expectReportedError(report.errors, id);
+  });
+
+  it('preserves an unreadable installed candidate and continues with a valid sibling', () => {
+    const blockedId = 'unreadable-built-in';
+    const siblingId = 'valid-sibling';
+    const originalSeed = syntheticSeed({ id: blockedId, revision: 1 });
+    writeSeed(seedDir, blockedId, originalSeed);
+    seedBuiltInPersonalities({ seedDir, libraryDir });
+    const blockedPath = join(libraryDir, `${blockedId}.md`);
+    const before = readFileSync(blockedPath, 'utf8');
+    writeSeed(seedDir, blockedId, syntheticSeed({ id: blockedId, revision: 2 }));
+    writeSeed(seedDir, siblingId, syntheticSeed({ id: siblingId }));
+    const readSpy = guardReadPaths([blockedPath]);
+
+    const report = seedBuiltInPersonalities({ seedDir, libraryDir });
+
+    expect(report.preserved).toContain(blockedId);
+    expect(report.seeded).toContain(siblingId);
+    expectReportedError(report.errors, blockedId);
+    expect(readSpy.mock.calls.some(([filePath]) => String(filePath) === blockedPath)).toBe(true);
+    vi.restoreAllMocks();
+    expect(readFileSync(blockedPath, 'utf8')).toBe(before);
+  });
+
+  it.each(['symlink', 'directory', 'oversized', 'fifo'] as const)(
+    'rejects an installed $type before read, preserves it, and isolates a valid sibling',
+    (type) => {
+      const blockedId = `installed-${type}`;
+      const siblingId = `sibling-${type}`;
+      writeSeed(seedDir, blockedId, syntheticSeed({ id: blockedId }));
+      writeSeed(seedDir, siblingId, syntheticSeed({ id: siblingId }));
+      fs.mkdirSync(libraryDir, { recursive: true });
+      const blockedPath = join(libraryDir, `${blockedId}.md`);
+
+      if (type === 'symlink') {
+        const target = join(temporaryRoot, 'symlink-target.md');
+        fs.writeFileSync(
+          target,
+          materializePersonalitySeed(syntheticSeed({ id: blockedId })),
+          'utf8',
+        );
+        fs.symlinkSync(target, blockedPath);
+      } else if (type === 'directory') {
+        fs.mkdirSync(blockedPath);
+      } else if (type === 'oversized') {
+        fs.writeFileSync(blockedPath, 'x'.repeat(MAX_PERSONALITY_FILE_BYTES + 1));
+      } else if (!makeFifo(blockedPath)) {
+        return;
+      }
+
+      const readSpy = guardReadPaths([blockedPath]);
+      const report = seedBuiltInPersonalities({ seedDir, libraryDir });
+
+      expect(readSpy.mock.calls.some(([filePath]) => String(filePath) === blockedPath)).toBe(false);
+      expect(report.preserved).toContain(blockedId);
+      expect(report.seeded).toContain(siblingId);
+      expectReportedError(report.errors, blockedId);
+    },
+  );
+
+  it.each(['symlink', 'directory', 'oversized', 'fifo'] as const)(
+    'rejects a packaged $type before read and continues with a valid sibling',
+    (type) => {
+      const blockedId = `packaged-${type}`;
+      const siblingId = `packaged-sibling-${type}`;
+      const blockedPath = join(seedDir, `${blockedId}.md`);
+      writeSeed(seedDir, siblingId, syntheticSeed({ id: siblingId }));
+
+      if (type === 'symlink') {
+        const target = join(temporaryRoot, 'packaged-symlink-target.md');
+        fs.writeFileSync(target, syntheticSeed({ id: blockedId }), 'utf8');
+        fs.symlinkSync(target, blockedPath);
+      } else if (type === 'directory') {
+        fs.mkdirSync(blockedPath);
+      } else if (type === 'oversized') {
+        fs.writeFileSync(blockedPath, 'x'.repeat(MAX_PERSONALITY_FILE_BYTES + 1));
+      } else if (!makeFifo(blockedPath)) {
+        return;
+      }
+
+      const readSpy = guardReadPaths([blockedPath]);
+      const report = seedBuiltInPersonalities({ seedDir, libraryDir });
+
+      expect(readSpy.mock.calls.some(([filePath]) => String(filePath) === blockedPath)).toBe(false);
+      expect(report.seeded).toContain(siblingId);
+      expect(fs.existsSync(join(libraryDir, `${blockedId}.md`))).toBe(false);
+      expectReportedError(report.errors, blockedId);
+    },
+  );
+
+  it('allows an exactly 2 MiB packaged seed and never reads a 2 MiB plus one sibling', () => {
+    const allowedId = 'packaged-boundary';
+    const blockedId = 'packaged-too-large';
+    const allowedPath = writeSeed(
+      seedDir,
+      allowedId,
+      padUtf8(syntheticSeed({ id: allowedId }), MAX_PERSONALITY_FILE_BYTES),
+    );
+    const blockedPath = writeSeed(
+      seedDir,
+      blockedId,
+      padUtf8(syntheticSeed({ id: blockedId }), MAX_PERSONALITY_FILE_BYTES + 1),
+    );
+    const readSpy = guardReadPaths([blockedPath]);
+
+    const report = seedBuiltInPersonalities({ seedDir, libraryDir });
+
+    expect(fs.statSync(allowedPath).size).toBe(MAX_PERSONALITY_FILE_BYTES);
+    expect(report.seeded).toContain(allowedId);
+    expect(readSpy.mock.calls.some(([filePath]) => String(filePath) === allowedPath)).toBe(true);
+    expect(readSpy.mock.calls.some(([filePath]) => String(filePath) === blockedPath)).toBe(false);
+    expectReportedError(report.errors, blockedId);
+  });
+
+  it('allows an exactly 2 MiB installed candidate to participate in a pristine upgrade', () => {
+    const id = 'installed-boundary';
+    const generatedHashLineBytes = Buffer.byteLength(`pristineHash: "${'0'.repeat(64)}"\n`, 'utf8');
+    const oldSeed = padUtf8(
+      syntheticSeed({ id, revision: 1 }),
+      MAX_PERSONALITY_FILE_BYTES - generatedHashLineBytes,
+    );
+    writeSeed(seedDir, id, oldSeed);
+    seedBuiltInPersonalities({ seedDir, libraryDir });
+    const installedPath = join(libraryDir, `${id}.md`);
+    expect(fs.statSync(installedPath).size).toBe(MAX_PERSONALITY_FILE_BYTES);
+    writeSeed(seedDir, id, syntheticSeed({ id, revision: 2, body: 'Boundary upgraded' }));
+
+    const report = seedBuiltInPersonalities({ seedDir, libraryDir });
+
+    expect(report.upgraded).toEqual([id]);
+    expect(readFileSync(installedPath, 'utf8')).toBe(
+      materializePersonalitySeed(syntheticSeed({ id, revision: 2, body: 'Boundary upgraded' })),
+    );
+  });
+
+  it('isolates malformed and unreadable packaged candidates from a valid sibling', () => {
+    const malformedId = 'malformed-packaged';
+    const unreadableId = 'unreadable-packaged';
+    const siblingId = 'valid-packaged-sibling';
+    writeSeed(seedDir, malformedId, '---\nid: [broken\n---\nBroken');
+    const unreadablePath = writeSeed(seedDir, unreadableId, syntheticSeed({ id: unreadableId }));
+    writeSeed(seedDir, siblingId, syntheticSeed({ id: siblingId }));
+    guardReadPaths([unreadablePath]);
+
+    const report = seedBuiltInPersonalities({ seedDir, libraryDir });
+
+    expect(report.seeded).toEqual([siblingId]);
+    expectReportedError(report.errors, malformedId);
+    expectReportedError(report.errors, unreadableId);
+  });
+
+  it('never touches custom, copied, backup, temp, or unrelated library entries', () => {
+    writeSeed(seedDir, 'canonical-built-in', syntheticSeed({ id: 'canonical-built-in' }));
+    fs.mkdirSync(libraryDir, { recursive: true });
+    const untouched = new Map<string, string>([
+      ['local-builder.md', customPersonality('local-builder')],
+      ['built-in-copy.md', materializePersonalitySeed(syntheticSeed({ id: 'built-in-copy' }))],
+      ['canonical-built-in.md.bak', 'backup bytes'],
+      ['canonical-built-in.md.tmp', 'temp bytes'],
+      ['notes.txt', 'unrelated bytes'],
+    ]);
+    for (const [filename, raw] of untouched) {
+      fs.writeFileSync(join(libraryDir, filename), raw, 'utf8');
+    }
+
+    const report = seedBuiltInPersonalities({ seedDir, libraryDir });
+
+    expect(report.seeded).toEqual(['canonical-built-in']);
+    for (const [filename, raw] of untouched) {
+      expect(readFileSync(join(libraryDir, filename), 'utf8')).toBe(raw);
+    }
+  });
+
+  it('keeps the previous file and removes atomic temp files when an upgrade write fails', () => {
+    if (process.getuid?.() === 0) return;
+    const id = 'failed-upgrade';
+    writeSeed(seedDir, id, syntheticSeed({ id, revision: 1, body: 'Stable old body' }));
+    seedBuiltInPersonalities({ seedDir, libraryDir });
+    const installedPath = join(libraryDir, `${id}.md`);
+    const before = readFileSync(installedPath, 'utf8');
+    writeSeed(seedDir, id, syntheticSeed({ id, revision: 2, body: 'Blocked new body' }));
+    fs.chmodSync(libraryDir, 0o500);
+
+    const report = seedBuiltInPersonalities({ seedDir, libraryDir });
+
+    fs.chmodSync(libraryDir, 0o700);
+    expect(readFileSync(installedPath, 'utf8')).toBe(before);
+    expect(readdirSync(libraryDir).some((name) => name.startsWith('.forge-atomic-'))).toBe(false);
+    expect(report.upgraded).toEqual([]);
+    expect(report.preserved).toContain(id);
+    expectReportedError(report.errors, id);
   });
 });
