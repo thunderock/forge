@@ -51,6 +51,8 @@ const ALLOWED_CHANNELS = new Set([
   'load_custom_themes',
   'save_custom_theme',
   'delete_custom_theme',
+  'list_personalities',
+  'read_personality',
   'load_keybindings',
   'save_keybindings',
   '__window_is_focused',

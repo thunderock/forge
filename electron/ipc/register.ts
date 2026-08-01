@@ -87,7 +87,9 @@ import {
   loadCustomThemeFiles,
   saveCustomThemeFile,
   deleteCustomThemeFile,
+  getStateDir,
 } from './persistence.js';
+import { isPersonalityId, listPersonalities, readPersonality } from './personalities.js';
 import { loadKeybindings, saveKeybindings } from './keybindings.js';
 import {
   initAutoUpdater,
@@ -412,6 +414,7 @@ export function registerAllHandlers(win: BrowserWindow): void {
   // --- Remote access state ---
   let remoteServer: Awaited<ReturnType<typeof startRemoteServer>> | null = null;
   const taskNames = new Map<string, string>();
+  const personalityLibraryDir = path.join(getStateDir(), 'personalities');
   // Renderer-derived per-task attention (needs input, working, ready, …), pushed
   // from the renderer via Remote_UpdateTaskStatus so the mobile overview can show
   // the same richer status as the desktop. The renderer owns this computation
@@ -753,6 +756,16 @@ export function registerAllHandlers(win: BrowserWindow): void {
     assertString(args.id, 'id');
     if (!/^[a-zA-Z0-9_-]+$/.test(args.id)) throw new Error('Invalid theme id');
     deleteCustomThemeFile(args.id);
+  });
+  ipcMain.handle(IPC.ListPersonalities, () =>
+    listPersonalities(personalityLibraryDir, (message) => logWarn('personalities', message)),
+  );
+  ipcMain.handle(IPC.ReadPersonality, (_e, args) => {
+    assertString(args?.id, 'id');
+    if (!isPersonalityId(args.id)) throw new Error('Invalid personality id');
+    return readPersonality(personalityLibraryDir, args.id, (message) =>
+      logWarn('personalities', message),
+    );
   });
 
   // --- Keybindings ---

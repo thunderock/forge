@@ -47,6 +47,8 @@
   "LoadCustomThemes": "load_custom_themes",
   "SaveCustomTheme": "save_custom_theme",
   "DeleteCustomTheme": "delete_custom_theme",
+  "ListPersonalities": "list_personalities",
+  "ReadPersonality": "read_personality",
   "LoadKeybindings": "load_keybindings",
   "SaveKeybindings": "save_keybindings",
   "WindowIsFocused": "__window_is_focused",
