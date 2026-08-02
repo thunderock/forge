@@ -532,7 +532,7 @@ function warnAboutSanitizedBinding(
 
 function personalitySummary(personality: ParsedPersonalityMarkdown): PersonalitySummary {
   const { id, name, badge, color, builtin } = personality.metadata;
-  return { id, name, badge, color, builtin };
+  return { id, name, badge, color, builtin, modifiedFromSeed: false };
 }
 
 function personalityDetail(personality: ParsedPersonalityMarkdown): PersonalityDetail {

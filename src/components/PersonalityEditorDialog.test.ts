@@ -42,6 +42,7 @@ const validFields: PersonalityWriteFields = {
 const savedDetail: PersonalityDetail = {
   id: 'incident-commander',
   builtin: false,
+  modifiedFromSeed: false,
   ...validFields,
 };
 

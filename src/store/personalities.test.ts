@@ -56,6 +56,7 @@ const quality: PersonalitySummary = {
   badge: 'QE',
   color: '#2FD198',
   builtin: true,
+  modifiedFromSeed: false,
 };
 
 const principal: PersonalitySummary = {
@@ -64,6 +65,7 @@ const principal: PersonalitySummary = {
   badge: 'PE',
   color: '#7A78FF',
   builtin: true,
+  modifiedFromSeed: false,
 };
 
 const customDetail: PersonalityDetail = {
@@ -72,6 +74,7 @@ const customDetail: PersonalityDetail = {
   badge: 'IC',
   color: '#FF6A2C',
   builtin: false,
+  modifiedFromSeed: false,
   markdown: '## Role\n\nCoordinate the response.',
 };
 

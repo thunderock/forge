@@ -44,6 +44,7 @@ export interface PersonalitySummary {
   badge: string;
   color: string;
   builtin: boolean;
+  modifiedFromSeed: boolean;
 }
 
 export type PersonalityDefaultAgent = 'claude-code' | 'codex' | 'opencode';

@@ -14,6 +14,9 @@ const FORBIDDEN_CONTRACT_FIELDS = [
   'projectId',
   'seedRevision',
   'pristineHash',
+  'payloadHash',
+  'rawMetadata',
+  'parserState',
 ] as const;
 const FORBIDDEN_WRITE_FIELDS = [
   'id',
@@ -65,7 +68,14 @@ describe('personality IPC contract', () => {
     const summary = interfaceDeclaration(sharedTypes, 'PersonalitySummary');
     const detail = interfaceDeclaration(sharedTypes, 'PersonalityDetail');
 
-    expect(declaredKeys(summary)).toEqual(['id', 'name', 'badge', 'color', 'builtin']);
+    expect(declaredKeys(summary)).toEqual([
+      'id',
+      'name',
+      'badge',
+      'color',
+      'builtin',
+      'modifiedFromSeed',
+    ]);
     expect(detail).toMatch(/^export interface PersonalityDetail extends PersonalitySummary \{/);
     expect(declaredKeys(detail)[0]).toBe('markdown');
     for (const field of FORBIDDEN_CONTRACT_FIELDS) {
@@ -170,7 +180,14 @@ describe('RED: binding storage contract', () => {
     expect(sharedTypes).toMatch(
       /export type PersonalityDefaultAgent = 'claude-code' \| 'codex' \| 'opencode'/,
     );
-    expect(declaredKeys(summary)).toEqual(['id', 'name', 'badge', 'color', 'builtin']);
+    expect(declaredKeys(summary)).toEqual([
+      'id',
+      'name',
+      'badge',
+      'color',
+      'builtin',
+      'modifiedFromSeed',
+    ]);
     expect(declaredKeys(detail)).toEqual([
       'markdown',
       'defaultAgent',
@@ -203,6 +220,35 @@ describe('RED: binding storage contract', () => {
     }
     for (const field of FORBIDDEN_WRITE_FIELDS) {
       expect(createHandler).not.toMatch(new RegExp(`args\\?*\\.${field}\\b`));
+    }
+  });
+});
+
+describe('RED: modified state contract', () => {
+  it('requires one boolean status bit while keeping seed and parser plumbing private', () => {
+    const sharedTypes = readFileSync(SHARED_TYPES_PATH, 'utf8');
+    const summary = interfaceDeclaration(sharedTypes, 'PersonalitySummary');
+    const detail = interfaceDeclaration(sharedTypes, 'PersonalityDetail');
+
+    expect(summary).toMatch(/\bmodifiedFromSeed: boolean;/);
+    expect(summary).not.toMatch(/\bmodifiedFromSeed\?:/);
+    expect(declaredKeys(summary)).toEqual([
+      'id',
+      'name',
+      'badge',
+      'color',
+      'builtin',
+      'modifiedFromSeed',
+    ]);
+    expect(declaredKeys(detail)).toEqual([
+      'markdown',
+      'defaultAgent',
+      'defaultModel',
+      'defaultReasoningEffort',
+    ]);
+    for (const field of FORBIDDEN_CONTRACT_FIELDS) {
+      expect(summary).not.toMatch(new RegExp(`\\b${field}\\b`));
+      expect(detail).not.toMatch(new RegExp(`\\b${field}\\b`));
     }
   });
 });

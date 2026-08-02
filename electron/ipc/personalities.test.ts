@@ -711,6 +711,7 @@ describe('RED: binding storage contract', () => {
       badge: 'LB',
       color: '#ABC',
       builtin: false,
+      modifiedFromSeed: false,
       markdown: 'You are a local builder.',
     });
     expect(raw).not.toMatch(/defaultAgent|defaultModel|defaultReasoningEffort/);
@@ -798,6 +799,7 @@ describe('RED: binding storage contract', () => {
       badge: 'LB',
       color: '#ABC',
       builtin: false,
+      modifiedFromSeed: false,
       markdown: markdownBody(),
       defaultAgent: 'codex',
       defaultModel: 'openai/gpt-5.6:sol#preview',
@@ -809,6 +811,7 @@ describe('RED: binding storage contract', () => {
       'badge',
       'color',
       'builtin',
+      'modifiedFromSeed',
       'markdown',
       'defaultAgent',
       'defaultModel',
@@ -821,6 +824,7 @@ describe('RED: binding storage contract', () => {
         badge: 'LB',
         color: '#ABC',
         builtin: false,
+        modifiedFromSeed: false,
       },
     ]);
     expect(warnings).toEqual([]);
@@ -918,7 +922,14 @@ describe('RED: binding storage contract', () => {
     const summaries = listPersonalities(libraryDir, (message) => warnings.push(message));
 
     expect(summaries.map(({ id }) => id)).toEqual(['local-builder']);
-    expect(Object.keys(summaries[0])).toEqual(['id', 'name', 'badge', 'color', 'builtin']);
+    expect(Object.keys(summaries[0])).toEqual([
+      'id',
+      'name',
+      'badge',
+      'color',
+      'builtin',
+      'modifiedFromSeed',
+    ]);
     expect(warnings).toHaveLength(1);
     expect(warnings[0].length).toBeLessThanOrEqual(500);
   });
@@ -929,6 +940,144 @@ describe('RED: binding storage contract', () => {
       expect(sha256(raw)).toBe(contract.sha256);
       expect(raw).not.toMatch(/defaultAgent|defaultModel|defaultReasoningEffort/);
     }
+  });
+});
+
+describe('RED: modified state contract', () => {
+  const id = 'exact-byte-built-in';
+  const name = 'Exact Byte Built-In';
+  const rawSeed = syntheticSeed({ id, name, body: 'Original guidance' });
+  const materialized = materializePersonalitySeed(rawSeed);
+  const pristineHash = sha256(rawSeed);
+  let temporaryRoot: string;
+  let libraryDir: string;
+
+  beforeEach(() => {
+    temporaryRoot = fs.mkdtempSync(join(os.tmpdir(), 'personality-modified-state-'));
+    libraryDir = join(temporaryRoot, 'library');
+    fs.mkdirSync(libraryDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    fs.rmSync(temporaryRoot, { recursive: true, force: true });
+  });
+
+  function writeInstalled(raw: string, installedId = id): string {
+    const filePath = join(libraryDir, `${installedId}.md`);
+    fs.writeFileSync(filePath, raw, 'utf8');
+    return filePath;
+  }
+
+  it('reports exact materialized packaged bytes as pristine on summary and detail DTOs', () => {
+    const installedPath = writeInstalled(materialized);
+
+    expect(readFileSync(installedPath, 'utf8')).toBe(materialized);
+    expect(computeInstalledPersonalityPayloadHash(materialized)).toBe(pristineHash);
+    expect(listPersonalities(libraryDir)).toEqual([
+      {
+        id,
+        name,
+        badge: 'TS',
+        color: '#123ABC',
+        builtin: true,
+        modifiedFromSeed: false,
+      },
+    ]);
+    const detail = readPersonality(libraryDir, id);
+    expect(detail).toEqual({
+      id,
+      name,
+      badge: 'TS',
+      color: '#123ABC',
+      builtin: true,
+      modifiedFromSeed: false,
+      markdown: 'Original guidance',
+    });
+    expect(Object.keys(detail ?? {})).toEqual([
+      'id',
+      'name',
+      'badge',
+      'color',
+      'builtin',
+      'modifiedFromSeed',
+      'markdown',
+    ]);
+  });
+
+  it.each([
+    {
+      label: 'body bytes',
+      mutate: (raw: string) => raw.replace('Original guidance', 'Edited guidance'),
+    },
+    {
+      label: 'metadata bytes',
+      mutate: (raw: string) => raw.replace(`name: ${name}`, 'name: Renamed Built-In'),
+    },
+    {
+      label: 'line ending bytes',
+      mutate: (raw: string) => raw.replace(/\n/g, '\r\n'),
+    },
+    {
+      label: 'whitespace bytes',
+      mutate: (raw: string) => raw.replace('badge: TS\n', 'badge: TS \n'),
+    },
+    {
+      label: 'key order bytes',
+      mutate: (raw: string) =>
+        raw.replace(`name: ${name}\nbadge: TS\n`, `badge: TS\nname: ${name}\n`),
+    },
+    {
+      label: 'comment bytes',
+      mutate: (raw: string) => raw.replace('builtin: true\n', '# hand edit\nbuiltin: true\n'),
+    },
+  ])('reports $label changes as modified without exposing the payload hash', ({ mutate }) => {
+    const edited = mutate(materialized);
+    const installedPath = writeInstalled(edited);
+
+    expect(edited).not.toBe(materialized);
+    expect(readFileSync(installedPath, 'utf8')).toBe(edited);
+    expect(computeInstalledPersonalityPayloadHash(edited)).not.toBe(pristineHash);
+    const summary = listPersonalities(libraryDir)[0];
+    const detail = readPersonality(libraryDir, id);
+    expect(summary?.modifiedFromSeed).toBe(true);
+    expect(detail?.modifiedFromSeed).toBe(true);
+    expect(summary).not.toHaveProperty('pristineHash');
+    expect(summary).not.toHaveProperty('seedRevision');
+    expect(detail).not.toHaveProperty('pristineHash');
+    expect(detail).not.toHaveProperty('seedRevision');
+  });
+
+  it('always reports custom records as unmodified regardless of their body bytes', () => {
+    const customId = 'custom-byte-state';
+    const raw = customPersonality(customId, 'Custom body with  \r\nintentional bytes');
+    writeInstalled(raw, customId);
+
+    expect(readFileSync(join(libraryDir, `${customId}.md`), 'utf8')).toBe(raw);
+    expect(listPersonalities(libraryDir)).toEqual([
+      {
+        id: customId,
+        name: customId,
+        badge: 'LC',
+        color: '#ABC',
+        builtin: false,
+        modifiedFromSeed: false,
+      },
+    ]);
+    expect(readPersonality(libraryDir, customId)?.modifiedFromSeed).toBe(false);
+  });
+
+  it('omits malformed built-ins instead of fabricating a resettable summary', () => {
+    writeInstalled('---\nid: [broken\n---\nBroken', 'broken-built-in');
+    writeInstalled(customPersonality('valid-custom'), 'valid-custom');
+    const warnings: string[] = [];
+
+    const summaries = listPersonalities(libraryDir, (message) => warnings.push(message));
+
+    expect(summaries.map(({ id: summaryId }) => summaryId)).toEqual(['valid-custom']);
+    expect(summaries[0]?.modifiedFromSeed).toBe(false);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('broken-built-in.md');
   });
 });
 
@@ -1322,7 +1471,14 @@ describe('D-07/D-15/D-16 bounded personality catalog reads', () => {
       'principal-engineer',
     ]);
     for (const summary of summaries) {
-      expect(Object.keys(summary)).toEqual(['id', 'name', 'badge', 'color', 'builtin']);
+      expect(Object.keys(summary)).toEqual([
+        'id',
+        'name',
+        'badge',
+        'color',
+        'builtin',
+        'modifiedFromSeed',
+      ]);
     }
   });
 
@@ -1437,6 +1593,7 @@ describe('D-07/D-15/D-16 bounded personality catalog reads', () => {
       badge: 'LC',
       color: '#ABC',
       builtin: false,
+      modifiedFromSeed: false,
       markdown: 'Original guidance',
     });
     expect(Object.keys(first ?? {})).toEqual([
@@ -1445,6 +1602,7 @@ describe('D-07/D-15/D-16 bounded personality catalog reads', () => {
       'badge',
       'color',
       'builtin',
+      'modifiedFromSeed',
       'markdown',
     ]);
 
@@ -1584,6 +1742,7 @@ describe('RED: create persistence contract', () => {
       badge: 'PP',
       color: '#A1B2C3',
       builtin: false,
+      modifiedFromSeed: false,
     });
     expect(readFileSync(basePath, 'utf8')).toBe('occupied base');
     expect(readFileSync(secondPath, 'utf8')).toBe('occupied suffix');
@@ -1644,6 +1803,7 @@ describe('RED: create persistence contract', () => {
       badge: 'CB',
       color: '#ABC',
       builtin: false,
+      modifiedFromSeed: false,
       markdown,
     });
     expect(parsed).toEqual({ metadata: detailWithoutMarkdown(detail), markdown });
@@ -1715,6 +1875,7 @@ describe('RED: create persistence contract', () => {
 
 function detailWithoutMarkdown({
   markdown: _markdown,
+  modifiedFromSeed: _modifiedFromSeed,
   ...summary
 }: ReturnType<typeof createPersonality>) {
   return summary;

@@ -37,6 +37,7 @@ const quality: PersonalitySummary = {
   badge: 'QE',
   color: '#2FD198',
   builtin: true,
+  modifiedFromSeed: false,
 };
 
 const principal: PersonalitySummary = {
@@ -45,6 +46,7 @@ const principal: PersonalitySummary = {
   badge: 'PE',
   color: '#7A78FF',
   builtin: true,
+  modifiedFromSeed: false,
 };
 
 describe('personality catalog presentation', () => {
@@ -296,6 +298,7 @@ describe('RED: create editor contract', () => {
       badge: 'IC',
       color: '#FF6A2C',
       builtin: false,
+      modifiedFromSeed: false,
     };
 
     expect(selectPreferredPersonality([principal, saved, quality], saved.id, quality.id)).toEqual(
@@ -315,6 +318,7 @@ describe('RED: create editor contract', () => {
       badge: 'IC',
       color: '#FF6A2C',
       builtin: false,
+      modifiedFromSeed: false,
     };
     const create = vi.fn().mockResolvedValue(saved);
     const refresh = vi
