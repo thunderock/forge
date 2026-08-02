@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import type { AgentDef, CodexModelInfo } from '../ipc/types';
 import {
@@ -231,5 +232,26 @@ describe('claudeModelOptions — entitlement-filtered alias list (MDL-11)', () =
       'sonnet',
       'haiku',
     ]);
+  });
+});
+
+describe('RED: binding editor contract', () => {
+  it('limits ModelSelector editor density to an opt-in class while retaining behavior paths', () => {
+    const source = readFileSync(
+      new URL('../components/ModelSelector.tsx', import.meta.url),
+      'utf8',
+    );
+    const densityLines = source.split('\n').filter((line) => line.includes('density'));
+
+    expect(densityLines).toHaveLength(2);
+    expect(densityLines[0]).toMatch(/density\?: 'editor'/);
+    expect(densityLines[1]).toContain('model-selector-editor');
+    expect(source).toContain('if (!model) return HOST_DEFAULT;');
+    expect(source).toContain('return listedModels().includes(model) ? model : OTHER;');
+    expect(source).toContain(
+      'props.onChange({ model: props.selection.model, reasoningEffort: undefined });',
+    );
+    expect(source).toContain('.catch(() => setOpenCodeModels([]))');
+    expect(source).toContain('.catch(() => setCodexModels([]))');
   });
 });

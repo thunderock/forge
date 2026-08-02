@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { PersonalityDetail, PersonalitySummary } from '../ipc/types';
+import type { PersonalityDetail, PersonalitySummary, PersonalityWriteFields } from '../ipc/types';
 
 const { mockInvoke, mockSetStore, mockStore } = vi.hoisted(() => {
   const mockStore = {
@@ -241,5 +241,60 @@ describe('RED: create editor contract', () => {
     expect(
       mockInvoke.mock.calls.filter(([channel]) => channel === IPC.CreatePersonality),
     ).toHaveLength(1);
+  });
+});
+
+describe('RED: binding editor contract', () => {
+  const baseFields: PersonalityWriteFields = {
+    name: customDetail.name,
+    badge: customDetail.badge,
+    color: customDetail.color,
+    markdown: customDetail.markdown,
+  };
+
+  it('omits orphan model and effort values when no default agent is selected', async () => {
+    mockInvoke.mockResolvedValueOnce(customDetail);
+
+    await createPersonality({
+      ...baseFields,
+      defaultModel: 'orphan-model',
+      defaultReasoningEffort: 'high',
+    });
+
+    expect(mockInvoke).toHaveBeenCalledWith(IPC.CreatePersonality, baseFields);
+  });
+
+  it('stores only the agent for Host default and omits whitespace sentinels', async () => {
+    mockInvoke.mockResolvedValueOnce(customDetail);
+
+    await createPersonality({
+      ...baseFields,
+      defaultAgent: 'codex',
+      defaultModel: '   ',
+      defaultReasoningEffort: '\t',
+    });
+
+    expect(mockInvoke).toHaveBeenCalledWith(IPC.CreatePersonality, {
+      ...baseFields,
+      defaultAgent: 'codex',
+    });
+  });
+
+  it('trims and persists a free-form model with its compatible effort', async () => {
+    mockInvoke.mockResolvedValueOnce(customDetail);
+
+    await createPersonality({
+      ...baseFields,
+      defaultAgent: 'opencode',
+      defaultModel: '  provider/custom-model  ',
+      defaultReasoningEffort: '  max  ',
+    });
+
+    expect(mockInvoke).toHaveBeenCalledWith(IPC.CreatePersonality, {
+      ...baseFields,
+      defaultAgent: 'opencode',
+      defaultModel: 'provider/custom-model',
+      defaultReasoningEffort: 'max',
+    });
   });
 });
