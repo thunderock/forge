@@ -643,13 +643,9 @@ function preserveWithError(report: PersonalitySeedReport, id: string, message: s
   addSeedError(report, id, message);
 }
 
-function backupInstalledPersonalityBestEffort(installedPath: string): void {
+function backupInstalledPersonalityBestEffort(installedPath: string, installedRaw: string): void {
   try {
-    const stats = fs.lstatSync(installedPath);
-    if (stats.isSymbolicLink() || !stats.isFile() || stats.size > MAX_PERSONALITY_FILE_BYTES) {
-      return;
-    }
-    fs.copyFileSync(installedPath, `${installedPath}.bak`);
+    atomicWriteFileSync(`${installedPath}.bak`, installedRaw);
   } catch {
     // A backup failure must not block an otherwise safe atomic upgrade.
   }
@@ -984,11 +980,68 @@ export function updatePersonality(
 }
 
 export function resetPersonality(
-  _libraryDir: string,
-  _seedDir: string,
-  _id: string,
+  libraryDir: string,
+  seedDir: string,
+  id: string,
 ): PersonalityDetail {
-  return fail('Personality reset is not implemented');
+  if (!isPersonalityId(id)) throw new PersonalityParseError('Invalid personality ID');
+
+  const installedPath = path.join(libraryDir, `${id}.md`);
+  const installedRead = readRegularCandidate(installedPath);
+  if (installedRead.status === 'missing') return fail('Personality does not exist');
+  if (installedRead.status === 'invalid') return fail('Personality cannot be reset safely');
+
+  let installed: InternalParseResult;
+  try {
+    installed = guarded(() =>
+      parseInternal(installedRead.raw, { mode: 'library', expectedId: id }),
+    );
+  } catch {
+    return fail('Personality cannot be reset safely');
+  }
+
+  const installedMetadata = installed.personality.metadata;
+  if (!installedMetadata.builtin || installedMetadata.pristineHash === undefined) {
+    return fail('Only modified built-in personalities can be reset');
+  }
+
+  let installedPayloadHash: string;
+  try {
+    installedPayloadHash = computeInstalledPersonalityPayloadHash(installedRead.raw);
+  } catch {
+    return fail('Personality cannot be reset safely');
+  }
+  if (installedPayloadHash === installedMetadata.pristineHash) {
+    return fail('Only modified built-in personalities can be reset');
+  }
+
+  const seedRead = readRegularCandidate(path.join(seedDir, `${id}.md`));
+  if (seedRead.status !== 'ok') return fail('Packaged personality seed is unavailable');
+
+  let materializedSeed: string;
+  try {
+    parsePersonalityMarkdown(seedRead.raw, { mode: 'seed', expectedId: id });
+    materializedSeed = materializePersonalitySeed(seedRead.raw);
+  } catch {
+    return fail('Packaged personality seed is invalid');
+  }
+
+  backupInstalledPersonalityBestEffort(installedPath, installedRead.raw);
+  try {
+    atomicWriteFileSync(installedPath, materializedSeed);
+  } catch {
+    return fail('Unable to reset personality');
+  }
+
+  try {
+    const detail = readPersonality(libraryDir, id);
+    if (detail === null || !detail.builtin || detail.modifiedFromSeed) {
+      return fail('Reset personality could not be read back');
+    }
+    return detail;
+  } catch {
+    return fail('Reset personality could not be read back');
+  }
 }
 
 export function resolvePersonalitySeedDir(options: ResolvePersonalitySeedDirOptions): string {
@@ -1130,7 +1183,7 @@ export function seedBuiltInPersonalities(
       continue;
     }
 
-    backupInstalledPersonalityBestEffort(installedPath);
+    backupInstalledPersonalityBestEffort(installedPath, installedRead.raw);
     try {
       atomicWriteFileSync(installedPath, materializedSeed);
       report.upgraded.push(id);
