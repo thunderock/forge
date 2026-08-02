@@ -8,6 +8,7 @@ import { ModelSelector } from './ModelSelector';
 import {
   MAX_PERSONALITY_MARKDOWN_BYTES,
   PERSONALITY_COLOR_OPTIONS,
+  createPersonalityModeSubmitter,
   createPersonalitySubmitter,
   nextPersonalityColorIndex,
   normalizePersonalityColor,
@@ -652,5 +653,58 @@ describe('RED: markdown preview contract', () => {
     expect(styles).toMatch(
       /@media \(max-height: 639px\) \{[\s\S]*?\.personality-editor-(?:markdown|preview)[\s\S]*?min-height: 240px;/,
     );
+  });
+});
+
+describe('RED: topmost dialog contract', () => {
+  it('routes header, footer, overlay, and Escape exits through one mutation guard', () => {
+    const source = readFileSync(new URL('./PersonalityEditorDialog.tsx', import.meta.url), 'utf8');
+
+    expect(source).toMatch(
+      /function requestClose\(\): void \{[\s\S]*?if \(saving\(\)\) return;[\s\S]*?props\.onClose\(\);[\s\S]*?\}/,
+    );
+    expect(source).toContain('onClose={requestClose}');
+    expect(source.match(/onClick=\{requestClose\}/g)).toHaveLength(3);
+    expect(source).not.toContain("document.addEventListener('keydown'");
+  });
+
+  it('keeps the draft busy and every direct close or submit control locked during mutation', () => {
+    const source = readFileSync(new URL('./PersonalityEditorDialog.tsx', import.meta.url), 'utf8');
+
+    expect(source).toContain("aria-busy={saving() || loading() ? 'true' : undefined}");
+    expect(
+      (source.match(/<fieldset[\s\S]*?disabled=\{saving\(\)\}/g) ?? []).length,
+    ).toBeGreaterThanOrEqual(3);
+    expect((source.match(/disabled=\{saving\(\)\}/g) ?? []).length).toBeGreaterThanOrEqual(5);
+    expect(source).toContain('disabled={!isValid() || saving()}');
+  });
+
+  it('allows only one mode-aware mutation until the pending request settles', async () => {
+    const request = deferred<PersonalityDetail>();
+    const create = vi.fn<(_fields: PersonalityWriteFields) => Promise<PersonalityDetail>>();
+    const update = vi.fn(() => request.promise);
+    const onPending = vi.fn();
+    const onSaved = vi.fn();
+    const submit = createPersonalityModeSubmitter({
+      create,
+      update,
+      onPending,
+      onSaved,
+      onError: vi.fn(),
+    });
+    const target: PersonalityEditorSaveTarget = { mode: 'edit', id: savedDetail.id };
+
+    const first = submit(target, validFields);
+    const duplicate = submit(target, validFields);
+
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(onPending).toHaveBeenLastCalledWith(true);
+    await expect(duplicate).resolves.toBe(false);
+
+    request.resolve(savedDetail);
+    await expect(first).resolves.toBe(true);
+    expect(onPending).toHaveBeenLastCalledWith(false);
+    expect(onSaved).toHaveBeenCalledWith(savedDetail.id);
+    expect(create).not.toHaveBeenCalled();
   });
 });
