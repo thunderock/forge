@@ -708,3 +708,39 @@ describe('RED: topmost dialog contract', () => {
     expect(create).not.toHaveBeenCalled();
   });
 });
+
+describe('RED: reset catalog contract', () => {
+  it('keeps built-in modification and reset metadata outside every editor draft', async () => {
+    const { personalityDraftFromDetail } = await editAndCopyContract();
+
+    expect(personalityDraftFromDetail).toBeTypeOf('function');
+    if (!personalityDraftFromDetail) return;
+
+    const detail = {
+      id: 'principal-engineer',
+      name: 'Principal Engineer',
+      badge: 'PE',
+      color: '#7A78FF',
+      builtin: true,
+      modifiedFromSeed: true,
+      markdown: '## Role\n\nGuide high-leverage architecture.',
+      seedRevision: 42,
+      pristineHash: 'must-not-cross',
+      path: '/private/personality.md',
+      filename: 'principal-engineer.md',
+      rawYaml: 'must-not-cross',
+      reset: true,
+    };
+
+    const draft = personalityDraftFromDetail(detail);
+
+    expect(draft.fields).not.toHaveProperty('builtin');
+    expect(draft.fields).not.toHaveProperty('modifiedFromSeed');
+    expect(draft.fields).not.toHaveProperty('seedRevision');
+    expect(draft.fields).not.toHaveProperty('pristineHash');
+    expect(draft.fields).not.toHaveProperty('path');
+    expect(draft.fields).not.toHaveProperty('filename');
+    expect(draft.fields).not.toHaveProperty('rawYaml');
+    expect(draft.fields).not.toHaveProperty('reset');
+  });
+});

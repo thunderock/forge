@@ -34,6 +34,7 @@ import {
   createPersonality,
   readPersonality,
   refreshPersonalities,
+  resetPersonality,
   togglePersonalityLibraryDialog,
   updatePersonality,
 } from './personalities';
@@ -358,6 +359,48 @@ describe('RED: edit and copy editor contract', () => {
     expect(mockInvoke).toHaveBeenNthCalledWith(2, IPC.ListPersonalities);
     expect(
       mockInvoke.mock.calls.filter(([channel]) => channel === IPC.UpdatePersonality),
+    ).toHaveLength(1);
+  });
+});
+
+describe('RED: reset catalog contract', () => {
+  const modifiedDetail: PersonalityDetail = {
+    ...quality,
+    modifiedFromSeed: true,
+    markdown: '## Focus Areas\n\nLocally modified.',
+  };
+  const pristineDetail: PersonalityDetail = {
+    ...quality,
+    markdown: '## Focus Areas\n\nPackaged seed.',
+  };
+
+  it('invokes one exact ID-only reset and returns the authoritative detail without cache mutation', async () => {
+    mockStore.personalities = [{ ...quality, modifiedFromSeed: true }];
+    mockInvoke.mockResolvedValueOnce(pristineDetail);
+
+    await expect(resetPersonality(modifiedDetail.id)).resolves.toEqual(pristineDetail);
+
+    expect(mockInvoke).toHaveBeenCalledTimes(1);
+    expect(mockInvoke).toHaveBeenCalledWith(IPC.ResetPersonality, { id: modifiedDetail.id });
+    expect(mockSetStore).not.toHaveBeenCalled();
+    expect(mockStore.personalities).toEqual([{ ...quality, modifiedFromSeed: true }]);
+  });
+
+  it('keeps reset success authoritative when the one follow-up refresh fails', async () => {
+    mockInvoke
+      .mockResolvedValueOnce(pristineDetail)
+      .mockRejectedValueOnce(new Error('refresh failed'));
+
+    const reset = await resetPersonality(modifiedDetail.id);
+    await expect(refreshPersonalities(() => true)).rejects.toThrow('refresh failed');
+
+    expect(reset).toEqual(pristineDetail);
+    expect(mockInvoke).toHaveBeenNthCalledWith(1, IPC.ResetPersonality, {
+      id: modifiedDetail.id,
+    });
+    expect(mockInvoke).toHaveBeenNthCalledWith(2, IPC.ListPersonalities);
+    expect(
+      mockInvoke.mock.calls.filter(([channel]) => channel === IPC.ResetPersonality),
     ).toHaveLength(1);
   });
 });

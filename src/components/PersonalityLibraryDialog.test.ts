@@ -17,14 +17,17 @@ import {
 interface Deferred<T> {
   promise: Promise<T>;
   resolve: (value: T) => void;
+  reject: (reason: unknown) => void;
 }
 
 function deferred<T>(): Deferred<T> {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => {
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((done, fail) => {
     resolve = done;
+    reject = fail;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 function visibleText(html: string): string {
@@ -457,5 +460,192 @@ describe('RED: markdown preview contract', () => {
     expect(`${librarySource}\n${editorSource}`).not.toMatch(
       /mermaid\.render|new Marked|DOMPurify\.sanitize/,
     );
+  });
+});
+
+interface PersonalityResetTarget {
+  id: string;
+  name: string;
+}
+
+interface ResetCatalogContractModule {
+  personalityResetAction?: (
+    detail: PersonalityDetail | null,
+    selectedId: string | null,
+  ) => PersonalityResetTarget | null;
+  createPersonalityResetSubmitter?: (options: {
+    reset: (id: string) => Promise<PersonalityDetail>;
+    onPending: (pending: boolean) => void;
+    onSuccess: (detail: PersonalityDetail) => void | Promise<void>;
+    onError: (target: PersonalityResetTarget) => void;
+  }) => (target: PersonalityResetTarget) => Promise<boolean>;
+}
+
+async function resetCatalogContract(): Promise<ResetCatalogContractModule> {
+  return (await import('./PersonalityLibraryDialog')) as unknown as ResetCatalogContractModule;
+}
+
+describe('RED: reset catalog contract', () => {
+  const modifiedSummary: PersonalitySummary = {
+    ...quality,
+    modifiedFromSeed: true,
+  };
+  const modifiedDetail: PersonalityDetail = {
+    ...modifiedSummary,
+    markdown: '## Focus Areas\n\nLocally modified.',
+  };
+  const pristineDetail: PersonalityDetail = {
+    ...quality,
+    markdown: '## Focus Areas\n\nPackaged seed.',
+  };
+  const customDetail: PersonalityDetail = {
+    id: 'incident-commander',
+    name: 'Incident Commander',
+    badge: 'IC',
+    color: '#FF6A2C',
+    builtin: false,
+    modifiedFromSeed: true,
+    markdown: '## Role\n\nCoordinate the response.',
+  };
+
+  it('shows Modified beside Built-in only for modified built-in rows', () => {
+    const modified = renderToString(() =>
+      PersonalityOption({
+        personality: modifiedSummary,
+        selected: true,
+        detailId: 'personality-detail',
+        onSelect: vi.fn(),
+      }),
+    );
+    const pristine = renderToString(() =>
+      PersonalityOption({
+        personality: quality,
+        selected: false,
+        detailId: 'personality-detail',
+        onSelect: vi.fn(),
+      }),
+    );
+    const custom = renderToString(() =>
+      PersonalityOption({
+        personality: customDetail,
+        selected: false,
+        detailId: 'personality-detail',
+        onSelect: vi.fn(),
+      }),
+    );
+
+    expect(visibleText(modified)).toContain('Built-inModified');
+    expect(visibleText(pristine)).not.toContain('Modified');
+    expect(visibleText(custom)).not.toContain('Modified');
+  });
+
+  it('derives reset eligibility only from the current fresh modified built-in detail', async () => {
+    const { personalityResetAction } = await resetCatalogContract();
+
+    expect(personalityResetAction).toBeTypeOf('function');
+    if (!personalityResetAction) return;
+
+    expect(personalityResetAction(modifiedDetail, modifiedDetail.id)).toEqual({
+      id: modifiedDetail.id,
+      name: modifiedDetail.name,
+    });
+    expect(personalityResetAction(pristineDetail, pristineDetail.id)).toBeNull();
+    expect(personalityResetAction(customDetail, customDetail.id)).toBeNull();
+    expect(personalityResetAction(modifiedDetail, principal.id)).toBeNull();
+    expect(personalityResetAction(null, modifiedDetail.id)).toBeNull();
+  });
+
+  it('renders the exact guarded danger confirmation and authoritative reload hooks', () => {
+    const source = readFileSync(new URL('./PersonalityLibraryDialog.tsx', import.meta.url), 'utf8');
+
+    expect(source).toContain("import { ConfirmDialog } from './ConfirmDialog'");
+    expect(source).toContain('Reset to seed');
+    expect(source).toContain('Resetting…');
+    expect(source).toContain('Keep changes');
+    expect(source).toContain(
+      'This replaces the modified built-in with the current packaged version.',
+    );
+    expect(source).toContain('Forge will try to save a backup first.');
+    expect(source).toContain('You cannot undo this reset in the app.');
+    expect(source).toContain('The original file was left unchanged. Try again or cancel.');
+    expect(source).toContain('danger');
+    expect(source).toContain('zIndex={1300}');
+    expect(source).toContain('width="min(440px, calc(100vw - 32px))"');
+    expect(source).toContain('confirmLoading={resetPending()}');
+    expect(source).toContain("loadLibrary('post-reset', result.id)");
+    expect(source).not.toContain('IPC.ResetPersonality');
+  });
+
+  it('locks duplicate resets and keeps a failed confirmation recoverable without refresh', async () => {
+    const { createPersonalityResetSubmitter } = await resetCatalogContract();
+
+    expect(createPersonalityResetSubmitter).toBeTypeOf('function');
+    if (!createPersonalityResetSubmitter) return;
+
+    const firstRequest = deferred<PersonalityDetail>();
+    const reset = vi
+      .fn<(_id: string) => Promise<PersonalityDetail>>()
+      .mockImplementationOnce(() => firstRequest.promise)
+      .mockResolvedValueOnce(pristineDetail);
+    const onPending = vi.fn();
+    const onSuccess = vi.fn();
+    const onError = vi.fn();
+    const submit = createPersonalityResetSubmitter({ reset, onPending, onSuccess, onError });
+    const target = { id: modifiedDetail.id, name: modifiedDetail.name };
+
+    const first = submit(target);
+    await expect(submit(target)).resolves.toBe(false);
+    firstRequest.reject(new Error('/private/path stays hidden'));
+    await expect(first).resolves.toBe(false);
+
+    expect(reset).toHaveBeenCalledTimes(1);
+    expect(reset).toHaveBeenCalledWith(modifiedDetail.id);
+    expect(onPending.mock.calls).toEqual([[true], [false]]);
+    expect(onError).toHaveBeenCalledWith(target);
+    expect(onSuccess).not.toHaveBeenCalled();
+
+    await expect(submit(target)).resolves.toBe(true);
+    expect(reset).toHaveBeenCalledTimes(2);
+    expect(onSuccess).toHaveBeenCalledWith(pristineDetail);
+  });
+
+  it('resets a modified built-in end to end', async () => {
+    const { createPersonalityResetSubmitter } = await resetCatalogContract();
+
+    expect(createPersonalityResetSubmitter).toBeTypeOf('function');
+    if (!createPersonalityResetSubmitter) return;
+
+    const reset = vi.fn().mockResolvedValue(pristineDetail);
+    const refresh = vi.fn().mockResolvedValue([principal, quality]);
+    const read = vi.fn().mockResolvedValue(pristineDetail);
+    const focus = vi.fn();
+    let confirmationOpen = true;
+    let selected: PersonalitySummary | null = modifiedSummary;
+    let presentedDetail: PersonalityDetail | null = modifiedDetail;
+    let detailScrollTop = 64;
+    const submit = createPersonalityResetSubmitter({
+      reset,
+      onPending: vi.fn(),
+      onError: vi.fn(),
+      onSuccess: async (result) => {
+        confirmationOpen = false;
+        const rows = await refresh();
+        selected = selectPreferredPersonality(rows, result.id, modifiedDetail.id);
+        presentedDetail = await read(result.id);
+        detailScrollTop = 0;
+        focus(selected?.id);
+      },
+    });
+
+    await expect(submit({ id: modifiedDetail.id, name: modifiedDetail.name })).resolves.toBe(true);
+
+    expect(reset).toHaveBeenCalledTimes(1);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(confirmationOpen).toBe(false);
+    expect(selected).toEqual(quality);
+    expect(presentedDetail).toEqual(pristineDetail);
+    expect(detailScrollTop).toBe(0);
+    expect(focus).toHaveBeenCalledWith(quality.id);
   });
 });

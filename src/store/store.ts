@@ -85,6 +85,7 @@ export {
   createPersonality,
   readPersonality,
   refreshPersonalities,
+  resetPersonality,
   togglePersonalityLibraryDialog,
   updatePersonality,
 } from './personalities';
