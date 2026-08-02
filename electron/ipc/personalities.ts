@@ -867,6 +867,14 @@ export function createPersonality(
   return detail;
 }
 
+export function updatePersonality(
+  _libraryDir: string,
+  _id: string,
+  _fields: PersonalityWriteFields,
+): PersonalityDetail {
+  return fail('Personality updates are not implemented');
+}
+
 export function resolvePersonalitySeedDir(options: ResolvePersonalitySeedDirOptions): string {
   if (options.isPackaged) {
     return path.join(options.resourcesPath, 'seeds', 'personalities');

@@ -15,6 +15,7 @@ import {
   parsePersonalityMarkdown,
   readPersonality,
   seedBuiltInPersonalities,
+  updatePersonality,
   type ParsePersonalityMarkdownOptions,
 } from './personalities.js';
 import type { PersonalityWriteFields } from './shared-types.js';
@@ -1869,6 +1870,374 @@ describe('RED: create persistence contract', () => {
     expect((thrown as Error).message).not.toMatch(/not implemented/i);
     expect(readFileSync(occupiedPath, 'utf8')).toBe('stable bytes');
     expect(fs.existsSync(attemptedPath)).toBe(false);
+    expect(readdirSync(libraryDir).some((name) => name.startsWith('.forge-atomic-'))).toBe(false);
+  });
+});
+
+describe('built-in copy byte identity regression', () => {
+  it('creates from narrow built-in fields without changing installed or packaged bytes', () => {
+    const temporaryRoot = fs.mkdtempSync(join(os.tmpdir(), 'personality-copy-bytes-'));
+    const seedDir = join(temporaryRoot, 'packaged');
+    const libraryDir = join(temporaryRoot, 'library');
+    const id = 'copy-source';
+    const rawSeed = syntheticSeed({ id, name: 'Copy Source', body: 'Original built-in guidance' });
+
+    try {
+      const seedPath = writeSeed(seedDir, id, rawSeed);
+      expect(seedBuiltInPersonalities({ seedDir, libraryDir }).errors).toEqual([]);
+      const installedPath = join(libraryDir, `${id}.md`);
+      const installedBefore = readFileSync(installedPath, 'utf8');
+      const packagedBefore = readFileSync(seedPath, 'utf8');
+      const source = readPersonality(libraryDir, id);
+      if (source === null) throw new Error('Expected built-in copy source');
+
+      const copy = createPersonality(libraryDir, {
+        name: `${source.name} Copy`,
+        badge: source.badge,
+        color: source.color,
+        markdown: source.markdown,
+        ...(source.defaultAgent === undefined ? {} : { defaultAgent: source.defaultAgent }),
+        ...(source.defaultModel === undefined ? {} : { defaultModel: source.defaultModel }),
+        ...(source.defaultReasoningEffort === undefined
+          ? {}
+          : { defaultReasoningEffort: source.defaultReasoningEffort }),
+      });
+
+      expect(copy).toMatchObject({
+        id: 'copy-source-copy',
+        name: 'Copy Source Copy',
+        builtin: false,
+        markdown: 'Original built-in guidance',
+      });
+      expect(readFileSync(installedPath, 'utf8')).toBe(installedBefore);
+      expect(readFileSync(seedPath, 'utf8')).toBe(packagedBefore);
+    } finally {
+      fs.rmSync(temporaryRoot, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('RED: stable update contract', () => {
+  let temporaryRoot: string;
+  let libraryDir: string;
+
+  beforeEach(() => {
+    temporaryRoot = fs.mkdtempSync(join(os.tmpdir(), 'personality-update-'));
+    libraryDir = join(temporaryRoot, 'library');
+    fs.mkdirSync(libraryDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    try {
+      fs.chmodSync(libraryDir, 0o700);
+    } catch {
+      // The fixture may intentionally leave no writable library directory.
+    }
+    fs.rmSync(temporaryRoot, { recursive: true, force: true });
+  });
+
+  function writeCustom(id: string, raw = customPersonality(id)): string {
+    const filePath = join(libraryDir, `${id}.md`);
+    fs.writeFileSync(filePath, raw, 'utf8');
+    return filePath;
+  }
+
+  function rejectedUpdate(id: string, fields = writeFields()): Error {
+    let thrown: unknown;
+    try {
+      updatePersonality(libraryDir, id, fields);
+    } catch (error: unknown) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    const error = thrown as Error;
+    expect(error.message).not.toMatch(/not implemented/i);
+    expect(error.message).not.toContain(temporaryRoot);
+    expect(error.message.length).toBeLessThanOrEqual(500);
+    return error;
+  }
+
+  it('keeps the stable ID and filename while persisting every editable field and unknown scalar', () => {
+    const id = 'stable-builder';
+    const filePath = writeCustom(
+      id,
+      personalityDocument(
+        [
+          `id: ${id}`,
+          'name: Stable Builder',
+          'badge: SB',
+          "color: '#ABC'",
+          'builtin: false',
+          'defaultAgent: claude-code',
+          'defaultModel: fable',
+          'futureText: enabled',
+          'futureNumber: 2',
+          'futureBoolean: true',
+          'futureNull: null',
+        ],
+        { body: 'Original custom guidance' },
+      ),
+    );
+
+    const detail = updatePersonality(
+      libraryDir,
+      id,
+      writeFields({
+        name: '  Renamed Platform Builder  ',
+        badge: 'rp',
+        color: '#a1b2c3',
+        markdown: 'Updated custom guidance',
+        defaultAgent: 'opencode',
+        defaultModel: '  anthropic/claude:opus#beta  ',
+        defaultReasoningEffort: '  max  ',
+      }),
+    );
+    const raw = readFileSync(filePath, 'utf8');
+
+    expect(detail).toEqual({
+      id,
+      name: 'Renamed Platform Builder',
+      badge: 'RP',
+      color: '#A1B2C3',
+      builtin: false,
+      modifiedFromSeed: false,
+      markdown: 'Updated custom guidance',
+      defaultAgent: 'opencode',
+      defaultModel: 'anthropic/claude:opus#beta',
+      defaultReasoningEffort: 'max',
+    });
+    expect(parsePersonalityMarkdown(raw, { mode: 'library', expectedId: id }).metadata.id).toBe(id);
+    expect(raw).toContain('futureText: enabled');
+    expect(raw).toContain('futureNumber: 2');
+    expect(raw).toContain('futureBoolean: true');
+    expect(raw).toContain('futureNull: null');
+    expect(fs.existsSync(join(libraryDir, 'renamed-platform-builder.md'))).toBe(false);
+    expect(fs.existsSync(`${filePath}.bak`)).toBe(false);
+    expect(readdirSync(libraryDir).some((name) => name.startsWith('.forge-atomic-'))).toBe(false);
+  });
+
+  it('removes known optional bindings when the updated fields omit them', () => {
+    const id = 'clear-bindings';
+    const filePath = writeCustom(
+      id,
+      personalityDocument(
+        [
+          `id: ${id}`,
+          'name: Clear Bindings',
+          'badge: CB',
+          "color: '#ABC'",
+          'builtin: false',
+          'defaultAgent: codex',
+          'defaultModel: gpt-5.6-sol',
+          'defaultReasoningEffort: max',
+          'futureFlag: retained',
+        ],
+        { body: 'Bound guidance' },
+      ),
+    );
+
+    const detail = updatePersonality(
+      libraryDir,
+      id,
+      writeFields({ name: 'Clear Bindings', markdown: 'Unbound guidance' }),
+    );
+    const raw = readFileSync(filePath, 'utf8');
+
+    expect(detail).not.toHaveProperty('defaultAgent');
+    expect(detail).not.toHaveProperty('defaultModel');
+    expect(detail).not.toHaveProperty('defaultReasoningEffort');
+    expect(raw).not.toMatch(/defaultAgent|defaultModel|defaultReasoningEffort/);
+    expect(raw).toContain('futureFlag: retained');
+  });
+
+  it('rejects built-ins without changing their exact bytes or creating a backup', () => {
+    const id = 'immutable-built-in';
+    const installed = materializePersonalitySeed(
+      syntheticSeed({ id, name: 'Immutable Built-In', body: 'Packaged guidance' }),
+    );
+    const filePath = writeCustom(id, installed);
+
+    rejectedUpdate(id, writeFields({ name: 'Attempted Rename' }));
+
+    expect(readFileSync(filePath, 'utf8')).toBe(installed);
+    expect(fs.existsSync(`${filePath}.bak`)).toBe(false);
+  });
+
+  it.each([
+    'symlink',
+    'directory',
+    'fifo',
+    'oversized',
+    'malformed',
+    'mismatched',
+    'missing',
+  ] as const)('rejects an unsafe %s target without replacing it', (type) => {
+    const id = `unsafe-${type}`;
+    const filePath = join(libraryDir, `${id}.md`);
+    let expectedBytes: string | undefined;
+    let symlinkTarget: string | undefined;
+
+    if (type === 'symlink') {
+      symlinkTarget = join(temporaryRoot, 'outside.md');
+      expectedBytes = customPersonality(id, 'Outside bytes');
+      fs.writeFileSync(symlinkTarget, expectedBytes, 'utf8');
+      fs.symlinkSync(symlinkTarget, filePath);
+    } else if (type === 'directory') {
+      fs.mkdirSync(filePath);
+    } else if (type === 'fifo') {
+      if (!makeFifo(filePath)) return;
+    } else if (type === 'oversized') {
+      expectedBytes = padUtf8(customPersonality(id), MAX_PERSONALITY_FILE_BYTES + 1);
+      fs.writeFileSync(filePath, expectedBytes, 'utf8');
+    } else if (type === 'malformed') {
+      expectedBytes = '---\nid: [broken\n---\nBroken';
+      fs.writeFileSync(filePath, expectedBytes, 'utf8');
+    } else if (type === 'mismatched') {
+      expectedBytes = customPersonality('different-id');
+      fs.writeFileSync(filePath, expectedBytes, 'utf8');
+    }
+
+    rejectedUpdate(id);
+
+    if (type === 'missing') {
+      expect(fs.existsSync(filePath)).toBe(false);
+    } else if (type === 'symlink') {
+      expect(fs.lstatSync(filePath).isSymbolicLink()).toBe(true);
+      expect(readFileSync(symlinkTarget!, 'utf8')).toBe(expectedBytes);
+    } else if (type === 'directory') {
+      expect(fs.lstatSync(filePath).isDirectory()).toBe(true);
+    } else if (type === 'fifo') {
+      expect(fs.lstatSync(filePath).isFIFO()).toBe(true);
+    } else {
+      expect(readFileSync(filePath, 'utf8')).toBe(expectedBytes);
+    }
+    expect(fs.existsSync(`${filePath}.bak`)).toBe(false);
+  });
+
+  it.each(['../state.json', 'nested/personality', 'nested\\personality', `a${'b'.repeat(64)}`])(
+    'rejects invalid update ID %s before opening the filesystem',
+    (id) => {
+      const openSpy = vi.spyOn(fs, 'openSync');
+
+      rejectedUpdate(id);
+
+      expect(openSpy).not.toHaveBeenCalled();
+    },
+  );
+
+  it('opens, validates, and reads one descriptor and always closes it', () => {
+    const id = 'descriptor-contract';
+    const filePath = writeCustom(id);
+    const originalOpenSync = fs.openSync;
+    let descriptor = -1;
+    const openSpy = vi.spyOn(fs, 'openSync').mockImplementation((...args) => {
+      const fd = Reflect.apply(originalOpenSync, fs, args);
+      if (String(args[0]) === filePath) descriptor = fd;
+      return fd;
+    });
+    const fstatSpy = vi.spyOn(fs, 'fstatSync');
+    const readSpy = vi.spyOn(fs, 'readFileSync');
+    const closeSpy = vi.spyOn(fs, 'closeSync');
+
+    expect(readPersonality(libraryDir, id)?.id).toBe(id);
+
+    expect(openSpy).toHaveBeenCalledWith(
+      filePath,
+      fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK,
+    );
+    expect(descriptor).toBeGreaterThanOrEqual(0);
+    expect(fstatSpy).toHaveBeenCalledWith(descriptor);
+    expect(readSpy).toHaveBeenCalledWith(descriptor, 'utf8');
+    expect(closeSpy).toHaveBeenCalledWith(descriptor);
+  });
+
+  it('closes the descriptor when a descriptor-bound read fails', () => {
+    const id = 'descriptor-read-failure';
+    const filePath = writeCustom(id);
+    const originalOpenSync = fs.openSync;
+    const originalReadFileSync = fs.readFileSync;
+    let descriptor = -1;
+    vi.spyOn(fs, 'openSync').mockImplementation((...args) => {
+      const fd = Reflect.apply(originalOpenSync, fs, args);
+      if (String(args[0]) === filePath) descriptor = fd;
+      return fd;
+    });
+    vi.spyOn(fs, 'readFileSync').mockImplementation((...args) => {
+      if (args[0] === descriptor)
+        throw Object.assign(new Error('descriptor read failed'), { code: 'EIO' });
+      return Reflect.apply(originalReadFileSync, fs, args);
+    });
+    const closeSpy = vi.spyOn(fs, 'closeSync');
+
+    expect(() => readPersonality(libraryDir, id)).toThrow(`Invalid personality "${id}"`);
+    expect(descriptor).toBeGreaterThanOrEqual(0);
+    expect(closeSpy).toHaveBeenCalledWith(descriptor);
+  });
+
+  it('rejects a target swapped to a symlink at descriptor open', () => {
+    const id = 'descriptor-swap';
+    const filePath = writeCustom(id, customPersonality(id, 'Original target bytes'));
+    const parkedPath = join(temporaryRoot, 'parked-original.md');
+    const outsidePath = join(temporaryRoot, 'outside-target.md');
+    const outsideBytes = customPersonality(id, 'Outside target bytes');
+    fs.writeFileSync(outsidePath, outsideBytes, 'utf8');
+    const originalOpenSync = fs.openSync;
+    let swapped = false;
+    vi.spyOn(fs, 'openSync').mockImplementation((...args) => {
+      if (!swapped && String(args[0]) === filePath) {
+        fs.renameSync(filePath, parkedPath);
+        fs.symlinkSync(outsidePath, filePath);
+        swapped = true;
+      }
+      return Reflect.apply(originalOpenSync, fs, args);
+    });
+
+    rejectedUpdate(id, writeFields({ markdown: 'Attempted replacement' }));
+
+    expect(swapped).toBe(true);
+    expect(fs.lstatSync(filePath).isSymbolicLink()).toBe(true);
+    expect(readFileSync(outsidePath, 'utf8')).toBe(outsideBytes);
+    expect(readFileSync(parkedPath, 'utf8')).toBe(customPersonality(id, 'Original target bytes'));
+  });
+
+  it('enforces the complete UTF-8 update boundary before replacement', () => {
+    const id = 'update-byte-boundary';
+    const filePath = writeCustom(
+      id,
+      customPersonality(id, 'Original bytes', 'Update Byte Boundary'),
+    );
+    const fields = writeFields({ name: 'Update Byte Boundary', markdown: 'x' });
+    updatePersonality(libraryDir, id, fields);
+    const overhead = Buffer.byteLength(readFileSync(filePath, 'utf8'), 'utf8') - 1;
+    const boundaryMarkdown = utf8Payload(MAX_PERSONALITY_FILE_BYTES - overhead);
+
+    const boundary = updatePersonality(libraryDir, id, {
+      ...fields,
+      markdown: boundaryMarkdown,
+    });
+    const boundaryBytes = readFileSync(filePath, 'utf8');
+    expect(Buffer.byteLength(boundaryBytes, 'utf8')).toBe(MAX_PERSONALITY_FILE_BYTES);
+    expect(boundary.markdown).toBe(boundaryMarkdown);
+
+    rejectedUpdate(id, { ...fields, markdown: `${boundaryMarkdown}x` });
+    expect(readFileSync(filePath, 'utf8')).toBe(boundaryBytes);
+    expect(readdirSync(libraryDir).some((name) => name.startsWith('.forge-atomic-'))).toBe(false);
+  });
+
+  it('preserves original bytes and creates no backup when the atomic replacement fails', () => {
+    if (process.getuid?.() === 0) return;
+    const id = 'failed-update';
+    const filePath = writeCustom(id, customPersonality(id, 'Stable original bytes'));
+    const before = readFileSync(filePath, 'utf8');
+    fs.chmodSync(libraryDir, 0o500);
+
+    rejectedUpdate(id, writeFields({ markdown: 'Blocked replacement bytes' }));
+
+    fs.chmodSync(libraryDir, 0o700);
+    expect(readFileSync(filePath, 'utf8')).toBe(before);
+    expect(fs.existsSync(`${filePath}.bak`)).toBe(false);
     expect(readdirSync(libraryDir).some((name) => name.startsWith('.forge-atomic-'))).toBe(false);
   });
 });

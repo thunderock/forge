@@ -5,6 +5,8 @@ import { IPC } from './ipc/channels.js';
 
 const REGISTER_PATH = join(__dirname, 'ipc', 'register.ts');
 const PERSONALITIES_PATH = join(__dirname, 'ipc', 'personalities.ts');
+const CHANNEL_MANIFEST_PATH = join(__dirname, 'ipc', 'channel-manifest.json');
+const PRELOAD_PATH = join(__dirname, 'preload.cjs');
 const SHARED_TYPES_PATH = join(__dirname, 'ipc', 'shared-types.ts');
 const RENDERER_TYPES_PATH = join(__dirname, '..', 'src', 'ipc', 'types.ts');
 const FORBIDDEN_CONTRACT_FIELDS = [
@@ -249,6 +251,52 @@ describe('RED: modified state contract', () => {
     for (const field of FORBIDDEN_CONTRACT_FIELDS) {
       expect(summary).not.toMatch(new RegExp(`\\b${field}\\b`));
       expect(detail).not.toMatch(new RegExp(`\\b${field}\\b`));
+    }
+  });
+});
+
+describe('RED: stable update contract', () => {
+  it('defines exactly one manifest-derived and preload-allowlisted update channel', () => {
+    const channels = IPC as Readonly<Record<string, string>>;
+    const manifest = JSON.parse(readFileSync(CHANNEL_MANIFEST_PATH, 'utf8')) as Record<
+      string,
+      string
+    >;
+    const preload = readFileSync(PRELOAD_PATH, 'utf8');
+
+    expect(channels.UpdatePersonality).toBe('update_personality');
+    expect(manifest.UpdatePersonality).toBe('update_personality');
+    expect(Object.values(manifest).filter((value) => value === 'update_personality')).toHaveLength(
+      1,
+    );
+    expect(preload.match(/['"]update_personality['"]/g)).toHaveLength(1);
+  });
+
+  it('exports one stable-ID update seam from the Electron-free domain', () => {
+    const personalities = readFileSync(PERSONALITIES_PATH, 'utf8');
+
+    expect(personalities).toMatch(
+      /export function updatePersonality\(\s*_?libraryDir: string,\s*_?id: string,\s*_?fields: PersonalityWriteFields,?\s*\): PersonalityDetail/,
+    );
+    expect(personalities).not.toMatch(/from ['"]electron['"]/);
+  });
+
+  it('allows only the registered main frame to update an exact stable ID and write DTO', () => {
+    const register = readFileSync(REGISTER_PATH, 'utf8');
+    const updateHandler = handlerSource(register, 'UpdatePersonality');
+
+    expect(register).toMatch(
+      /import \{[^}]*updatePersonality[^}]*\} from ['"]\.\/personalities\.js['"]/s,
+    );
+    expect(updateHandler).toContain('assertTrustedPersonalitySender(event, win)');
+    expect(updateHandler).toContain("assertString(args?.id, 'id')");
+    expect(updateHandler).toMatch(/if \(!isPersonalityId\(args\.id\)\)/);
+    expect(updateHandler).toMatch(/const \{ id, \.\.\.writeArgs \} = args/);
+    expect(updateHandler).toContain('validatePersonalityWriteFields(writeArgs)');
+    expect(updateHandler).toMatch(/updatePersonality\(personalityLibraryDir, id, fields\)/);
+    for (const field of FORBIDDEN_WRITE_FIELDS) {
+      if (field === 'id') continue;
+      expect(updateHandler).not.toMatch(new RegExp(`args\\?*\\.${field}\\b`));
     }
   });
 });
