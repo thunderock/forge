@@ -2375,6 +2375,16 @@ body.dragging-task * {
   border-color: color-mix(in srgb, var(--accent) 36%, var(--border));
 }
 
+.personality-library-action.is-destructive {
+  border-color: color-mix(in srgb, var(--error) 55%, var(--border));
+  color: var(--error);
+}
+
+.personality-library-action.is-destructive:hover {
+  background: color-mix(in srgb, var(--error) 10%, var(--bg-hover));
+  border-color: var(--error);
+}
+
 .personality-library-rail {
   width: clamp(176px, 28%, 280px);
   min-height: 0;
@@ -2505,6 +2515,13 @@ body.dragging-task * {
   font-weight: 600;
   line-height: 1.4;
   white-space: nowrap;
+}
+
+.personality-library-tags {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
 }
 
 .personality-library-detail {

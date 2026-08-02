@@ -39,8 +39,8 @@ export async function updatePersonality(
   });
 }
 
-export async function resetPersonality(_id: string): Promise<PersonalityDetail> {
-  throw new Error('Reset personality is not implemented');
+export async function resetPersonality(id: string): Promise<PersonalityDetail> {
+  return invoke<PersonalityDetail>(IPC.ResetPersonality, { id });
 }
 
 export function normalizePersonalityWriteFields(

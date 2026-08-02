@@ -12,9 +12,13 @@ import {
 } from 'solid-js';
 import type { PersonalityDetail, PersonalitySummary } from '../ipc/types';
 import { createHighlightedMarkdown } from '../lib/marked-shiki';
-import { readPersonality, refreshPersonalities, store } from '../store/store';
+import { readPersonality, refreshPersonalities, resetPersonality, store } from '../store/store';
+import { ConfirmDialog } from './ConfirmDialog';
 import { Dialog } from './Dialog';
 import { CloseIcon } from './icons';
+
+const RESET_CONFIRM_MESSAGE =
+  'This replaces the modified built-in with the current packaged version. Forge will try to save a backup first. You cannot undo this reset in the app.';
 
 interface PersonalityLibraryDialogProps {
   open: boolean;
@@ -107,6 +111,52 @@ export function personalityEditAction(
   };
 }
 
+export interface PersonalityResetTarget {
+  id: string;
+  name: string;
+}
+
+export function personalityResetAction(
+  detail: PersonalityDetail | null,
+  selectedId: string | null,
+): PersonalityResetTarget | null {
+  if (!detail || detail.id !== selectedId || !detail.builtin || !detail.modifiedFromSeed) {
+    return null;
+  }
+  return { id: detail.id, name: detail.name };
+}
+
+interface PersonalityResetSubmitterOptions {
+  reset: (id: string) => Promise<PersonalityDetail>;
+  onPending: (pending: boolean) => void;
+  onSuccess: (detail: PersonalityDetail) => void | Promise<void>;
+  onError: (target: PersonalityResetTarget) => void;
+}
+
+export function createPersonalityResetSubmitter(options: PersonalityResetSubmitterOptions) {
+  let pending = false;
+
+  return async (target: PersonalityResetTarget): Promise<boolean> => {
+    if (pending) return false;
+    pending = true;
+    options.onPending(true);
+
+    let result: PersonalityDetail;
+    try {
+      result = await options.reset(target.id);
+    } catch {
+      options.onError(target);
+      return false;
+    } finally {
+      pending = false;
+      options.onPending(false);
+    }
+
+    await options.onSuccess(result);
+    return true;
+  };
+}
+
 interface PersonalityLibraryRailProps {
   personalities: PersonalitySummary[];
   selectedId: string | null;
@@ -191,7 +241,12 @@ export function PersonalityOption(props: PersonalityOptionProps) {
       <span class="personality-library-option-copy">
         <span class="personality-library-option-name">{props.personality.name}</span>
         <Show when={props.personality.builtin}>
-          <span class="personality-library-tag">Built-in</span>
+          <span class="personality-library-tags">
+            <span class="personality-library-tag">Built-in</span>
+            <Show when={props.personality.modifiedFromSeed}>
+              <span class="personality-library-tag">Modified</span>
+            </Show>
+          </span>
         </Show>
       </span>
     </button>
@@ -204,6 +259,7 @@ interface PersonalityCatalogStateProps {
   kind: CatalogStateKind;
   onRetry: () => void;
   postSave?: boolean;
+  postReset?: boolean;
 }
 
 export function PersonalityCatalogState(props: PersonalityCatalogStateProps) {
@@ -231,9 +287,11 @@ export function PersonalityCatalogState(props: PersonalityCatalogStateProps) {
       <Show when={props.kind === 'error'}>
         <div class="personality-library-state-copy is-error">
           <p>
-            {props.postSave
-              ? 'Personality saved, but the library couldn’t refresh. Select Reload Library to reload it.'
-              : 'Couldn’t load the personality library. Select Reload Library to read the files again.'}
+            {props.postReset
+              ? 'Personality reset, but the library couldn’t refresh. Select Reload Library to reload it.'
+              : props.postSave
+                ? 'Personality saved, but the library couldn’t refresh. Select Reload Library to reload it.'
+                : 'Couldn’t load the personality library. Select Reload Library to read the files again.'}
           </p>
           <button type="button" class="personality-library-action" onClick={() => props.onRetry()}>
             Reload Library
@@ -290,18 +348,25 @@ export function PersonalityLibraryDialog(props: PersonalityLibraryDialogProps) {
   const subtitleId = createUniqueId();
   const detailRegionId = createUniqueId();
   const detailTitleId = createUniqueId();
+  const resetDescriptionId = createUniqueId();
   const listRequests = createAsyncRequestRunner();
   const detailRequests = createAsyncRequestRunner();
 
   const [selectedId, setSelectedId] = createSignal<string | null>(null);
   const [detail, setDetail] = createSignal<PersonalityDetail | null>(null);
   const [listLoading, setListLoading] = createSignal(false);
-  const [listError, setListError] = createSignal<'initial' | 'post-save' | null>(null);
+  const [listError, setListError] = createSignal<'initial' | 'post-save' | 'post-reset' | null>(
+    null,
+  );
   const [detailLoading, setDetailLoading] = createSignal(false);
   const [detailError, setDetailError] = createSignal(false);
+  const [resetTarget, setResetTarget] = createSignal<PersonalityResetTarget | null>(null);
+  const [resetPending, setResetPending] = createSignal(false);
+  const [resetError, setResetError] = createSignal<string | null>(null);
 
   let shellRef: HTMLDivElement | undefined;
   let detailScrollRef: HTMLDivElement | undefined;
+  let resetButtonRef: HTMLButtonElement | undefined;
   const optionRefs: HTMLButtonElement[] = [];
 
   const rows = () => store.personalities;
@@ -309,7 +374,23 @@ export function PersonalityLibraryDialog(props: PersonalityLibraryDialogProps) {
     () => rows().find((personality) => personality.id === selectedId()) ?? null,
   );
   const editAction = createMemo(() => personalityEditAction(detail(), selectedId()));
+  const resetAction = createMemo(() => personalityResetAction(detail(), selectedId()));
   const markdownHtml = createHighlightedMarkdown(() => detail()?.markdown);
+
+  const submitReset = createPersonalityResetSubmitter({
+    reset: resetPersonality,
+    onPending: setResetPending,
+    onError: (target) => {
+      setResetError(
+        `Couldn’t reset ${target.name}. The original file was left unchanged. Try again or cancel.`,
+      );
+    },
+    onSuccess: async (result) => {
+      setResetTarget(null);
+      setResetError(null);
+      await loadLibrary('post-reset', result.id);
+    },
+  });
 
   function focusOption(index: number): void {
     queueMicrotask(() => optionRefs[index]?.focus());
@@ -355,12 +436,19 @@ export function PersonalityLibraryDialog(props: PersonalityLibraryDialogProps) {
     void loadDetail(personality);
   }
 
-  function loadLibrary(postSave: boolean = false): Promise<void> {
+  function loadLibrary(
+    reason: 'initial' | 'post-save' | 'post-reset' = 'initial',
+    resetPreferredId: string | null = null,
+  ): Promise<void> {
+    const postSave = reason === 'post-save';
     const currentId = selectedId();
-    const preferredId = preferredPersonalityIdForReload(
-      postSave,
-      untrack(() => props.preferredId),
-    );
+    const preferredId =
+      reason === 'post-reset'
+        ? resetPreferredId
+        : preferredPersonalityIdForReload(
+            postSave,
+            untrack(() => props.preferredId),
+          );
     detailRequests.invalidate();
     setDetail(null);
     setListError(null);
@@ -387,7 +475,7 @@ export function PersonalityLibraryDialog(props: PersonalityLibraryDialogProps) {
         const selectedIndex = result.indexOf(selected);
         setSelectedId(selected.id);
         void loadDetail(selected);
-        if (postSave && selected.id === preferredId) {
+        if (reason !== 'initial' && selected.id === preferredId) {
           focusOption(selectedIndex);
         } else {
           focusSelectedFromPanel(selectedIndex);
@@ -395,9 +483,29 @@ export function PersonalityLibraryDialog(props: PersonalityLibraryDialogProps) {
       },
       () => {
         setListLoading(false);
-        setListError(postSave ? 'post-save' : 'initial');
+        setListError(reason);
       },
     );
+  }
+
+  function openResetConfirmation(): void {
+    const target = resetAction();
+    if (!target) return;
+    setResetError(null);
+    setResetTarget(target);
+  }
+
+  function cancelReset(): void {
+    if (resetPending()) return;
+    setResetTarget(null);
+    setResetError(null);
+    queueMicrotask(() => resetButtonRef?.focus());
+  }
+
+  function confirmReset(): void {
+    const target = resetTarget();
+    if (!target || resetPending()) return;
+    void submitReset(target);
   }
 
   function close(): void {
@@ -422,8 +530,9 @@ export function PersonalityLibraryDialog(props: PersonalityLibraryDialogProps) {
       () => [props.open, props.reloadGeneration] as const,
       ([open, reloadGeneration], previous) => {
         if (open) {
-          const postSave = Boolean(previous?.[0] && previous[1] !== reloadGeneration);
-          void loadLibrary(postSave);
+          const reason =
+            previous?.[0] && previous[1] !== reloadGeneration ? 'post-save' : 'initial';
+          void loadLibrary(reason);
           return;
         }
         listRequests.invalidate();
@@ -432,6 +541,9 @@ export function PersonalityLibraryDialog(props: PersonalityLibraryDialogProps) {
         setListLoading(false);
         setDetailLoading(false);
         setListError(null);
+        setResetTarget(null);
+        setResetPending(false);
+        setResetError(null);
       },
     ),
   );
@@ -442,125 +554,159 @@ export function PersonalityLibraryDialog(props: PersonalityLibraryDialogProps) {
   });
 
   return (
-    <Dialog
-      open={props.open}
-      onClose={close}
-      width="min(1000px, calc(100vw - 32px))"
-      labelledBy={titleId}
-      describedBy={subtitleId}
-      panelStyle={{
-        height: 'min(720px, calc(100vh - 64px))',
-        'max-height': 'calc(100vh - 64px)',
-        overflow: 'hidden',
-        padding: '0',
-        gap: '0',
-      }}
-    >
-      <div ref={shellRef} class="personality-library">
-        <header class="personality-library-header">
-          <div class="personality-library-heading-copy">
-            <h2 id={titleId}>Personality Library</h2>
-            <p id={subtitleId}>
-              Create, inspect, and customize personalities available in every project.
-            </p>
-          </div>
-          <button
-            type="button"
-            class="personality-library-close"
-            aria-label="Close Personality Library"
-            title="Close Personality Library"
-            onClick={close}
-          >
-            <CloseIcon />
-          </button>
-        </header>
+    <>
+      <Dialog
+        open={props.open}
+        onClose={close}
+        width="min(1000px, calc(100vw - 32px))"
+        labelledBy={titleId}
+        describedBy={subtitleId}
+        panelStyle={{
+          height: 'min(720px, calc(100vh - 64px))',
+          'max-height': 'calc(100vh - 64px)',
+          overflow: 'hidden',
+          padding: '0',
+          gap: '0',
+        }}
+      >
+        <div ref={shellRef} class="personality-library">
+          <header class="personality-library-header">
+            <div class="personality-library-heading-copy">
+              <h2 id={titleId}>Personality Library</h2>
+              <p id={subtitleId}>
+                Create, inspect, and customize personalities available in every project.
+              </p>
+            </div>
+            <button
+              type="button"
+              class="personality-library-close"
+              aria-label="Close Personality Library"
+              title="Close Personality Library"
+              onClick={close}
+            >
+              <CloseIcon />
+            </button>
+          </header>
 
-        <div class="personality-library-body" aria-busy={listLoading() ? 'true' : undefined}>
-          <Show when={listLoading()}>
-            <PersonalityCatalogState kind="loading" onRetry={() => void loadLibrary()} />
-          </Show>
-          <Show when={!listLoading() && listError()}>
-            <PersonalityCatalogState
-              kind="error"
-              postSave={listError() === 'post-save'}
-              onRetry={() => void loadLibrary(listError() === 'post-save')}
-            />
-          </Show>
-          <Show when={!listLoading() && !listError()}>
-            <PersonalityLibraryRail
-              personalities={rows()}
-              selectedId={selectedId()}
-              detailId={detailRegionId}
-              onNew={() => props.onNew()}
-              onSelect={selectPersonality}
-              onKeyDown={handleOptionKeyDown}
-              onElement={(element, index) => {
-                optionRefs[index] = element;
-              }}
-            />
-
-            <Show when={rows().length === 0}>
-              <section class="personality-library-detail">
-                <PersonalityCatalogState kind="empty" onRetry={() => void loadLibrary()} />
-              </section>
+          <div class="personality-library-body" aria-busy={listLoading() ? 'true' : undefined}>
+            <Show when={listLoading()}>
+              <PersonalityCatalogState kind="loading" onRetry={() => void loadLibrary()} />
             </Show>
+            <Show when={!listLoading() && listError()}>
+              <PersonalityCatalogState
+                kind="error"
+                postSave={listError() === 'post-save'}
+                postReset={listError() === 'post-reset'}
+                onRetry={() => void loadLibrary(listError() ?? 'initial')}
+              />
+            </Show>
+            <Show when={!listLoading() && !listError()}>
+              <PersonalityLibraryRail
+                personalities={rows()}
+                selectedId={selectedId()}
+                detailId={detailRegionId}
+                onNew={() => props.onNew()}
+                onSelect={selectPersonality}
+                onKeyDown={handleOptionKeyDown}
+                onElement={(element, index) => {
+                  optionRefs[index] = element;
+                }}
+              />
 
-            <Show when={selectedPersonality()} keyed>
-              {(personality) => (
+              <Show when={rows().length === 0}>
                 <section class="personality-library-detail">
-                  <div class="personality-library-detail-header">
-                    <PersonalityDetailIdentity personality={personality} titleId={detailTitleId} />
-                    <Show when={editAction()}>
-                      {(action) => (
-                        <div class="personality-library-detail-actions">
-                          <button
-                            type="button"
-                            class="personality-library-action"
-                            onClick={() => props.onEdit(action().id)}
-                          >
-                            {action().label}
-                          </button>
-                        </div>
-                      )}
-                    </Show>
-                  </div>
-                  <div
-                    ref={detailScrollRef}
-                    id={detailRegionId}
-                    class="personality-library-detail-scroll"
-                    role="region"
-                    aria-labelledby={detailTitleId}
-                    aria-busy={detailLoading() ? 'true' : undefined}
-                    tabIndex={0}
-                  >
-                    <Show when={detailLoading()}>
-                      <PersonalityDetailState
-                        kind="loading"
-                        name={personality.name}
-                        onRefresh={() => void loadDetail(personality)}
-                      />
-                    </Show>
-                    <Show when={!detailLoading() && detailError()}>
-                      <PersonalityDetailState
-                        kind="error"
-                        name={personality.name}
-                        onRefresh={() => void loadDetail(personality)}
-                      />
-                    </Show>
-                    <Show when={!detailLoading() && !detailError() && detail()}>
-                      <div
-                        class="plan-markdown plan-markdown-dialog personality-markdown"
-                        // eslint-disable-next-line solid/no-innerhtml -- helper sanitizes highlighted and fallback HTML
-                        innerHTML={markdownHtml()}
-                      />
-                    </Show>
-                  </div>
+                  <PersonalityCatalogState kind="empty" onRetry={() => void loadLibrary()} />
                 </section>
-              )}
+              </Show>
+
+              <Show when={selectedPersonality()} keyed>
+                {(personality) => (
+                  <section class="personality-library-detail">
+                    <div class="personality-library-detail-header">
+                      <PersonalityDetailIdentity
+                        personality={personality}
+                        titleId={detailTitleId}
+                      />
+                      <Show when={editAction()}>
+                        {(action) => (
+                          <div class="personality-library-detail-actions">
+                            <button
+                              type="button"
+                              class="personality-library-action"
+                              onClick={() => props.onEdit(action().id)}
+                            >
+                              {action().label}
+                            </button>
+                            <Show when={resetAction()}>
+                              <button
+                                ref={resetButtonRef}
+                                type="button"
+                                class="personality-library-action is-destructive"
+                                onClick={openResetConfirmation}
+                              >
+                                Reset to seed
+                              </button>
+                            </Show>
+                          </div>
+                        )}
+                      </Show>
+                    </div>
+                    <div
+                      ref={detailScrollRef}
+                      id={detailRegionId}
+                      class="personality-library-detail-scroll"
+                      role="region"
+                      aria-labelledby={detailTitleId}
+                      aria-busy={detailLoading() ? 'true' : undefined}
+                      tabIndex={0}
+                    >
+                      <Show when={detailLoading()}>
+                        <PersonalityDetailState
+                          kind="loading"
+                          name={personality.name}
+                          onRefresh={() => void loadDetail(personality)}
+                        />
+                      </Show>
+                      <Show when={!detailLoading() && detailError()}>
+                        <PersonalityDetailState
+                          kind="error"
+                          name={personality.name}
+                          onRefresh={() => void loadDetail(personality)}
+                        />
+                      </Show>
+                      <Show when={!detailLoading() && !detailError() && detail()}>
+                        <div
+                          class="plan-markdown plan-markdown-dialog personality-markdown"
+                          // eslint-disable-next-line solid/no-innerhtml -- helper sanitizes highlighted and fallback HTML
+                          innerHTML={markdownHtml()}
+                        />
+                      </Show>
+                    </div>
+                  </section>
+                )}
+              </Show>
             </Show>
-          </Show>
+          </div>
         </div>
-      </div>
-    </Dialog>
+      </Dialog>
+
+      <ConfirmDialog
+        open={resetTarget() !== null}
+        title={`Reset ${resetTarget()?.name ?? ''} to seed?`}
+        message={<span id={resetDescriptionId}>{RESET_CONFIRM_MESSAGE}</span>}
+        confirmLabel={resetPending() ? 'Resetting…' : 'Reset to seed'}
+        cancelLabel="Keep changes"
+        confirmLoading={resetPending()}
+        cancelDisabled={resetPending()}
+        danger
+        autoFocusCancel
+        zIndex={1300}
+        width="min(440px, calc(100vw - 32px))"
+        describedBy={resetDescriptionId}
+        error={resetError() ?? undefined}
+        onConfirm={confirmReset}
+        onCancel={cancelReset}
+      />
+    </>
   );
 }
