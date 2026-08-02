@@ -104,7 +104,7 @@ import {
   listPersonalities,
   readPersonality,
 } from './personalities.js';
-import type { PersonalityWriteFields } from './shared-types.js';
+import type { PersonalityDefaultAgent, PersonalityWriteFields } from './shared-types.js';
 import { loadKeybindings, saveKeybindings } from './keybindings.js';
 import {
   initAutoUpdater,
@@ -275,8 +275,22 @@ export async function openExternalHttpUrl(
 const validateBranchName = sharedValidateBranchName;
 
 type IpcArgs = Record<string, unknown>;
-const PERSONALITY_WRITE_KEYS = ['name', 'badge', 'color', 'markdown'] as const;
+const PERSONALITY_WRITE_KEYS = [
+  'name',
+  'badge',
+  'color',
+  'markdown',
+  'defaultAgent',
+  'defaultModel',
+  'defaultReasoningEffort',
+] as const;
+const REQUIRED_PERSONALITY_WRITE_KEYS = ['name', 'badge', 'color', 'markdown'] as const;
 const PERSONALITY_WRITE_KEY_SET = new Set<string>(PERSONALITY_WRITE_KEYS);
+const PERSONALITY_DEFAULT_AGENTS: ReadonlySet<string> = new Set([
+  'claude-code',
+  'codex',
+  'opencode',
+]);
 
 function assertTrustedPersonalitySender(event: IpcMainInvokeEvent, win: BrowserWindow): void {
   if (
@@ -295,18 +309,43 @@ function validatePersonalityWriteFields(args: unknown): PersonalityWriteFields {
   const record = args as Record<string, unknown>;
   const keys = Object.keys(record);
   if (
-    keys.length !== PERSONALITY_WRITE_KEYS.length ||
-    keys.some((key) => !PERSONALITY_WRITE_KEY_SET.has(key))
+    keys.some((key) => !PERSONALITY_WRITE_KEY_SET.has(key)) ||
+    REQUIRED_PERSONALITY_WRITE_KEYS.some(
+      (key) => !Object.prototype.hasOwnProperty.call(record, key),
+    )
   ) {
     throw new Error('Invalid personality request');
   }
 
-  const { name, badge, color, markdown } = record;
+  const { name, badge, color, markdown, defaultAgent, defaultModel, defaultReasoningEffort } =
+    record;
   assertString(name, 'name');
   assertString(badge, 'badge');
   assertString(color, 'color');
   assertString(markdown, 'markdown');
-  return { name, badge, color, markdown };
+  assertOptionalString(defaultAgent, 'defaultAgent');
+  assertOptionalString(defaultModel, 'defaultModel');
+  assertOptionalString(defaultReasoningEffort, 'defaultReasoningEffort');
+  if (defaultAgent !== undefined && !PERSONALITY_DEFAULT_AGENTS.has(defaultAgent)) {
+    throw new Error('defaultAgent must name a supported built-in agent');
+  }
+  if (defaultModel !== undefined && defaultModel.trim().length === 0) {
+    throw new Error('defaultModel must be a non-empty string');
+  }
+  if (defaultReasoningEffort !== undefined && defaultReasoningEffort.trim().length === 0) {
+    throw new Error('defaultReasoningEffort must be a non-empty string');
+  }
+  return {
+    name,
+    badge,
+    color,
+    markdown,
+    ...(defaultAgent === undefined
+      ? {}
+      : { defaultAgent: defaultAgent as PersonalityDefaultAgent }),
+    ...(defaultModel === undefined ? {} : { defaultModel }),
+    ...(defaultReasoningEffort === undefined ? {} : { defaultReasoningEffort }),
+  };
 }
 
 function absolutePathArg(args: IpcArgs, key: string): string {

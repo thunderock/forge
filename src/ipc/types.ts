@@ -12,6 +12,7 @@ export type {
   ImportableWorktree,
   MergeResult,
   MergeStatus,
+  PersonalityDefaultAgent,
   PersonalityDetail,
   PersonalitySummary,
   PersonalityWriteFields,

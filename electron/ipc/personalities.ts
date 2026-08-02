@@ -89,6 +89,22 @@ interface InternalParseResult {
   envelope: FrontmatterEnvelope;
   metadataEntries: Map<string, MetadataEntry>;
   personality: ParsedPersonalityMarkdown;
+  bindingWarning?: string;
+}
+
+interface MetadataValidationResult {
+  metadata: PersonalityMetadata;
+  bindingWarning?: string;
+}
+
+type PersonalityBinding = Pick<
+  PersonalityMetadata,
+  'defaultAgent' | 'defaultModel' | 'defaultReasoningEffort'
+>;
+
+interface BindingValidationResult {
+  binding: PersonalityBinding;
+  warning?: string;
 }
 
 const BOM = '\uFEFF';
@@ -97,6 +113,12 @@ const PERSONALITY_ID = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 const PERSONALITY_BADGE = /^[A-Z0-9]{1,4}$/;
 const PERSONALITY_COLOR = /^#(?:[0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$/;
 const SHA256_HEX = /^[a-f0-9]{64}$/;
+const PERSONALITY_DEFAULT_AGENTS: ReadonlySet<string> = new Set([
+  'claude-code',
+  'codex',
+  'opencode',
+]);
+const BINDING_METADATA_KEYS = ['defaultAgent', 'defaultModel', 'defaultReasoningEffort'] as const;
 
 export const MAX_PERSONALITY_FILE_BYTES = 2 * 1024 * 1024;
 const MAX_SEED_ERROR_MESSAGE_CHARS = 500;
@@ -256,10 +278,108 @@ function pristineHash(values: Map<string, unknown>, entries: Map<string, Metadat
   return value;
 }
 
+function isPersonalityDefaultAgent(value: unknown): value is PersonalityDefaultAgent {
+  return typeof value === 'string' && PERSONALITY_DEFAULT_AGENTS.has(value);
+}
+
+function strictOptionalBindingString(
+  values: Map<string, unknown>,
+  key: 'defaultModel' | 'defaultReasoningEffort',
+): string | undefined {
+  if (!values.has(key)) return undefined;
+  const value = values.get(key);
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    return fail(`Personality field ${key} must be a non-empty string when present`);
+  }
+  return value.trim();
+}
+
+function validateBindingMetadata(
+  values: Map<string, unknown>,
+  mode: PersonalityParseMode,
+): BindingValidationResult {
+  const hasAgent = values.has('defaultAgent');
+  const hasModel = values.has('defaultModel');
+  const hasEffort = values.has('defaultReasoningEffort');
+  const hasAnyBinding = hasAgent || hasModel || hasEffort;
+
+  if (mode === 'seed') {
+    if (hasAnyBinding) return fail('Packaged personality seeds must omit binding defaults');
+    return { binding: {} };
+  }
+
+  if (mode === 'custom') {
+    if (!hasAgent) {
+      if (hasModel || hasEffort) {
+        return fail('Personality model and reasoning effort require defaultAgent');
+      }
+      return { binding: {} };
+    }
+
+    const defaultAgent = values.get('defaultAgent');
+    if (!isPersonalityDefaultAgent(defaultAgent)) {
+      return fail('Personality field defaultAgent must name a supported built-in agent');
+    }
+    const defaultModel = strictOptionalBindingString(values, 'defaultModel');
+    const defaultReasoningEffort = strictOptionalBindingString(values, 'defaultReasoningEffort');
+    return {
+      binding: {
+        defaultAgent,
+        ...(defaultModel === undefined ? {} : { defaultModel }),
+        ...(defaultReasoningEffort === undefined ? {} : { defaultReasoningEffort }),
+      },
+    };
+  }
+
+  if (!hasAgent) {
+    return hasModel || hasEffort
+      ? {
+          binding: {},
+          warning: 'orphan model or reasoning effort metadata was ignored',
+        }
+      : { binding: {} };
+  }
+
+  const defaultAgent = values.get('defaultAgent');
+  if (!isPersonalityDefaultAgent(defaultAgent)) {
+    return {
+      binding: {},
+      warning: 'invalid defaultAgent and its binding metadata were ignored',
+    };
+  }
+
+  let warning: string | undefined;
+  let defaultModel: string | undefined;
+  if (hasModel) {
+    const value = values.get('defaultModel');
+    if (typeof value === 'string' && value.trim().length > 0) defaultModel = value.trim();
+    else warning = 'invalid model or reasoning effort metadata was ignored';
+  }
+
+  let defaultReasoningEffort: string | undefined;
+  if (hasEffort) {
+    const value = values.get('defaultReasoningEffort');
+    if (typeof value === 'string' && value.trim().length > 0) {
+      defaultReasoningEffort = value.trim();
+    } else {
+      warning = 'invalid model or reasoning effort metadata was ignored';
+    }
+  }
+
+  return {
+    binding: {
+      defaultAgent,
+      ...(defaultModel === undefined ? {} : { defaultModel }),
+      ...(defaultReasoningEffort === undefined ? {} : { defaultReasoningEffort }),
+    },
+    ...(warning === undefined ? {} : { warning }),
+  };
+}
+
 function validateMetadata(
   parsed: ParsedMetadata,
   options: ParsePersonalityMarkdownOptions,
-): PersonalityMetadata {
+): MetadataValidationResult {
   const { entries, values } = parsed;
   const id = requiredString(values, 'id');
   if (!isPersonalityId(id)) return fail('Personality field id is invalid');
@@ -291,7 +411,10 @@ function validateMetadata(
     if (!builtin) return fail('Packaged personality seeds must be built in');
     if (values.has('pristineHash'))
       return fail('Packaged personality seeds must omit pristineHash');
-    return { id, name, badge, color, builtin, seedRevision: positiveSeedRevision(values) };
+    validateBindingMetadata(values, options.mode);
+    return {
+      metadata: { id, name, badge, color, builtin, seedRevision: positiveSeedRevision(values) },
+    };
   }
   if (options.mode !== 'library' && options.mode !== 'custom') {
     return fail('Unknown personality parse mode');
@@ -301,34 +424,45 @@ function validateMetadata(
     return fail('Custom personality writes must not be built in');
   }
 
+  const { binding, warning } = validateBindingMetadata(values, options.mode);
+
   if (builtin) {
     return {
-      id,
-      name,
-      badge,
-      color,
-      builtin,
-      seedRevision: positiveSeedRevision(values),
-      pristineHash: pristineHash(values, entries),
+      metadata: {
+        id,
+        name,
+        badge,
+        color,
+        builtin,
+        seedRevision: positiveSeedRevision(values),
+        pristineHash: pristineHash(values, entries),
+        ...binding,
+      },
+      ...(warning === undefined ? {} : { bindingWarning: warning }),
     };
   }
 
   if (values.has('seedRevision') || values.has('pristineHash')) {
     return fail('Custom personalities must omit built-in seed fields');
   }
-  return { id, name, badge, color, builtin };
+  return {
+    metadata: { id, name, badge, color, builtin, ...binding },
+    ...(warning === undefined ? {} : { bindingWarning: warning }),
+  };
 }
 
 function parseInternal(raw: string, options: ParsePersonalityMarkdownOptions): InternalParseResult {
   const envelope = splitOpeningFrontmatter(raw);
   const parsedMetadata = parseMetadata(envelope.frontmatter);
+  const validated = validateMetadata(parsedMetadata, options);
   return {
     envelope,
     metadataEntries: parsedMetadata.entries,
     personality: {
-      metadata: validateMetadata(parsedMetadata, options),
+      metadata: validated.metadata,
       markdown: envelope.markdown,
     },
+    ...(validated.bindingWarning === undefined ? {} : { bindingWarning: validated.bindingWarning }),
   };
 }
 
@@ -387,13 +521,29 @@ function warnAboutCatalogEntry(
   warn?.(catalogMessage(`Skipping personality "${filename}": ${message}`));
 }
 
+function warnAboutSanitizedBinding(
+  warn: ((message: string) => void) | undefined,
+  id: string,
+  message: string | undefined,
+): void {
+  if (message === undefined) return;
+  warn?.(catalogMessage(`Personality "${id}" loaded with sanitized binding: ${message}`));
+}
+
 function personalitySummary(personality: ParsedPersonalityMarkdown): PersonalitySummary {
   const { id, name, badge, color, builtin } = personality.metadata;
   return { id, name, badge, color, builtin };
 }
 
 function personalityDetail(personality: ParsedPersonalityMarkdown): PersonalityDetail {
-  return { ...personalitySummary(personality), markdown: personality.markdown };
+  const { defaultAgent, defaultModel, defaultReasoningEffort } = personality.metadata;
+  return {
+    ...personalitySummary(personality),
+    markdown: personality.markdown,
+    ...(defaultAgent === undefined ? {} : { defaultAgent }),
+    ...(defaultModel === undefined ? {} : { defaultModel }),
+    ...(defaultReasoningEffort === undefined ? {} : { defaultReasoningEffort }),
+  };
 }
 
 function invalidCatalogRead(
@@ -485,19 +635,19 @@ function normalizeWriteFields(fields: PersonalityWriteFields): PersonalityWriteF
   if (typeof fields?.markdown !== 'string') {
     return fail('Personality field markdown must be a string');
   }
-  if (
-    fields.defaultAgent !== undefined ||
-    fields.defaultModel !== undefined ||
-    fields.defaultReasoningEffort !== undefined
-  ) {
-    return fail('Personality binding storage is not implemented');
+
+  const bindingValues = new Map<string, unknown>();
+  for (const key of BINDING_METADATA_KEYS) {
+    if (fields[key] !== undefined) bindingValues.set(key, fields[key]);
   }
+  const { binding } = validateBindingMetadata(bindingValues, 'custom');
 
   const normalized = {
     name: fields.name.trim(),
     badge: fields.badge.trim().toUpperCase(),
     color: fields.color.trim().toUpperCase(),
     markdown: fields.markdown,
+    ...binding,
   };
   if (normalized.name.length === 0 || normalized.name.length > 80) {
     return fail('Personality field name must contain 1 to 80 trimmed characters');
@@ -564,6 +714,11 @@ function serializeCustomPersonality(id: string, fields: PersonalityWriteFields):
       badge: fields.badge,
       color: fields.color,
       builtin: false,
+      ...(fields.defaultAgent === undefined ? {} : { defaultAgent: fields.defaultAgent }),
+      ...(fields.defaultModel === undefined ? {} : { defaultModel: fields.defaultModel }),
+      ...(fields.defaultReasoningEffort === undefined
+        ? {}
+        : { defaultReasoningEffort: fields.defaultReasoningEffort }),
     },
     null,
     { version: '1.2', aliasDuplicateObjects: false },
@@ -590,6 +745,9 @@ function serializeCustomPersonality(id: string, fields: PersonalityWriteFields):
     parsed.metadata.builtin !== false ||
     parsed.metadata.seedRevision !== undefined ||
     parsed.metadata.pristineHash !== undefined ||
+    parsed.metadata.defaultAgent !== fields.defaultAgent ||
+    parsed.metadata.defaultModel !== fields.defaultModel ||
+    parsed.metadata.defaultReasoningEffort !== fields.defaultReasoningEffort ||
     parsed.markdown !== fields.markdown
   ) {
     return fail('Generated personality did not round-trip exactly');
@@ -632,11 +790,11 @@ export function listPersonalities(
     }
 
     try {
-      summaries.push(
-        personalitySummary(
-          parsePersonalityMarkdown(candidate.raw, { mode: 'library', expectedId: id }),
-        ),
+      const parsed = guarded(() =>
+        parseInternal(candidate.raw, { mode: 'library', expectedId: id }),
       );
+      warnAboutSanitizedBinding(warn, filename, parsed.bindingWarning);
+      summaries.push(personalitySummary(parsed.personality));
     } catch (error: unknown) {
       warnAboutCatalogEntry(warn, filename, `invalid document: ${errorDetail(error)}`);
     }
@@ -660,9 +818,9 @@ export function readPersonality(
   }
 
   try {
-    return personalityDetail(
-      parsePersonalityMarkdown(candidate.raw, { mode: 'library', expectedId: id }),
-    );
+    const parsed = guarded(() => parseInternal(candidate.raw, { mode: 'library', expectedId: id }));
+    warnAboutSanitizedBinding(warn, id, parsed.bindingWarning);
+    return personalityDetail(parsed.personality);
   } catch (error: unknown) {
     return invalidCatalogRead(id, errorDetail(error), warn);
   }

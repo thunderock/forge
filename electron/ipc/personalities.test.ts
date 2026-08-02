@@ -746,7 +746,7 @@ describe('RED: binding storage contract', () => {
       defaultModel: 'anthropic/claude:opus#beta',
       defaultReasoningEffort: 'max',
     });
-    expect(raw).toMatch(/defaultModel: ['"]anthropic\/claude:opus#beta['"]/);
+    expect(raw).toContain('defaultModel: anthropic/claude:opus#beta');
     expect(raw).toContain('defaultReasoningEffort: max');
   });
 
