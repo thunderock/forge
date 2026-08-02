@@ -30,10 +30,13 @@ export async function createPersonality(
 }
 
 export async function updatePersonality(
-  _id: string,
-  _fields: PersonalityWriteFields,
+  id: string,
+  fields: PersonalityWriteFields,
 ): Promise<PersonalityDetail> {
-  throw new Error('Personality update is not implemented');
+  return invoke<PersonalityDetail>(IPC.UpdatePersonality, {
+    id,
+    ...normalizePersonalityWriteFields(fields),
+  });
 }
 
 export function normalizePersonalityWriteFields(

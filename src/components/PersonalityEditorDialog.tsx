@@ -6,6 +6,7 @@ import {
   createSignal,
   createUniqueId,
   on,
+  onCleanup,
   type JSX,
 } from 'solid-js';
 import type {
@@ -15,7 +16,7 @@ import type {
   PersonalityWriteFields,
 } from '../ipc/types';
 import type { ModelSelection } from '../store/types';
-import { createPersonality, store } from '../store/store';
+import { createPersonality, readPersonality, store, updatePersonality } from '../store/store';
 import { AgentSelector } from './AgentSelector';
 import { Dialog } from './Dialog';
 import { CheckIcon, CloseIcon } from './icons';
@@ -67,6 +68,8 @@ export function personalityBindingAgents(agents: AgentDef[]): AgentDef[] {
 
 const BADGE_PATTERN = /^[A-Z0-9]{1,4}$/;
 const COLOR_PATTERN = /^#(?:[0-9A-F]{3}|[0-9A-F]{6})$/i;
+const BINDING_HELP =
+  'Saved with this personality to prefill future task setup. You can override it per run.';
 
 export interface PersonalityPreviewIdentity {
   badge: string;
@@ -154,8 +157,122 @@ export function createPersonalitySubmitter(options: PersonalitySubmitterOptions)
   };
 }
 
+export type PersonalityEditorSaveTarget =
+  | { mode: 'create' | 'copy' }
+  | { mode: 'edit'; id: string };
+
+export interface LoadedPersonalityDraft {
+  mode: 'edit' | 'copy';
+  sourceId: string;
+  fields: PersonalityWriteFields;
+}
+
+export function personalityDraftFromDetail(detail: PersonalityDetail): LoadedPersonalityDraft {
+  const fields: PersonalityWriteFields = {
+    name: detail.builtin ? `${detail.name} (Copy)` : detail.name,
+    badge: detail.badge,
+    color: detail.color,
+    markdown: detail.markdown,
+    ...(detail.defaultAgent
+      ? {
+          defaultAgent: detail.defaultAgent,
+          defaultModel: detail.defaultModel,
+          defaultReasoningEffort: detail.defaultReasoningEffort,
+        }
+      : {}),
+  };
+
+  return {
+    mode: detail.builtin ? 'copy' : 'edit',
+    sourceId: detail.id,
+    fields,
+  };
+}
+
+interface PersonalityDraftLoaderOptions {
+  read: (id: string) => Promise<PersonalityDetail | null>;
+  isActive: () => boolean;
+  onLoading: (id: string) => void;
+  onLoaded: (draft: LoadedPersonalityDraft) => void;
+  onError: (id: string) => void;
+}
+
+export interface PersonalityDraftLoader {
+  load: (id: string) => Promise<void>;
+  invalidate: () => void;
+}
+
+export function createPersonalityDraftLoader(
+  options: PersonalityDraftLoaderOptions,
+): PersonalityDraftLoader {
+  let generation = 0;
+
+  return {
+    invalidate(): void {
+      generation += 1;
+    },
+    async load(id: string): Promise<void> {
+      const requestGeneration = ++generation;
+      const isCurrent = () => options.isActive() && requestGeneration === generation;
+      options.onLoading(id);
+
+      try {
+        const detail = await options.read(id);
+        if (!isCurrent()) return;
+        if (!detail || detail.id !== id) {
+          options.onError(id);
+          return;
+        }
+        options.onLoaded(personalityDraftFromDetail(detail));
+      } catch {
+        if (isCurrent()) options.onError(id);
+      }
+    },
+  };
+}
+
+interface PersonalityModeSubmitterOptions {
+  create: (fields: PersonalityWriteFields) => Promise<PersonalityDetail>;
+  update: (id: string, fields: PersonalityWriteFields) => Promise<PersonalityDetail>;
+  onSaved: (id: string) => void;
+  onPending: (pending: boolean) => void;
+  onError: (target: PersonalityEditorSaveTarget) => void;
+}
+
+export function createPersonalityModeSubmitter(options: PersonalityModeSubmitterOptions) {
+  let pending = false;
+
+  return async (
+    target: PersonalityEditorSaveTarget,
+    fields: PersonalityWriteFields,
+  ): Promise<boolean> => {
+    if (pending) return false;
+    pending = true;
+    options.onPending(true);
+
+    let saved: PersonalityDetail;
+    try {
+      saved =
+        target.mode === 'edit'
+          ? await options.update(target.id, fields)
+          : await options.create(fields);
+    } catch {
+      options.onError(target);
+      pending = false;
+      options.onPending(false);
+      return false;
+    }
+
+    pending = false;
+    options.onPending(false);
+    options.onSaved(saved.id);
+    return true;
+  };
+}
+
 interface PersonalityEditorDialogProps {
   open: boolean;
+  editId?: string | null;
   onClose: () => void;
   onSaved: (id: string) => void;
 }
@@ -203,6 +320,11 @@ export function PersonalityEditorDialog(props: PersonalityEditorDialogProps) {
   const [submitted, setSubmitted] = createSignal(false);
   const [saving, setSaving] = createSignal(false);
   const [saveError, setSaveError] = createSignal<string | null>(null);
+  const [mode, setMode] = createSignal<'create' | 'edit' | 'copy'>('create');
+  const [sourceId, setSourceId] = createSignal<string | null>(null);
+  const [draftReady, setDraftReady] = createSignal(false);
+  const [loading, setLoading] = createSignal(false);
+  const [loadError, setLoadError] = createSignal(false);
 
   let nameRef: HTMLInputElement | undefined;
   const swatchRefs: HTMLButtonElement[] = [];
@@ -233,6 +355,35 @@ export function PersonalityEditorDialog(props: PersonalityEditorDialogProps) {
   const selectedBindingAgent = createMemo(
     () => bindingAgents().find((agent) => agent.id === bindingAgentId()) ?? null,
   );
+  const targetName = createMemo(
+    () =>
+      store.personalities.find((personality) => personality.id === props.editId)?.name ??
+      'personality',
+  );
+  const editorTitle = createMemo(() => {
+    if (mode() === 'edit') return 'Edit Personality';
+    if (mode() === 'copy') return 'Create Personality Copy';
+    return 'New Personality';
+  });
+  const editorSubtitle = createMemo(() => {
+    if (mode() === 'edit') {
+      return 'Update this personality’s identity, instructions, and default binding.';
+    }
+    if (mode() === 'copy') {
+      return 'The built-in stays unchanged. Saving creates a new custom personality.';
+    }
+    return 'Create a reusable personality available in every project.';
+  });
+  const primaryLabel = createMemo(() => {
+    if (mode() === 'edit') return 'Save Changes';
+    if (mode() === 'copy') return 'Create Copy';
+    return 'Create Personality';
+  });
+  const busyLabel = createMemo(() => {
+    if (mode() === 'edit') return 'Saving…';
+    if (mode() === 'copy') return 'Creating copy…';
+    return 'Creating…';
+  });
 
   function visibleError(field: PersonalityDraftField): string | undefined {
     const error = errors()[field];
@@ -296,16 +447,107 @@ export function PersonalityEditorDialog(props: PersonalityEditorDialogProps) {
     clearMutationError();
   }
 
-  function close(): void {
-    if (!saving()) props.onClose();
+  function focusName(selectAll: boolean = false): void {
+    queueMicrotask(() => {
+      if (!nameRef) return;
+      if (typeof document !== 'undefined') {
+        const panel = nameRef.closest('.dialog-panel');
+        const active = document.activeElement;
+        if (panel?.contains(active) && active !== panel) return;
+      }
+      nameRef.focus();
+      if (selectAll) nameRef.select();
+    });
   }
 
-  const submit = createPersonalitySubmitter({
+  function resetTransientState(): void {
+    setTouched({ ...EMPTY_TOUCHED });
+    setSubmitted(false);
+    setSaving(false);
+    setSaveError(null);
+  }
+
+  function initializeCreateDraft(): void {
+    setMode('create');
+    setSourceId(null);
+    setName('');
+    setBadge('');
+    setColor('#FF6A2C');
+    setMarkdown('');
+    setBindingAgentId(null);
+    setModelSelection({});
+    setPreviewIdentity({ badge: '', color: '#FF6A2C' });
+    setLoading(false);
+    setLoadError(false);
+    setDraftReady(true);
+    resetTransientState();
+    focusName();
+  }
+
+  function initializeLoadedDraft(loaded: LoadedPersonalityDraft): void {
+    const { fields } = loaded;
+    setMode(loaded.mode);
+    setSourceId(loaded.sourceId);
+    setName(fields.name);
+    setBadge(fields.badge);
+    setColor(fields.color);
+    setMarkdown(fields.markdown);
+    setBindingAgentId(fields.defaultAgent ?? null);
+    setModelSelection({
+      model: fields.defaultModel,
+      reasoningEffort: fields.defaultReasoningEffort,
+    });
+    setPreviewIdentity({ badge: fields.badge, color: fields.color });
+    setLoading(false);
+    setLoadError(false);
+    setDraftReady(true);
+    resetTransientState();
+    focusName(loaded.mode === 'copy');
+  }
+
+  function close(): void {
+    if (saving()) return;
+    draftLoader.invalidate();
+    props.onClose();
+  }
+
+  const submit = createPersonalityModeSubmitter({
     create: createPersonality,
-    onSaved: (id) => props.onSaved(id),
+    update: updatePersonality,
+    onSaved: (id) => {
+      draftLoader.invalidate();
+      props.onSaved(id);
+    },
     onPending: setSaving,
-    onError: () =>
-      setSaveError('Couldn’t create this personality. Review the fields and try again.'),
+    onError: (target) => {
+      if (target.mode === 'edit') {
+        setSaveError('Couldn’t save changes. Review the fields and try again.');
+      } else if (target.mode === 'copy') {
+        setSaveError('Couldn’t create the copy. Review the fields and try again.');
+      } else {
+        setSaveError('Couldn’t create this personality. Review the fields and try again.');
+      }
+    },
+  });
+
+  const draftLoader = createPersonalityDraftLoader({
+    read: readPersonality,
+    isActive: () => props.open,
+    onLoading: (id) => {
+      setMode('edit');
+      setSourceId(id);
+      setDraftReady(false);
+      setLoading(true);
+      setLoadError(false);
+      resetTransientState();
+    },
+    onLoaded: initializeLoadedDraft,
+    onError: (id) => {
+      setSourceId(id);
+      setLoading(false);
+      setLoadError(true);
+      setDraftReady(false);
+    },
   });
 
   async function handleSubmit(event: SubmitEvent): Promise<void> {
@@ -330,7 +572,12 @@ export function PersonalityEditorDialog(props: PersonalityEditorDialogProps) {
         : {}),
     };
     setColor(normalizedColor);
-    await submit(fields);
+    const currentMode = mode();
+    const currentSourceId = sourceId();
+    if (currentMode === 'edit' && !currentSourceId) return;
+    const target: PersonalityEditorSaveTarget =
+      currentMode === 'edit' ? { mode: 'edit', id: currentSourceId ?? '' } : { mode: currentMode };
+    await submit(target, fields);
   }
 
   function handleSwatchKeyDown(event: KeyboardEvent, current: number): void {
@@ -346,24 +593,26 @@ export function PersonalityEditorDialog(props: PersonalityEditorDialogProps) {
 
   createEffect(
     on(
-      () => props.open,
-      (open) => {
-        if (!open) return;
-        setName('');
-        setBadge('');
-        setColor('#FF6A2C');
-        setMarkdown('');
-        setBindingAgentId(null);
-        setModelSelection({});
-        setPreviewIdentity({ badge: '', color: '#FF6A2C' });
-        setTouched({ ...EMPTY_TOUCHED });
-        setSubmitted(false);
-        setSaving(false);
-        setSaveError(null);
-        queueMicrotask(() => nameRef?.focus());
+      () => [props.open, props.editId ?? null] as const,
+      ([open, editId]) => {
+        if (!open) {
+          draftLoader.invalidate();
+          setDraftReady(false);
+          setLoading(false);
+          setLoadError(false);
+          return;
+        }
+        if (editId) {
+          void draftLoader.load(editId);
+          return;
+        }
+        draftLoader.invalidate();
+        initializeCreateDraft();
       },
     ),
   );
+
+  onCleanup(() => draftLoader.invalidate());
 
   return (
     <Dialog
@@ -383,13 +632,13 @@ export function PersonalityEditorDialog(props: PersonalityEditorDialogProps) {
     >
       <form
         class="personality-editor"
-        aria-busy={saving() ? 'true' : undefined}
+        aria-busy={saving() || loading() ? 'true' : undefined}
         onSubmit={handleSubmit}
       >
         <header class="personality-editor-header">
           <div class="personality-editor-heading-copy">
-            <h2 id={titleId}>New Personality</h2>
-            <p id={subtitleId}>Create a reusable personality available in every project.</p>
+            <h2 id={titleId}>{editorTitle()}</h2>
+            <p id={subtitleId}>{editorSubtitle()}</p>
           </div>
           <button
             type="button"
@@ -404,245 +653,287 @@ export function PersonalityEditorDialog(props: PersonalityEditorDialogProps) {
         </header>
 
         <div class="personality-editor-body">
-          <div class="personality-editor-form">
-            <section class="personality-editor-section" aria-labelledby={`${titleId}-identity`}>
-              <h3 id={`${titleId}-identity`}>Identity</h3>
-              <fieldset class="personality-editor-fieldset" disabled={saving()}>
-                <div class="personality-editor-identity-grid">
+          <Show
+            when={draftReady()}
+            fallback={
+              <div class="personality-editor-load-state">
+                <Show when={loading()}>
+                  <div class="personality-editor-load-status" role="status" aria-live="polite">
+                    <span class="inline-spinner" aria-hidden="true" />
+                    <span>Loading {targetName()}…</span>
+                  </div>
+                </Show>
+                <Show when={loadError()}>
+                  <div class="personality-editor-load-error" role="alert">
+                    <p>Couldn’t load {targetName()}. The file may have changed on disk.</p>
+                    <button
+                      type="button"
+                      class="personality-editor-secondary"
+                      onClick={() => {
+                        const id = props.editId;
+                        if (id) void draftLoader.load(id);
+                      }}
+                    >
+                      Reload Personality
+                    </button>
+                  </div>
+                </Show>
+              </div>
+            }
+          >
+            <div class="personality-editor-form">
+              <section class="personality-editor-section" aria-labelledby={`${titleId}-identity`}>
+                <h3 id={`${titleId}-identity`}>Identity</h3>
+                <fieldset class="personality-editor-fieldset" disabled={saving()}>
+                  <div class="personality-editor-identity-grid">
+                    <div class="personality-editor-field">
+                      <label for={`${titleId}-name`}>Name</label>
+                      <input
+                        ref={nameRef}
+                        id={`${titleId}-name`}
+                        type="text"
+                        value={name()}
+                        maxlength={80}
+                        aria-describedby={describedBy(nameHelpId, nameErrorId, nameError())}
+                        aria-invalid={nameError() ? 'true' : undefined}
+                        onInput={(event) => {
+                          setName(event.currentTarget.value);
+                          clearMutationError();
+                        }}
+                        onBlur={() => markTouched('name')}
+                      />
+                      <p id={nameHelpId} class="personality-editor-help">
+                        Shown in the library and future task panes.
+                      </p>
+                      <Show when={nameError()}>
+                        {(error) => (
+                          <p id={nameErrorId} class="personality-editor-error">
+                            {error()}
+                          </p>
+                        )}
+                      </Show>
+                    </div>
+
+                    <div class="personality-editor-field">
+                      <label for={`${titleId}-badge`}>Badge</label>
+                      <input
+                        id={`${titleId}-badge`}
+                        type="text"
+                        value={badge()}
+                        maxlength={4}
+                        autocapitalize="characters"
+                        aria-describedby={describedBy(badgeHelpId, badgeErrorId, badgeError())}
+                        aria-invalid={badgeError() ? 'true' : undefined}
+                        onInput={(event) => updateBadge(event.currentTarget.value)}
+                        onBlur={() => markTouched('badge')}
+                      />
+                      <p id={badgeHelpId} class="personality-editor-help">
+                        1–4 letters or numbers.
+                      </p>
+                      <Show when={badgeError()}>
+                        {(error) => (
+                          <p id={badgeErrorId} class="personality-editor-error">
+                            {error()}
+                          </p>
+                        )}
+                      </Show>
+                    </div>
+                  </div>
+
+                  <div class="personality-editor-color-field">
+                    <span class="personality-editor-label" id={`${titleId}-color-label`}>
+                      Color
+                    </span>
+                    <div
+                      class="personality-editor-color-controls"
+                      role="group"
+                      aria-labelledby={`${titleId}-color-label`}
+                    >
+                      <div class="personality-editor-swatches">
+                        <For each={PERSONALITY_COLOR_OPTIONS}>
+                          {(option, index) => {
+                            const selected = () => activeSwatchColor() === option.value;
+                            return (
+                              <button
+                                ref={(element) => {
+                                  swatchRefs[index()] = element;
+                                }}
+                                type="button"
+                                class="personality-editor-swatch"
+                                style={{ '--swatch-color': option.value } as JSX.CSSProperties}
+                                aria-label={`${option.name} ${option.value}`}
+                                aria-pressed={selected()}
+                                tabIndex={index() === selectedSwatchIndex() ? 0 : -1}
+                                onClick={() => selectColor(option.value)}
+                                onKeyDown={(event) => handleSwatchKeyDown(event, index())}
+                              >
+                                <Show when={selected()}>
+                                  <CheckIcon size={14} />
+                                </Show>
+                              </button>
+                            );
+                          }}
+                        </For>
+                      </div>
+                      <input
+                        class="personality-editor-color-input"
+                        type="text"
+                        value={color()}
+                        placeholder="#FF6A2C"
+                        aria-label="Hex color"
+                        aria-describedby={colorError() ? colorErrorId : undefined}
+                        aria-invalid={colorError() ? 'true' : undefined}
+                        onInput={(event) => updateColor(event.currentTarget.value)}
+                        onBlur={() => {
+                          markTouched('color');
+                          const normalized = normalizePersonalityColor(color());
+                          if (normalized) setColor(normalized);
+                        }}
+                      />
+                      <div class="personality-editor-badge-preview">
+                        <PersonalityBadge personality={badgePreview()} />
+                        <span>Badge preview</span>
+                      </div>
+                    </div>
+                    <Show when={colorError()}>
+                      {(error) => (
+                        <p id={colorErrorId} class="personality-editor-error">
+                          {error()}
+                        </p>
+                      )}
+                    </Show>
+                  </div>
+                </fieldset>
+              </section>
+
+              <section
+                class="personality-editor-section"
+                aria-labelledby={`${titleId}-instructions`}
+              >
+                <h3 id={`${titleId}-instructions`}>Instructions</h3>
+                <fieldset class="personality-editor-fieldset" disabled={saving()}>
                   <div class="personality-editor-field">
-                    <label for={`${titleId}-name`}>Name</label>
-                    <input
-                      ref={nameRef}
-                      id={`${titleId}-name`}
-                      type="text"
-                      value={name()}
-                      maxlength={80}
-                      aria-describedby={describedBy(nameHelpId, nameErrorId, nameError())}
-                      aria-invalid={nameError() ? 'true' : undefined}
+                    <label class="visually-hidden" for={`${titleId}-markdown`}>
+                      Markdown instructions
+                    </label>
+                    <textarea
+                      id={`${titleId}-markdown`}
+                      class="personality-editor-markdown"
+                      value={markdown()}
+                      placeholder="Describe the role, focus, approach, and anti-patterns in Markdown…"
+                      spellcheck={false}
+                      aria-describedby={
+                        markdownError()
+                          ? `${markdownCounterId} ${markdownErrorId}`
+                          : markdownCounterId
+                      }
+                      aria-invalid={markdownError() ? 'true' : undefined}
                       onInput={(event) => {
-                        setName(event.currentTarget.value);
+                        setMarkdown(event.currentTarget.value);
                         clearMutationError();
                       }}
-                      onBlur={() => markTouched('name')}
+                      onBlur={() => markTouched('markdown')}
                     />
-                    <p id={nameHelpId} class="personality-editor-help">
-                      Shown in the library and future task panes.
-                    </p>
-                    <Show when={nameError()}>
+                    <Show when={markdownError()}>
                       {(error) => (
-                        <p id={nameErrorId} class="personality-editor-error">
+                        <p id={markdownErrorId} class="personality-editor-error">
                           {error()}
                         </p>
                       )}
                     </Show>
-                  </div>
-
-                  <div class="personality-editor-field">
-                    <label for={`${titleId}-badge`}>Badge</label>
-                    <input
-                      id={`${titleId}-badge`}
-                      type="text"
-                      value={badge()}
-                      maxlength={4}
-                      autocapitalize="characters"
-                      aria-describedby={describedBy(badgeHelpId, badgeErrorId, badgeError())}
-                      aria-invalid={badgeError() ? 'true' : undefined}
-                      onInput={(event) => updateBadge(event.currentTarget.value)}
-                      onBlur={() => markTouched('badge')}
-                    />
-                    <p id={badgeHelpId} class="personality-editor-help">
-                      1–4 letters or numbers.
+                    <p
+                      id={markdownCounterId}
+                      class={`personality-editor-byte-count${markdownBytes() > MAX_PERSONALITY_MARKDOWN_BYTES ? ' is-error' : ''}`}
+                    >
+                      Markdown size: {formatMarkdownBytes(markdownBytes())} / 2 MB
                     </p>
-                    <Show when={badgeError()}>
-                      {(error) => (
-                        <p id={badgeErrorId} class="personality-editor-error">
-                          {error()}
-                        </p>
-                      )}
-                    </Show>
                   </div>
-                </div>
+                </fieldset>
+              </section>
 
-                <div class="personality-editor-color-field">
-                  <span class="personality-editor-label" id={`${titleId}-color-label`}>
-                    Color
-                  </span>
-                  <div
-                    class="personality-editor-color-controls"
-                    role="group"
-                    aria-labelledby={`${titleId}-color-label`}
-                  >
-                    <div class="personality-editor-swatches">
-                      <For each={PERSONALITY_COLOR_OPTIONS}>
-                        {(option, index) => {
-                          const selected = () => activeSwatchColor() === option.value;
-                          return (
-                            <button
-                              ref={(element) => {
-                                swatchRefs[index()] = element;
-                              }}
-                              type="button"
-                              class="personality-editor-swatch"
-                              style={{ '--swatch-color': option.value } as JSX.CSSProperties}
-                              aria-label={`${option.name} ${option.value}`}
-                              aria-pressed={selected()}
-                              tabIndex={index() === selectedSwatchIndex() ? 0 : -1}
-                              onClick={() => selectColor(option.value)}
-                              onKeyDown={(event) => handleSwatchKeyDown(event, index())}
-                            >
-                              <Show when={selected()}>
-                                <CheckIcon size={14} />
-                              </Show>
-                            </button>
-                          );
-                        }}
-                      </For>
-                    </div>
-                    <input
-                      class="personality-editor-color-input"
-                      type="text"
-                      value={color()}
-                      placeholder="#FF6A2C"
-                      aria-label="Hex color"
-                      aria-describedby={colorError() ? colorErrorId : undefined}
-                      aria-invalid={colorError() ? 'true' : undefined}
-                      onInput={(event) => updateColor(event.currentTarget.value)}
-                      onBlur={() => {
-                        markTouched('color');
-                        const normalized = normalizePersonalityColor(color());
-                        if (normalized) setColor(normalized);
-                      }}
-                    />
-                    <div class="personality-editor-badge-preview">
-                      <PersonalityBadge personality={badgePreview()} />
-                      <span>Badge preview</span>
-                    </div>
-                  </div>
-                  <Show when={colorError()}>
-                    {(error) => (
-                      <p id={colorErrorId} class="personality-editor-error">
-                        {error()}
-                      </p>
-                    )}
-                  </Show>
-                </div>
-              </fieldset>
-            </section>
-
-            <section class="personality-editor-section" aria-labelledby={`${titleId}-instructions`}>
-              <h3 id={`${titleId}-instructions`}>Instructions</h3>
-              <fieldset class="personality-editor-fieldset" disabled={saving()}>
-                <div class="personality-editor-field">
-                  <label class="visually-hidden" for={`${titleId}-markdown`}>
-                    Markdown instructions
-                  </label>
-                  <textarea
-                    id={`${titleId}-markdown`}
-                    class="personality-editor-markdown"
-                    value={markdown()}
-                    placeholder="Describe the role, focus, approach, and anti-patterns in Markdown…"
-                    spellcheck={false}
-                    aria-describedby={
-                      markdownError()
-                        ? `${markdownCounterId} ${markdownErrorId}`
-                        : markdownCounterId
-                    }
-                    aria-invalid={markdownError() ? 'true' : undefined}
-                    onInput={(event) => {
-                      setMarkdown(event.currentTarget.value);
-                      clearMutationError();
-                    }}
-                    onBlur={() => markTouched('markdown')}
-                  />
-                  <Show when={markdownError()}>
-                    {(error) => (
-                      <p id={markdownErrorId} class="personality-editor-error">
-                        {error()}
-                      </p>
-                    )}
-                  </Show>
+              <section class="personality-editor-section" aria-labelledby={`${titleId}-binding`}>
+                <h3 id={`${titleId}-binding`}>Default binding</h3>
+                <fieldset class="personality-editor-fieldset" disabled={saving()}>
                   <p
-                    id={markdownCounterId}
-                    class={`personality-editor-byte-count${markdownBytes() > MAX_PERSONALITY_MARKDOWN_BYTES ? ' is-error' : ''}`}
+                    id={bindingHelpId}
+                    class="personality-editor-help personality-editor-binding-help"
                   >
-                    Markdown size: {formatMarkdownBytes(markdownBytes())} / 2 MB
+                    {BINDING_HELP}
                   </p>
-                </div>
-              </fieldset>
-            </section>
-
-            <section class="personality-editor-section" aria-labelledby={`${titleId}-binding`}>
-              <h3 id={`${titleId}-binding`}>Default binding</h3>
-              <fieldset class="personality-editor-fieldset" disabled={saving()}>
-                <p
-                  id={bindingHelpId}
-                  class="personality-editor-help personality-editor-binding-help"
-                >
-                  Saved with this personality to prefill future task setup. You can override it per
-                  run.
-                </p>
-                <AgentSelector
-                  agents={bindingAgents()}
-                  selectedAgent={selectedBindingAgent()}
-                  onSelect={selectBindingAgent}
-                  showNone
-                  noneLabel="None"
-                  onClear={clearBindingAgent}
-                  density="editor"
-                  describedBy={
-                    bindingAgentId() ? bindingHelpId : `${bindingHelpId} ${noBindingHelpId}`
-                  }
-                />
-                <Show
-                  when={selectedBindingAgent()}
-                  fallback={
-                    <p id={noBindingHelpId} class="personality-editor-help">
-                      Forge will use its normal task default.
-                    </p>
-                  }
-                >
-                  {(agent) => (
-                    <ModelSelector
-                      agentDef={agent()}
-                      selection={modelSelection()}
-                      onChange={setModelSelection}
-                      density="editor"
-                    />
-                  )}
-                </Show>
-              </fieldset>
-            </section>
-          </div>
+                  <AgentSelector
+                    agents={bindingAgents()}
+                    selectedAgent={selectedBindingAgent()}
+                    onSelect={selectBindingAgent}
+                    showNone
+                    noneLabel="None"
+                    onClear={clearBindingAgent}
+                    density="editor"
+                    describedBy={
+                      bindingAgentId() ? bindingHelpId : `${bindingHelpId} ${noBindingHelpId}`
+                    }
+                  />
+                  <Show
+                    when={selectedBindingAgent()}
+                    fallback={
+                      <p id={noBindingHelpId} class="personality-editor-help">
+                        Forge will use its normal task default.
+                      </p>
+                    }
+                  >
+                    {(agent) => (
+                      <ModelSelector
+                        agentDef={agent()}
+                        selection={modelSelection()}
+                        onChange={setModelSelection}
+                        density="editor"
+                      />
+                    )}
+                  </Show>
+                </fieldset>
+              </section>
+            </div>
+          </Show>
         </div>
 
         <footer class="personality-editor-footer">
-          <Show when={saveError()}>
-            {(error) => (
-              <p class="personality-editor-save-error" role="alert">
-                {error()}
-              </p>
-            )}
+          <Show
+            when={draftReady()}
+            fallback={
+              <div class="personality-editor-actions">
+                <button type="button" class="personality-editor-secondary" onClick={close}>
+                  Close Editor
+                </button>
+              </div>
+            }
+          >
+            <Show when={saveError()}>
+              {(error) => (
+                <p class="personality-editor-save-error" role="alert">
+                  {error()}
+                </p>
+              )}
+            </Show>
+            <div class="personality-editor-actions">
+              <button
+                type="button"
+                class="personality-editor-secondary"
+                disabled={saving()}
+                onClick={close}
+              >
+                Discard Changes
+              </button>
+              <button
+                type="submit"
+                class="personality-editor-primary"
+                disabled={!isValid() || saving()}
+              >
+                <Show when={saving()} fallback={primaryLabel()}>
+                  <span class="inline-spinner" aria-hidden="true" />
+                  <span>{busyLabel()}</span>
+                </Show>
+              </button>
+            </div>
           </Show>
-          <div class="personality-editor-actions">
-            <button
-              type="button"
-              class="personality-editor-secondary"
-              disabled={saving()}
-              onClick={close}
-            >
-              Discard Changes
-            </button>
-            <button
-              type="submit"
-              class="personality-editor-primary"
-              disabled={!isValid() || saving()}
-            >
-              <Show when={saving()} fallback="Create Personality">
-                <span class="inline-spinner" aria-hidden="true" />
-                <span>Creating…</span>
-              </Show>
-            </button>
-          </div>
         </footer>
       </form>
     </Dialog>

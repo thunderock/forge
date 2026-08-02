@@ -2652,6 +2652,35 @@ body.dragging-task * {
   overscroll-behavior: contain;
 }
 
+.personality-editor-load-state {
+  min-height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--fg-muted);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.personality-editor-load-status,
+.personality-editor-load-error {
+  max-width: 440px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  text-align: center;
+}
+
+.personality-editor-load-error {
+  flex-direction: column;
+  color: var(--error);
+}
+
+.personality-editor-load-error p {
+  margin: 0;
+}
+
 .personality-editor-form {
   width: 100%;
   max-width: 760px;
