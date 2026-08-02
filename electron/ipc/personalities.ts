@@ -530,15 +530,26 @@ function warnAboutSanitizedBinding(
   warn?.(catalogMessage(`Personality "${id}" loaded with sanitized binding: ${message}`));
 }
 
-function personalitySummary(personality: ParsedPersonalityMarkdown): PersonalitySummary {
-  const { id, name, badge, color, builtin } = personality.metadata;
-  return { id, name, badge, color, builtin, modifiedFromSeed: false };
+function personalitySummary(
+  personality: ParsedPersonalityMarkdown,
+  installedRaw: string,
+): PersonalitySummary {
+  const { id, name, badge, color, builtin, pristineHash } = personality.metadata;
+  let modifiedFromSeed = false;
+  if (builtin) {
+    if (pristineHash === undefined) return fail('Built-in personality is missing pristineHash');
+    modifiedFromSeed = computeInstalledPersonalityPayloadHash(installedRaw) !== pristineHash;
+  }
+  return { id, name, badge, color, builtin, modifiedFromSeed };
 }
 
-function personalityDetail(personality: ParsedPersonalityMarkdown): PersonalityDetail {
+function personalityDetail(
+  personality: ParsedPersonalityMarkdown,
+  installedRaw: string,
+): PersonalityDetail {
   const { defaultAgent, defaultModel, defaultReasoningEffort } = personality.metadata;
   return {
-    ...personalitySummary(personality),
+    ...personalitySummary(personality, installedRaw),
     markdown: personality.markdown,
     ...(defaultAgent === undefined ? {} : { defaultAgent }),
     ...(defaultModel === undefined ? {} : { defaultModel }),
@@ -794,7 +805,7 @@ export function listPersonalities(
         parseInternal(candidate.raw, { mode: 'library', expectedId: id }),
       );
       warnAboutSanitizedBinding(warn, filename, parsed.bindingWarning);
-      summaries.push(personalitySummary(parsed.personality));
+      summaries.push(personalitySummary(parsed.personality, candidate.raw));
     } catch (error: unknown) {
       warnAboutCatalogEntry(warn, filename, `invalid document: ${errorDetail(error)}`);
     }
@@ -820,7 +831,7 @@ export function readPersonality(
   try {
     const parsed = guarded(() => parseInternal(candidate.raw, { mode: 'library', expectedId: id }));
     warnAboutSanitizedBinding(warn, id, parsed.bindingWarning);
-    return personalityDetail(parsed.personality);
+    return personalityDetail(parsed.personality, candidate.raw);
   } catch (error: unknown) {
     return invalidCatalogRead(id, errorDetail(error), warn);
   }
