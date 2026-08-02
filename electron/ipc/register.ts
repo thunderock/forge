@@ -103,6 +103,7 @@ import {
   isPersonalityId,
   listPersonalities,
   readPersonality,
+  updatePersonality,
 } from './personalities.js';
 import type { PersonalityDefaultAgent, PersonalityWriteFields } from './shared-types.js';
 import { loadKeybindings, saveKeybindings } from './keybindings.js';
@@ -861,6 +862,14 @@ export function registerAllHandlers(win: BrowserWindow): void {
     assertTrustedPersonalitySender(event, win);
     const fields = validatePersonalityWriteFields(args);
     return createPersonality(personalityLibraryDir, fields);
+  });
+  ipcMain.handle(IPC.UpdatePersonality, (event, args: IpcArgs) => {
+    assertTrustedPersonalitySender(event, win);
+    assertString(args?.id, 'id');
+    if (!isPersonalityId(args.id)) throw new Error('Invalid personality id');
+    const { id, ...writeArgs } = args;
+    const fields = validatePersonalityWriteFields(writeArgs);
+    return updatePersonality(personalityLibraryDir, id, fields);
   });
 
   // --- Keybindings ---
