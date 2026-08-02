@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { isMap, isScalar, parseDocument } from 'yaml';
+import { Document, isMap, isScalar, parseDocument } from 'yaml';
 import { atomicWriteFileSync } from '../mcp/atomic.js';
 import type {
   PersonalityDetail,
@@ -9,7 +9,7 @@ import type {
   PersonalityWriteFields,
 } from './shared-types.js';
 
-export type PersonalityParseMode = 'seed' | 'library';
+export type PersonalityParseMode = 'seed' | 'library' | 'custom';
 
 export interface PersonalityMetadata {
   id: string;
@@ -96,6 +96,8 @@ const SHA256_HEX = /^[a-f0-9]{64}$/;
 
 export const MAX_PERSONALITY_FILE_BYTES = 2 * 1024 * 1024;
 const MAX_SEED_ERROR_MESSAGE_CHARS = 500;
+const MAX_PERSONALITY_ID_CHARS = 64;
+const MAX_CREATE_CANDIDATES = 10_000;
 
 type CandidateReadResult =
   | { status: 'ok'; raw: string }
@@ -287,7 +289,13 @@ function validateMetadata(
       return fail('Packaged personality seeds must omit pristineHash');
     return { id, name, badge, color, builtin, seedRevision: positiveSeedRevision(values) };
   }
-  if (options.mode !== 'library') return fail('Unknown personality parse mode');
+  if (options.mode !== 'library' && options.mode !== 'custom') {
+    return fail('Unknown personality parse mode');
+  }
+
+  if (options.mode === 'custom' && builtin) {
+    return fail('Custom personality writes must not be built in');
+  }
 
   if (builtin) {
     return {
@@ -466,6 +474,118 @@ export function isPersonalityId(id: unknown): id is string {
   return typeof id === 'string' && PERSONALITY_ID.test(id);
 }
 
+function normalizeWriteFields(fields: PersonalityWriteFields): PersonalityWriteFields {
+  if (typeof fields?.name !== 'string') return fail('Personality field name must be a string');
+  if (typeof fields?.badge !== 'string') return fail('Personality field badge must be a string');
+  if (typeof fields?.color !== 'string') return fail('Personality field color must be a string');
+  if (typeof fields?.markdown !== 'string') {
+    return fail('Personality field markdown must be a string');
+  }
+
+  const normalized = {
+    name: fields.name.trim(),
+    badge: fields.badge.trim().toUpperCase(),
+    color: fields.color.trim().toUpperCase(),
+    markdown: fields.markdown,
+  };
+  if (normalized.name.length === 0 || normalized.name.length > 80) {
+    return fail('Personality field name must contain 1 to 80 trimmed characters');
+  }
+  if (!PERSONALITY_BADGE.test(normalized.badge)) {
+    return fail('Personality field badge must contain 1 to 4 uppercase letters or digits');
+  }
+  if (!PERSONALITY_COLOR.test(normalized.color)) {
+    return fail('Personality field color must be a #RGB or #RRGGBB value');
+  }
+  if (normalized.markdown.trim().length === 0) {
+    return fail('Personality markdown body must not be empty');
+  }
+  return normalized;
+}
+
+function personalitySlugBase(name: string): string {
+  const slug = name
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, MAX_PERSONALITY_ID_CHARS);
+  return slug || 'personality';
+}
+
+function suffixedPersonalityId(base: string, sequence: number): string {
+  if (sequence === 1) return base;
+  const suffix = `-${sequence}`;
+  if (suffix.length >= MAX_PERSONALITY_ID_CHARS) {
+    return fail('Unable to allocate a personality ID');
+  }
+  const stem = base.slice(0, MAX_PERSONALITY_ID_CHARS - suffix.length).replace(/[-_]+$/g, '');
+  const id = `${stem || 'personality'.slice(0, MAX_PERSONALITY_ID_CHARS - suffix.length)}${suffix}`;
+  if (!isPersonalityId(id)) return fail('Generated personality ID is invalid');
+  return id;
+}
+
+function availablePersonalityTarget(
+  libraryDir: string,
+  name: string,
+): { id: string; filePath: string } {
+  const base = personalitySlugBase(name);
+  if (!isPersonalityId(base)) return fail('Generated personality ID is invalid');
+
+  for (let sequence = 1; sequence <= MAX_CREATE_CANDIDATES; sequence += 1) {
+    const id = suffixedPersonalityId(base, sequence);
+    const filePath = path.join(libraryDir, `${id}.md`);
+    try {
+      fs.lstatSync(filePath);
+    } catch (error: unknown) {
+      if (isFileNotFound(error)) return { id, filePath };
+    }
+  }
+  return fail('Unable to allocate a personality ID');
+}
+
+function serializeCustomPersonality(id: string, fields: PersonalityWriteFields): string {
+  const document = new Document(
+    {
+      id,
+      name: fields.name,
+      badge: fields.badge,
+      color: fields.color,
+      builtin: false,
+    },
+    null,
+    { version: '1.2', aliasDuplicateObjects: false },
+  );
+  if (!isMap(document.contents) || document.contents.flow) {
+    return fail('Generated personality metadata must be a block mapping');
+  }
+  for (const pair of document.contents.items) {
+    if (!isScalar(pair.key) || !isScalar(pair.value)) {
+      return fail('Generated personality metadata must contain only scalars');
+    }
+  }
+  const color = document.get('color', true);
+  if (!isScalar(color)) return fail('Generated personality color must be a scalar');
+  color.type = 'QUOTE_DOUBLE';
+
+  const raw = `---\n${document.toString({ lineWidth: 0 })}---\n${fields.markdown}`;
+  const parsed = parsePersonalityMarkdown(raw, { mode: 'custom', expectedId: id });
+  if (
+    parsed.metadata.id !== id ||
+    parsed.metadata.name !== fields.name ||
+    parsed.metadata.badge !== fields.badge ||
+    parsed.metadata.color !== fields.color ||
+    parsed.metadata.builtin !== false ||
+    parsed.metadata.seedRevision !== undefined ||
+    parsed.metadata.pristineHash !== undefined ||
+    parsed.markdown !== fields.markdown
+  ) {
+    return fail('Generated personality did not round-trip exactly');
+  }
+  return raw;
+}
+
 export function listPersonalities(
   libraryDir: string,
   warn?: (message: string) => void,
@@ -538,10 +658,33 @@ export function readPersonality(
 }
 
 export function createPersonality(
-  _libraryDir: string,
-  _fields: PersonalityWriteFields,
+  libraryDir: string,
+  fields: PersonalityWriteFields,
 ): PersonalityDetail {
-  throw new PersonalityParseError('Personality creation is not implemented');
+  const normalized = normalizeWriteFields(fields);
+  try {
+    fs.mkdirSync(libraryDir, { recursive: true });
+  } catch {
+    return fail('Unable to prepare the personality library');
+  }
+
+  const target = availablePersonalityTarget(libraryDir, normalized.name);
+  const raw = serializeCustomPersonality(target.id, normalized);
+  if (Buffer.byteLength(raw, 'utf8') > MAX_PERSONALITY_FILE_BYTES) {
+    return fail(
+      `Personality document exceeds the ${MAX_PERSONALITY_FILE_BYTES}-byte (2 MiB) limit`,
+    );
+  }
+
+  try {
+    atomicWriteFileSync(target.filePath, raw);
+  } catch {
+    return fail('Unable to create personality');
+  }
+
+  const detail = readPersonality(libraryDir, target.id);
+  if (detail === null) return fail('Created personality could not be read back');
+  return detail;
 }
 
 export function resolvePersonalitySeedDir(options: ResolvePersonalitySeedDirOptions): string {
