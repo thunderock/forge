@@ -241,6 +241,17 @@ function guardReadPaths(blockedPaths: readonly string[]) {
   });
 }
 
+function rejectOpenPaths(blockedPaths: readonly string[]) {
+  const blocked = new Set(blockedPaths);
+  const originalOpenSync = fs.openSync;
+  return vi.spyOn(fs, 'openSync').mockImplementation((...args) => {
+    if (blocked.has(String(args[0]))) {
+      throw Object.assign(new Error('permission denied'), { code: 'EACCES' });
+    }
+    return Reflect.apply(originalOpenSync, fs, args);
+  });
+}
+
 function makeFifo(filePath: string): boolean {
   return spawnSync('mkfifo', [filePath], { stdio: 'ignore' }).status === 0;
 }
@@ -1251,14 +1262,14 @@ describe('D-05/D-09/D-10/D-11/D-12 startup personality seed reconciliation', () 
     const before = readFileSync(blockedPath, 'utf8');
     writeSeed(seedDir, blockedId, syntheticSeed({ id: blockedId, revision: 2 }));
     writeSeed(seedDir, siblingId, syntheticSeed({ id: siblingId }));
-    const readSpy = guardReadPaths([blockedPath]);
+    const openSpy = rejectOpenPaths([blockedPath]);
 
     const report = seedBuiltInPersonalities({ seedDir, libraryDir });
 
     expect(report.preserved).toContain(blockedId);
     expect(report.seeded).toContain(siblingId);
     expectReportedError(report.errors, blockedId);
-    expect(readSpy.mock.calls.some(([filePath]) => String(filePath) === blockedPath)).toBe(true);
+    expect(openSpy.mock.calls.some(([filePath]) => String(filePath) === blockedPath)).toBe(true);
     vi.restoreAllMocks();
     expect(readFileSync(blockedPath, 'utf8')).toBe(before);
   });
@@ -1342,13 +1353,14 @@ describe('D-05/D-09/D-10/D-11/D-12 startup personality seed reconciliation', () 
       blockedId,
       padUtf8(syntheticSeed({ id: blockedId }), MAX_PERSONALITY_FILE_BYTES + 1),
     );
+    const openSpy = vi.spyOn(fs, 'openSync');
     const readSpy = guardReadPaths([blockedPath]);
 
     const report = seedBuiltInPersonalities({ seedDir, libraryDir });
 
     expect(fs.statSync(allowedPath).size).toBe(MAX_PERSONALITY_FILE_BYTES);
     expect(report.seeded).toContain(allowedId);
-    expect(readSpy.mock.calls.some(([filePath]) => String(filePath) === allowedPath)).toBe(true);
+    expect(openSpy.mock.calls.some(([filePath]) => String(filePath) === allowedPath)).toBe(true);
     expect(readSpy.mock.calls.some(([filePath]) => String(filePath) === blockedPath)).toBe(false);
     expectReportedError(report.errors, blockedId);
   });
@@ -1381,7 +1393,7 @@ describe('D-05/D-09/D-10/D-11/D-12 startup personality seed reconciliation', () 
     writeSeed(seedDir, malformedId, '---\nid: [broken\n---\nBroken');
     const unreadablePath = writeSeed(seedDir, unreadableId, syntheticSeed({ id: unreadableId }));
     writeSeed(seedDir, siblingId, syntheticSeed({ id: siblingId }));
-    guardReadPaths([unreadablePath]);
+    rejectOpenPaths([unreadablePath]);
 
     const report = seedBuiltInPersonalities({ seedDir, libraryDir });
 
@@ -1573,11 +1585,12 @@ describe('D-07/D-15/D-16 bounded personality catalog reads', () => {
       'too-large',
       padUtf8(customPersonality('too-large'), MAX_PERSONALITY_FILE_BYTES + 1),
     );
+    const openSpy = vi.spyOn(fs, 'openSync');
     const readSpy = guardReadPaths([oversizedPath]);
 
     expect(listPersonalities(libraryDir).map(({ id }) => id)).toEqual(['boundary']);
     expect(fs.statSync(boundaryPath).size).toBe(MAX_PERSONALITY_FILE_BYTES);
-    expect(readSpy.mock.calls.some(([filePath]) => String(filePath) === boundaryPath)).toBe(true);
+    expect(openSpy.mock.calls.some(([filePath]) => String(filePath) === boundaryPath)).toBe(true);
     expect(readSpy.mock.calls.some(([filePath]) => String(filePath) === oversizedPath)).toBe(false);
   });
 
@@ -1621,21 +1634,21 @@ describe('D-07/D-15/D-16 bounded personality catalog reads', () => {
   it.each(['../state.json', 'nested/personality', 'nested\\personality', `a${'b'.repeat(64)}`])(
     'rejects invalid read ID %s before filesystem access',
     (id) => {
-      const lstatSpy = vi.spyOn(fs, 'lstatSync');
+      const openSpy = vi.spyOn(fs, 'openSync');
 
       expect(() => readPersonality(libraryDir, id)).toThrow(/invalid personality id/i);
-      expect(lstatSpy).not.toHaveBeenCalled();
+      expect(openSpy).not.toHaveBeenCalled();
     },
   );
 
-  it('returns null when a detail is absent or disappears between lstat and read', () => {
+  it('returns null when a detail is absent or disappears before descriptor open', () => {
     expect(readPersonality(libraryDir, 'missing-personality')).toBeNull();
 
     const disappearingPath = writeLibraryFile('disappearing', customPersonality('disappearing'));
-    const originalReadFileSync = fs.readFileSync;
-    vi.spyOn(fs, 'readFileSync').mockImplementation((...args) => {
+    const originalOpenSync = fs.openSync;
+    vi.spyOn(fs, 'openSync').mockImplementation((...args) => {
       if (String(args[0]) === disappearingPath) fs.unlinkSync(disappearingPath);
-      return Reflect.apply(originalReadFileSync, fs, args);
+      return Reflect.apply(originalOpenSync, fs, args);
     });
 
     expect(readPersonality(libraryDir, 'disappearing')).toBeNull();
@@ -1644,22 +1657,22 @@ describe('D-07/D-15/D-16 bounded personality catalog reads', () => {
   it('keeps filesystem paths out of public read errors while retaining a bounded warning', () => {
     const id = 'unreadable-detail';
     const filePath = writeLibraryFile(id, customPersonality(id));
-    const originalReadFileSync = fs.readFileSync;
+    const originalOpenSync = fs.openSync;
     const warnings: string[] = [];
-    vi.spyOn(fs, 'readFileSync').mockImplementation((...args) => {
+    vi.spyOn(fs, 'openSync').mockImplementation((...args) => {
       if (String(args[0]) === filePath) {
         throw Object.assign(new Error(`EACCES: permission denied, open '${filePath}'`), {
           code: 'EACCES',
         });
       }
-      return Reflect.apply(originalReadFileSync, fs, args);
+      return Reflect.apply(originalOpenSync, fs, args);
     });
 
     expect(() => readPersonality(libraryDir, id, (message) => warnings.push(message))).toThrowError(
       `Invalid personality "${id}"`,
     );
     expect(warnings).toHaveLength(1);
-    expect(warnings[0]).toContain('read failed');
+    expect(warnings[0]).toContain('open failed');
     expect(warnings[0].length).toBeLessThanOrEqual(500);
   });
 
@@ -2104,8 +2117,9 @@ describe('RED: stable update contract', () => {
     if (type === 'missing') {
       expect(fs.existsSync(filePath)).toBe(false);
     } else if (type === 'symlink') {
+      if (symlinkTarget === undefined) throw new Error('Missing symlink target fixture');
       expect(fs.lstatSync(filePath).isSymbolicLink()).toBe(true);
-      expect(readFileSync(symlinkTarget!, 'utf8')).toBe(expectedBytes);
+      expect(readFileSync(symlinkTarget, 'utf8')).toBe(expectedBytes);
     } else if (type === 'directory') {
       expect(fs.lstatSync(filePath).isDirectory()).toBe(true);
     } else if (type === 'fifo') {

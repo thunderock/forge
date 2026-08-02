@@ -88,6 +88,7 @@ interface ParsedMetadata {
 interface InternalParseResult {
   envelope: FrontmatterEnvelope;
   metadataEntries: Map<string, MetadataEntry>;
+  metadataValues: Map<string, unknown>;
   personality: ParsedPersonalityMarkdown;
   bindingWarning?: string;
 }
@@ -119,6 +120,31 @@ const PERSONALITY_DEFAULT_AGENTS: ReadonlySet<string> = new Set([
   'opencode',
 ]);
 const BINDING_METADATA_KEYS = ['defaultAgent', 'defaultModel', 'defaultReasoningEffort'] as const;
+const FILTERED_UPDATE_METADATA_KEYS: ReadonlySet<string> = new Set([
+  'id',
+  'name',
+  'badge',
+  'color',
+  'builtin',
+  'seedRevision',
+  'pristineHash',
+  ...BINDING_METADATA_KEYS,
+  'modifiedFromSeed',
+  'markdown',
+  'filename',
+  'filePath',
+  'path',
+  'projectId',
+  'payloadHash',
+  'rawMetadata',
+  'parserState',
+  'frontmatter',
+  'rawFrontmatter',
+  'rawYaml',
+  'yaml',
+]);
+const CANDIDATE_OPEN_FLAGS =
+  fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK;
 
 export const MAX_PERSONALITY_FILE_BYTES = 2 * 1024 * 1024;
 const MAX_SEED_ERROR_MESSAGE_CHARS = 500;
@@ -458,6 +484,7 @@ function parseInternal(raw: string, options: ParsePersonalityMarkdownOptions): I
   return {
     envelope,
     metadataEntries: parsedMetadata.entries,
+    metadataValues: parsedMetadata.values,
     personality: {
       metadata: validated.metadata,
       markdown: envelope.markdown,
@@ -480,32 +507,53 @@ function isFileNotFound(error: unknown): boolean {
 }
 
 function readRegularCandidate(filePath: string): CandidateReadResult {
-  let stats: fs.Stats;
+  let descriptor: number;
   try {
-    stats = fs.lstatSync(filePath);
+    descriptor = fs.openSync(filePath, CANDIDATE_OPEN_FLAGS);
   } catch (error: unknown) {
     if (isFileNotFound(error)) return { status: 'missing' };
-    return { status: 'invalid', message: `lstat failed: ${errorDetail(error)}` };
-  }
-
-  if (stats.isSymbolicLink()) {
-    return { status: 'invalid', message: 'candidate is a symbolic link' };
-  }
-  if (!stats.isFile()) {
-    return { status: 'invalid', message: 'candidate is not a regular file' };
-  }
-  if (stats.size > MAX_PERSONALITY_FILE_BYTES) {
-    return {
-      status: 'invalid',
-      message: `candidate exceeds ${MAX_PERSONALITY_FILE_BYTES} bytes`,
-    };
+    if ((error as NodeJS.ErrnoException | null)?.code === 'ELOOP') {
+      return { status: 'invalid', message: 'candidate is a symbolic link' };
+    }
+    return { status: 'invalid', message: `open failed: ${errorDetail(error)}` };
   }
 
   try {
-    return { status: 'ok', raw: fs.readFileSync(filePath, 'utf8') };
-  } catch (error: unknown) {
-    if (isFileNotFound(error)) return { status: 'missing' };
-    return { status: 'invalid', message: `read failed: ${errorDetail(error)}` };
+    let stats: fs.Stats;
+    try {
+      stats = fs.fstatSync(descriptor);
+    } catch (error: unknown) {
+      return { status: 'invalid', message: `fstat failed: ${errorDetail(error)}` };
+    }
+
+    if (!stats.isFile()) {
+      return { status: 'invalid', message: 'candidate is not a regular file' };
+    }
+    if (stats.size > MAX_PERSONALITY_FILE_BYTES) {
+      return {
+        status: 'invalid',
+        message: `candidate exceeds ${MAX_PERSONALITY_FILE_BYTES} bytes`,
+      };
+    }
+
+    try {
+      const raw = fs.readFileSync(descriptor, 'utf8');
+      if (Buffer.byteLength(raw, 'utf8') > MAX_PERSONALITY_FILE_BYTES) {
+        return {
+          status: 'invalid',
+          message: `candidate exceeds ${MAX_PERSONALITY_FILE_BYTES} bytes`,
+        };
+      }
+      return { status: 'ok', raw };
+    } catch (error: unknown) {
+      return { status: 'invalid', message: `read failed: ${errorDetail(error)}` };
+    }
+  } finally {
+    try {
+      fs.closeSync(descriptor);
+    } catch {
+      // There is no recovery action after a read-only descriptor close fails.
+    }
   }
 }
 
@@ -717,23 +765,31 @@ function availablePersonalityTarget(
   return fail('Unable to allocate a personality ID');
 }
 
-function serializeCustomPersonality(id: string, fields: PersonalityWriteFields): string {
-  const document = new Document(
-    {
-      id,
-      name: fields.name,
-      badge: fields.badge,
-      color: fields.color,
-      builtin: false,
-      ...(fields.defaultAgent === undefined ? {} : { defaultAgent: fields.defaultAgent }),
-      ...(fields.defaultModel === undefined ? {} : { defaultModel: fields.defaultModel }),
-      ...(fields.defaultReasoningEffort === undefined
-        ? {}
-        : { defaultReasoningEffort: fields.defaultReasoningEffort }),
-    },
-    null,
-    { version: '1.2', aliasDuplicateObjects: false },
-  );
+function serializeCustomPersonality(
+  id: string,
+  fields: PersonalityWriteFields,
+  preservedMetadata: ReadonlyMap<string, unknown> = new Map(),
+): string {
+  const metadata = new Map<string, unknown>([
+    ['id', id],
+    ['name', fields.name],
+    ['badge', fields.badge],
+    ['color', fields.color],
+    ['builtin', false],
+  ]);
+  if (fields.defaultAgent !== undefined) metadata.set('defaultAgent', fields.defaultAgent);
+  if (fields.defaultModel !== undefined) metadata.set('defaultModel', fields.defaultModel);
+  if (fields.defaultReasoningEffort !== undefined) {
+    metadata.set('defaultReasoningEffort', fields.defaultReasoningEffort);
+  }
+  for (const [key, value] of preservedMetadata) {
+    if (!FILTERED_UPDATE_METADATA_KEYS.has(key)) metadata.set(key, value);
+  }
+
+  const document = new Document(metadata, null, {
+    version: '1.2',
+    aliasDuplicateObjects: false,
+  });
   if (!isMap(document.contents) || document.contents.flow) {
     return fail('Generated personality metadata must be a block mapping');
   }
@@ -747,7 +803,8 @@ function serializeCustomPersonality(id: string, fields: PersonalityWriteFields):
   color.type = 'QUOTE_DOUBLE';
 
   const raw = `---\n${document.toString({ lineWidth: 0 })}---\n${fields.markdown}`;
-  const parsed = parsePersonalityMarkdown(raw, { mode: 'custom', expectedId: id });
+  const parsedInternal = parseInternal(raw, { mode: 'custom', expectedId: id });
+  const parsed = parsedInternal.personality;
   if (
     parsed.metadata.id !== id ||
     parsed.metadata.name !== fields.name ||
@@ -762,6 +819,15 @@ function serializeCustomPersonality(id: string, fields: PersonalityWriteFields):
     parsed.markdown !== fields.markdown
   ) {
     return fail('Generated personality did not round-trip exactly');
+  }
+  for (const [key, value] of preservedMetadata) {
+    if (FILTERED_UPDATE_METADATA_KEYS.has(key)) continue;
+    if (!parsedInternal.metadataValues.has(key)) {
+      return fail('Generated personality dropped preserved metadata');
+    }
+    if (!Object.is(parsedInternal.metadataValues.get(key), value)) {
+      return fail('Generated personality changed preserved metadata');
+    }
   }
   return raw;
 }
@@ -868,11 +934,48 @@ export function createPersonality(
 }
 
 export function updatePersonality(
-  _libraryDir: string,
-  _id: string,
-  _fields: PersonalityWriteFields,
+  libraryDir: string,
+  id: string,
+  fields: PersonalityWriteFields,
 ): PersonalityDetail {
-  return fail('Personality updates are not implemented');
+  if (!isPersonalityId(id)) throw new PersonalityParseError('Invalid personality ID');
+
+  const targetPath = path.join(libraryDir, `${id}.md`);
+  const candidate = readRegularCandidate(targetPath);
+  if (candidate.status === 'missing') return fail('Personality does not exist');
+  if (candidate.status === 'invalid') return fail('Personality cannot be updated safely');
+
+  let current: InternalParseResult;
+  try {
+    current = guarded(() => parseInternal(candidate.raw, { mode: 'library', expectedId: id }));
+  } catch {
+    return fail('Personality cannot be updated safely');
+  }
+  if (current.personality.metadata.builtin) {
+    return fail('Built-in personalities cannot be updated');
+  }
+
+  const normalized = normalizeWriteFields(fields);
+  const raw = serializeCustomPersonality(id, normalized, current.metadataValues);
+  if (Buffer.byteLength(raw, 'utf8') > MAX_PERSONALITY_FILE_BYTES) {
+    return fail(
+      `Personality document exceeds the ${MAX_PERSONALITY_FILE_BYTES}-byte (2 MiB) limit`,
+    );
+  }
+
+  try {
+    atomicWriteFileSync(targetPath, raw);
+  } catch {
+    return fail('Unable to update personality');
+  }
+
+  try {
+    const detail = readPersonality(libraryDir, id);
+    if (detail === null) return fail('Updated personality could not be read back');
+    return detail;
+  } catch {
+    return fail('Updated personality could not be read back');
+  }
 }
 
 export function resolvePersonalitySeedDir(options: ResolvePersonalitySeedDirOptions): string {
