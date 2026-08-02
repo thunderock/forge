@@ -104,10 +104,10 @@ export function PersonalityLibraryRail(props: PersonalityLibraryRailProps) {
 }
 
 interface PersonalityBadgeProps {
-  personality: PersonalitySummary;
+  personality: Pick<PersonalitySummary, 'badge' | 'color'>;
 }
 
-function PersonalityBadge(props: PersonalityBadgeProps) {
+export function PersonalityBadge(props: PersonalityBadgeProps) {
   return (
     <span
       class="personality-library-badge"

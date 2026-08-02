@@ -22,9 +22,9 @@ export async function readPersonality(id: string): Promise<PersonalityDetail | n
 }
 
 export async function createPersonality(
-  _fields: PersonalityWriteFields,
+  fields: PersonalityWriteFields,
 ): Promise<PersonalityDetail> {
-  throw new Error('Personality creation is not implemented');
+  return invoke<PersonalityDetail>(IPC.CreatePersonality, { ...fields });
 }
 
 export function togglePersonalityLibraryDialog(show?: boolean): void {
