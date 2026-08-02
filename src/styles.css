@@ -2522,8 +2522,31 @@ body.dragging-task * {
   border-bottom: 1px solid var(--border);
   display: flex;
   align-items: center;
-  gap: 8px;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
   flex-shrink: 0;
+}
+
+.personality-library-detail-identity {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  flex: 1;
+  gap: 8px;
+}
+
+.personality-library-detail-identity h3 {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.personality-library-detail-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .personality-library-detail-scroll {

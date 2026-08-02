@@ -20,6 +20,7 @@ interface PersonalityLibraryDialogProps {
   open: boolean;
   onClose: () => void;
   onNew: () => void;
+  onEdit: (id: string) => void;
   reloadGeneration: number;
   preferredId: string | null;
 }
@@ -88,6 +89,22 @@ export function preferredPersonalityIdForReload(
   preferredId: string | null,
 ): string | null {
   return postSave ? preferredId : null;
+}
+
+export interface PersonalityEditAction {
+  id: string;
+  label: 'Edit' | 'Edit a copy';
+}
+
+export function personalityEditAction(
+  detail: PersonalityDetail | null,
+  selectedId: string | null,
+): PersonalityEditAction | null {
+  if (!detail || detail.id !== selectedId) return null;
+  return {
+    id: detail.id,
+    label: detail.builtin ? 'Edit a copy' : 'Edit',
+  };
 }
 
 interface PersonalityLibraryRailProps {
@@ -234,7 +251,7 @@ interface PersonalityDetailIdentityProps {
 
 export function PersonalityDetailIdentity(props: PersonalityDetailIdentityProps) {
   return (
-    <div class="personality-library-detail-header">
+    <div class="personality-library-detail-identity">
       <PersonalityBadge personality={props.personality} />
       <h3 id={props.titleId}>{props.personality.name}</h3>
     </div>
@@ -291,6 +308,7 @@ export function PersonalityLibraryDialog(props: PersonalityLibraryDialogProps) {
   const selectedPersonality = createMemo(
     () => rows().find((personality) => personality.id === selectedId()) ?? null,
   );
+  const editAction = createMemo(() => personalityEditAction(detail(), selectedId()));
   const markdownHtml = createHighlightedMarkdown(() => detail()?.markdown);
 
   function focusOption(index: number): void {
@@ -490,7 +508,22 @@ export function PersonalityLibraryDialog(props: PersonalityLibraryDialogProps) {
             <Show when={selectedPersonality()} keyed>
               {(personality) => (
                 <section class="personality-library-detail">
-                  <PersonalityDetailIdentity personality={personality} titleId={detailTitleId} />
+                  <div class="personality-library-detail-header">
+                    <PersonalityDetailIdentity personality={personality} titleId={detailTitleId} />
+                    <Show when={editAction()}>
+                      {(action) => (
+                        <div class="personality-library-detail-actions">
+                          <button
+                            type="button"
+                            class="personality-library-action"
+                            onClick={() => props.onEdit(action().id)}
+                          >
+                            {action().label}
+                          </button>
+                        </div>
+                      )}
+                    </Show>
+                  </div>
                   <div
                     ref={detailScrollRef}
                     id={detailRegionId}

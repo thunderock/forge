@@ -150,6 +150,7 @@ function App() {
   const [windowMaximized, setWindowMaximized] = createSignal(false);
   const [showDropOverlay, setShowDropOverlay] = createSignal(false);
   const [personalityEditorOpen, setPersonalityEditorOpen] = createSignal(false);
+  const [personalityEditId, setPersonalityEditId] = createSignal<string | null>(null);
   const [preferredPersonalityId, setPreferredPersonalityId] = createSignal<string | null>(null);
   const [personalityReloadGeneration, setPersonalityReloadGeneration] = createSignal(0);
   let dragCounter = 0;
@@ -161,13 +162,24 @@ function App() {
 
   function closePersonalityLibrary(): void {
     setPersonalityEditorOpen(false);
+    setPersonalityEditId(null);
     togglePersonalityLibraryDialog(false);
   }
 
-  function handlePersonalitySaved(id: string): void {
+  function closePersonalityEditor(): void {
     setPersonalityEditorOpen(false);
+    setPersonalityEditId(null);
+  }
+
+  function openPersonalityEditor(editId: string | null): void {
+    setPersonalityEditId(editId);
+    setPersonalityEditorOpen(true);
+  }
+
+  function handlePersonalitySaved(id: string): void {
+    closePersonalityEditor();
     setPreferredPersonalityId(id);
-    setPersonalityReloadGeneration((generation) => generation + 1);
+    setPersonalityReloadGeneration((current) => current + 1);
   }
 
   function extractGitHubUrl(dt: DataTransfer): string | null {
@@ -295,7 +307,7 @@ function App() {
   });
 
   createEffect(() => {
-    if (!store.showPersonalityLibraryDialog) setPersonalityEditorOpen(false);
+    if (!store.showPersonalityLibraryDialog) closePersonalityEditor();
   });
 
   // Sync theme to <html> so Portal content (dialogs, tooltips) inherits CSS variables.
@@ -707,7 +719,7 @@ function App() {
       toggleHelp: () => toggleHelpDialog(),
       togglePersonalityLibrary: () => {
         if (personalityEditorOpen()) {
-          setPersonalityEditorOpen(false);
+          closePersonalityEditor();
           return;
         }
         togglePersonalityLibraryDialog();
@@ -715,7 +727,7 @@ function App() {
       toggleSettings: () => toggleSettingsDialog(),
       closeDialogs: () => {
         if (personalityEditorOpen()) {
-          setPersonalityEditorOpen(false);
+          closePersonalityEditor();
           return;
         }
         if (store.showPersonalityLibraryDialog) {
@@ -953,13 +965,15 @@ function App() {
         <PersonalityLibraryDialog
           open={store.showPersonalityLibraryDialog}
           onClose={closePersonalityLibrary}
-          onNew={() => setPersonalityEditorOpen(true)}
+          onNew={() => openPersonalityEditor(null)}
+          onEdit={(id) => openPersonalityEditor(id)}
           reloadGeneration={personalityReloadGeneration()}
           preferredId={preferredPersonalityId()}
         />
         <PersonalityEditorDialog
           open={personalityEditorOpen()}
-          onClose={() => setPersonalityEditorOpen(false)}
+          editId={personalityEditId()}
+          onClose={closePersonalityEditor}
           onSaved={handlePersonalitySaved}
         />
         <Show when={store.showArena}>
