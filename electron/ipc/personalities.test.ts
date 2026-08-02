@@ -14,6 +14,7 @@ import {
   materializePersonalitySeed,
   parsePersonalityMarkdown,
   readPersonality,
+  resetPersonality,
   seedBuiltInPersonalities,
   updatePersonality,
   type ParsePersonalityMarkdownOptions,
@@ -2252,6 +2253,290 @@ describe('RED: stable update contract', () => {
     fs.chmodSync(libraryDir, 0o700);
     expect(readFileSync(filePath, 'utf8')).toBe(before);
     expect(fs.existsSync(`${filePath}.bak`)).toBe(false);
+    expect(readdirSync(libraryDir).some((name) => name.startsWith('.forge-atomic-'))).toBe(false);
+  });
+});
+
+describe('RED: reset persistence contract', () => {
+  let temporaryRoot: string;
+  let seedDir: string;
+  let libraryDir: string;
+
+  beforeEach(() => {
+    temporaryRoot = fs.mkdtempSync(join(os.tmpdir(), 'personality-reset-'));
+    seedDir = join(temporaryRoot, 'packaged');
+    libraryDir = join(temporaryRoot, 'library');
+    fs.mkdirSync(seedDir, { recursive: true });
+    fs.mkdirSync(libraryDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    try {
+      fs.chmodSync(libraryDir, 0o700);
+    } catch {
+      // A failure fixture may intentionally leave no writable library directory.
+    }
+    fs.rmSync(temporaryRoot, { recursive: true, force: true });
+  });
+
+  function rejectedReset(id: string): Error {
+    let thrown: unknown;
+    try {
+      resetPersonality(libraryDir, seedDir, id);
+    } catch (error: unknown) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    const error = thrown as Error;
+    expect(error.message).not.toMatch(/not implemented/i);
+    expect(error.message).not.toContain(temporaryRoot);
+    expect(error.message.length).toBeLessThanOrEqual(500);
+    return error;
+  }
+
+  function prepareModifiedBuiltIn(id = 'reset-target'): {
+    installedPath: string;
+    installedBefore: string;
+    seedPath: string;
+    currentSeed: string;
+  } {
+    const originalSeed = syntheticSeed({
+      id,
+      revision: 1,
+      name: 'Reset Target',
+      body: 'Original packaged guidance',
+    });
+    writeSeed(seedDir, id, originalSeed);
+    expect(seedBuiltInPersonalities({ seedDir, libraryDir }).errors).toEqual([]);
+    const installedPath = join(libraryDir, `${id}.md`);
+    const installedBefore = readFileSync(installedPath, 'utf8').replace(
+      'Original packaged guidance',
+      'Hand-edited installed guidance',
+    );
+    fs.writeFileSync(installedPath, installedBefore, 'utf8');
+    const currentSeed = syntheticSeed({
+      id,
+      revision: 2,
+      name: 'Reset Target Current',
+      body: 'Current packaged guidance',
+    });
+    const seedPath = writeSeed(seedDir, id, currentSeed);
+    return { installedPath, installedBefore, seedPath, currentSeed };
+  }
+
+  it('restores a modified built-in from exact current seed bytes and backs up exact installed bytes', () => {
+    const id = 'reset-target';
+    const { installedPath, installedBefore, seedPath, currentSeed } = prepareModifiedBuiltIn(id);
+    const packagedBefore = readFileSync(seedPath, 'utf8');
+    fs.writeFileSync(`${installedPath}.bak`, 'stale backup bytes', 'utf8');
+
+    const detail = resetPersonality(libraryDir, seedDir, id);
+
+    expect(readFileSync(installedPath, 'utf8')).toBe(materializePersonalitySeed(currentSeed));
+    expect(readFileSync(`${installedPath}.bak`, 'utf8')).toBe(installedBefore);
+    expect(readFileSync(seedPath, 'utf8')).toBe(packagedBefore);
+    expect(detail).toEqual({
+      id,
+      name: 'Reset Target Current',
+      badge: 'TS',
+      color: '#123ABC',
+      builtin: true,
+      modifiedFromSeed: false,
+      markdown: 'Current packaged guidance',
+    });
+    expect(readdirSync(libraryDir).some((name) => name.startsWith('.forge-atomic-'))).toBe(false);
+  });
+
+  it('rejects a custom target even when a same-ID packaged built-in exists', () => {
+    const id = 'custom-reset-target';
+    const installedPath = join(libraryDir, `${id}.md`);
+    const installedBefore = customPersonality(id, 'Custom guidance');
+    fs.writeFileSync(installedPath, installedBefore, 'utf8');
+    writeSeed(seedDir, id, syntheticSeed({ id, body: 'Packaged guidance' }));
+
+    rejectedReset(id);
+
+    expect(readFileSync(installedPath, 'utf8')).toBe(installedBefore);
+    expect(fs.existsSync(`${installedPath}.bak`)).toBe(false);
+  });
+
+  it('rejects a pristine built-in without replacing it or creating a backup', () => {
+    const id = 'pristine-reset-target';
+    const rawSeed = syntheticSeed({ id, body: 'Pristine guidance' });
+    writeSeed(seedDir, id, rawSeed);
+    expect(seedBuiltInPersonalities({ seedDir, libraryDir }).errors).toEqual([]);
+    const installedPath = join(libraryDir, `${id}.md`);
+    const installedBefore = readFileSync(installedPath, 'utf8');
+
+    rejectedReset(id);
+
+    expect(readFileSync(installedPath, 'utf8')).toBe(installedBefore);
+    expect(fs.existsSync(`${installedPath}.bak`)).toBe(false);
+  });
+
+  it.each(['missing', 'malformed', 'mismatched'] as const)(
+    'rejects an installed %s candidate without creating or replacing it',
+    (type) => {
+      const id = `installed-${type}-reset`;
+      const installedPath = join(libraryDir, `${id}.md`);
+      writeSeed(seedDir, id, syntheticSeed({ id, revision: 2 }));
+      let installedBefore: string | undefined;
+      if (type === 'malformed') {
+        installedBefore = '---\nid: [broken\n---\nLocal bytes';
+        fs.writeFileSync(installedPath, installedBefore, 'utf8');
+      } else if (type === 'mismatched') {
+        installedBefore = materializePersonalitySeed(syntheticSeed({ id: 'different-id' }));
+        fs.writeFileSync(installedPath, installedBefore, 'utf8');
+      }
+
+      rejectedReset(id);
+
+      if (installedBefore === undefined) expect(fs.existsSync(installedPath)).toBe(false);
+      else expect(readFileSync(installedPath, 'utf8')).toBe(installedBefore);
+      expect(fs.existsSync(`${installedPath}.bak`)).toBe(false);
+    },
+  );
+
+  it.each(['symlink', 'directory', 'fifo', 'oversized'] as const)(
+    'rejects an unsafe installed %s candidate before replacement',
+    (type) => {
+      const id = `installed-${type}-reset`;
+      const installedPath = join(libraryDir, `${id}.md`);
+      writeSeed(seedDir, id, syntheticSeed({ id, revision: 2 }));
+      let outsidePath: string | undefined;
+      let expectedBytes: string | undefined;
+
+      if (type === 'symlink') {
+        outsidePath = join(temporaryRoot, 'outside-installed.md');
+        expectedBytes = materializePersonalitySeed(syntheticSeed({ id }));
+        fs.writeFileSync(outsidePath, expectedBytes, 'utf8');
+        fs.symlinkSync(outsidePath, installedPath);
+      } else if (type === 'directory') {
+        fs.mkdirSync(installedPath);
+      } else if (type === 'fifo') {
+        if (!makeFifo(installedPath)) return;
+      } else {
+        expectedBytes = padUtf8(
+          materializePersonalitySeed(syntheticSeed({ id })),
+          MAX_PERSONALITY_FILE_BYTES + 1,
+        );
+        fs.writeFileSync(installedPath, expectedBytes, 'utf8');
+      }
+
+      const readSpy = guardReadPaths([installedPath]);
+      rejectedReset(id);
+
+      expect(readSpy.mock.calls.some(([filePath]) => String(filePath) === installedPath)).toBe(
+        false,
+      );
+      if (type === 'symlink') {
+        if (outsidePath === undefined) throw new Error('Missing installed symlink target fixture');
+        expect(fs.lstatSync(installedPath).isSymbolicLink()).toBe(true);
+        expect(readFileSync(outsidePath, 'utf8')).toBe(expectedBytes);
+      } else if (type === 'directory') {
+        expect(fs.lstatSync(installedPath).isDirectory()).toBe(true);
+      } else if (type === 'fifo') {
+        expect(fs.lstatSync(installedPath).isFIFO()).toBe(true);
+      } else {
+        expect(readFileSync(installedPath, 'utf8')).toBe(expectedBytes);
+      }
+      expect(fs.existsSync(`${installedPath}.bak`)).toBe(false);
+    },
+  );
+
+  it.each(['missing', 'malformed', 'mismatched'] as const)(
+    'rejects a packaged %s candidate and preserves the modified installed bytes',
+    (type) => {
+      const id = `packaged-${type}-reset`;
+      const { installedPath, installedBefore, seedPath } = prepareModifiedBuiltIn(id);
+      if (type === 'missing') fs.unlinkSync(seedPath);
+      else if (type === 'malformed')
+        fs.writeFileSync(seedPath, '---\nid: [broken\n---\nSeed bytes');
+      else fs.writeFileSync(seedPath, syntheticSeed({ id: 'different-id', revision: 2 }));
+
+      rejectedReset(id);
+
+      expect(readFileSync(installedPath, 'utf8')).toBe(installedBefore);
+      expect(fs.existsSync(`${installedPath}.bak`)).toBe(false);
+    },
+  );
+
+  it.each(['symlink', 'directory', 'fifo', 'oversized'] as const)(
+    'rejects an unsafe packaged %s candidate and preserves the modified installed bytes',
+    (type) => {
+      const id = `packaged-${type}-reset`;
+      const { installedPath, installedBefore, seedPath } = prepareModifiedBuiltIn(id);
+      fs.unlinkSync(seedPath);
+      let outsidePath: string | undefined;
+      let expectedSeedBytes: string | undefined;
+
+      if (type === 'symlink') {
+        outsidePath = join(temporaryRoot, 'outside-seed.md');
+        expectedSeedBytes = syntheticSeed({ id, revision: 2 });
+        fs.writeFileSync(outsidePath, expectedSeedBytes, 'utf8');
+        fs.symlinkSync(outsidePath, seedPath);
+      } else if (type === 'directory') {
+        fs.mkdirSync(seedPath);
+      } else if (type === 'fifo') {
+        if (!makeFifo(seedPath)) return;
+      } else {
+        expectedSeedBytes = padUtf8(
+          syntheticSeed({ id, revision: 2 }),
+          MAX_PERSONALITY_FILE_BYTES + 1,
+        );
+        fs.writeFileSync(seedPath, expectedSeedBytes, 'utf8');
+      }
+
+      const readSpy = guardReadPaths([seedPath]);
+      rejectedReset(id);
+
+      expect(readSpy.mock.calls.some(([filePath]) => String(filePath) === seedPath)).toBe(false);
+      expect(readFileSync(installedPath, 'utf8')).toBe(installedBefore);
+      expect(fs.existsSync(`${installedPath}.bak`)).toBe(false);
+      if (type === 'symlink') {
+        if (outsidePath === undefined) throw new Error('Missing packaged symlink target fixture');
+        expect(fs.lstatSync(seedPath).isSymbolicLink()).toBe(true);
+        expect(readFileSync(outsidePath, 'utf8')).toBe(expectedSeedBytes);
+      }
+    },
+  );
+
+  it.each(['../state.json', 'nested/personality', 'nested\\personality', `a${'b'.repeat(64)}`])(
+    'rejects traversal or invalid reset ID %s before filesystem access',
+    (id) => {
+      const openSpy = vi.spyOn(fs, 'openSync');
+
+      rejectedReset(id);
+
+      expect(openSpy).not.toHaveBeenCalled();
+    },
+  );
+
+  it('continues a safe reset when the exact-byte backup cannot be replaced', () => {
+    const id = 'backup-failure-reset';
+    const { installedPath, currentSeed } = prepareModifiedBuiltIn(id);
+    fs.mkdirSync(`${installedPath}.bak`);
+
+    const detail = resetPersonality(libraryDir, seedDir, id);
+
+    expect(detail.modifiedFromSeed).toBe(false);
+    expect(readFileSync(installedPath, 'utf8')).toBe(materializePersonalitySeed(currentSeed));
+    expect(fs.lstatSync(`${installedPath}.bak`).isDirectory()).toBe(true);
+    expect(readdirSync(libraryDir).some((name) => name.startsWith('.forge-atomic-'))).toBe(false);
+  });
+
+  it('preserves installed bytes and throws a bounded path-free error when target replacement fails', () => {
+    if (process.getuid?.() === 0) return;
+    const id = 'target-failure-reset';
+    const { installedPath, installedBefore } = prepareModifiedBuiltIn(id);
+    fs.chmodSync(libraryDir, 0o500);
+
+    rejectedReset(id);
+
+    fs.chmodSync(libraryDir, 0o700);
+    expect(readFileSync(installedPath, 'utf8')).toBe(installedBefore);
     expect(readdirSync(libraryDir).some((name) => name.startsWith('.forge-atomic-'))).toBe(false);
   });
 });

@@ -15,6 +15,7 @@ interface PackageManifest {
 const REPOSITORY_ROOT = path.join(__dirname, '..');
 const PACKAGE_PATH = path.join(REPOSITORY_ROOT, 'package.json');
 const MAIN_PATH = path.join(REPOSITORY_ROOT, 'electron', 'main.ts');
+const REGISTER_PATH = path.join(REPOSITORY_ROOT, 'electron', 'ipc', 'register.ts');
 const originalCwd = process.cwd();
 
 afterEach(() => {
@@ -111,5 +112,51 @@ describe('D-05/D-11 packaged personality startup contract', () => {
     expect(startupBeforeWindow).toContain(
       "console.warn('[personalities] Seed reconciliation failed:'",
     );
+  });
+});
+
+describe('RED: reset persistence contract', () => {
+  it('composes one runtime path object for startup seeding and window handler registration', () => {
+    const main = fs.readFileSync(MAIN_PATH, 'utf8');
+    const readyOffset = main.indexOf('app.whenReady().then(() => {');
+    const readySource = main.slice(readyOffset);
+
+    expect(readyOffset).toBeGreaterThanOrEqual(0);
+    expect(readySource).toMatch(
+      /const personalityPaths(?:: PersonalityPaths)? = \{\s*libraryDir: path\.join\(getStateDir\(\), 'personalities'\),\s*seedDir: resolvePersonalitySeedDir\(\{/s,
+    );
+    expect(readySource).toContain('seedBuiltInPersonalities(personalityPaths)');
+    expect(readySource).toContain('createWindow(personalityPaths)');
+    expect(main).toMatch(/function createWindow\(personalityPaths: PersonalityPaths\)/);
+    expect(main).toContain('registerAllHandlers(mainWindow, personalityPaths)');
+  });
+
+  it.each([
+    {
+      isPackaged: false,
+      resourcesPath: path.join(path.sep, 'unused', 'resources'),
+      mainModuleDir: path.join(path.sep, 'repo', 'dist-electron'),
+      expectedSeedDir: path.join(path.sep, 'repo', 'seeds', 'personalities'),
+    },
+    {
+      isPackaged: true,
+      resourcesPath: path.join(path.sep, 'opt', 'Forge', 'resources'),
+      mainModuleDir: path.join(path.sep, 'unused', 'dist-electron'),
+      expectedSeedDir: path.join(path.sep, 'opt', 'Forge', 'resources', 'seeds', 'personalities'),
+    },
+  ])('resolves the shared seed path in packaged=$isPackaged mode', (runtime) => {
+    expect(resolvePersonalitySeedDir(runtime)).toBe(runtime.expectedSeedDir);
+  });
+
+  it('requires registerAllHandlers to consume injected personality paths without deriving another pair', () => {
+    const register = fs.readFileSync(REGISTER_PATH, 'utf8');
+
+    expect(register).toMatch(
+      /export function registerAllHandlers\(win: BrowserWindow, personalityPaths: PersonalityPaths\)/,
+    );
+    expect(register).not.toContain("path.join(getStateDir(), 'personalities')");
+    expect(register).not.toContain('resolvePersonalitySeedDir(');
+    expect(register).not.toContain('process.resourcesPath');
+    expect(register).not.toContain('app.isPackaged');
   });
 });

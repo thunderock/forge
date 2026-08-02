@@ -46,6 +46,11 @@ export interface SeedBuiltInPersonalitiesOptions {
   libraryDir: string;
 }
 
+export interface PersonalityPaths {
+  libraryDir: string;
+  seedDir: string;
+}
+
 export interface PersonalitySeedError {
   id?: string;
   message: string;
@@ -976,6 +981,14 @@ export function updatePersonality(
   } catch {
     return fail('Updated personality could not be read back');
   }
+}
+
+export function resetPersonality(
+  _libraryDir: string,
+  _seedDir: string,
+  _id: string,
+): PersonalityDetail {
+  return fail('Personality reset is not implemented');
 }
 
 export function resolvePersonalitySeedDir(options: ResolvePersonalitySeedDirOptions): string {

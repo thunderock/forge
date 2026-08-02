@@ -300,3 +300,52 @@ describe('RED: stable update contract', () => {
     }
   });
 });
+
+describe('RED: reset persistence contract', () => {
+  it('defines exactly one manifest-derived and preload-allowlisted reset channel', () => {
+    const channels = IPC as Readonly<Record<string, string>>;
+    const manifest = JSON.parse(readFileSync(CHANNEL_MANIFEST_PATH, 'utf8')) as Record<
+      string,
+      string
+    >;
+    const preload = readFileSync(PRELOAD_PATH, 'utf8');
+
+    expect(channels.ResetPersonality).toBe('reset_personality');
+    expect(manifest.ResetPersonality).toBe('reset_personality');
+    expect(Object.values(manifest).filter((value) => value === 'reset_personality')).toHaveLength(
+      1,
+    );
+    expect(preload.match(/['"]reset_personality['"]/g)).toHaveLength(1);
+  });
+
+  it('exports shared runtime paths and one exact-ID reset seam from the Electron-free domain', () => {
+    const personalities = readFileSync(PERSONALITIES_PATH, 'utf8');
+    const paths = interfaceDeclaration(personalities, 'PersonalityPaths');
+
+    expect(declaredKeys(paths)).toEqual(['libraryDir', 'seedDir']);
+    expect(personalities).toMatch(
+      /export function resetPersonality\(\s*_?libraryDir: string,\s*_?seedDir: string,\s*_?id: string,?\s*\): PersonalityDetail/,
+    );
+    expect(personalities).not.toMatch(/from ['"]electron['"]/);
+  });
+
+  it('allows only the registered main frame to reset an exact stable ID through injected paths', () => {
+    const register = readFileSync(REGISTER_PATH, 'utf8');
+    const resetHandler = handlerSource(register, 'ResetPersonality');
+
+    expect(register).toMatch(
+      /import \{[^}]*resetPersonality[^}]*\} from ['"]\.\/personalities\.js['"]/s,
+    );
+    expect(resetHandler).toContain('assertTrustedPersonalitySender(event, win)');
+    expect(resetHandler).toContain("assertString(args?.id, 'id')");
+    expect(resetHandler).toMatch(/Object\.keys\(args\)\.some\(\(key\) => key !== 'id'\)/);
+    expect(resetHandler).toMatch(/if \(!isPersonalityId\(args\.id\)\)/);
+    expect(resetHandler).toMatch(
+      /resetPersonality\(personalityPaths\.libraryDir, personalityPaths\.seedDir, args\.id\)/,
+    );
+    for (const field of FORBIDDEN_WRITE_FIELDS) {
+      if (field === 'id') continue;
+      expect(resetHandler).not.toMatch(new RegExp(`args\\?*\\.${field}\\b`));
+    }
+  });
+});
