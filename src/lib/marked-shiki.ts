@@ -1,6 +1,6 @@
 import DOMPurify from 'dompurify';
 import { Marked, type Tokens } from 'marked';
-import { createSignal } from 'solid-js';
+import { createEffect, createSignal } from 'solid-js';
 import { highlightLines } from './shiki-highlighter';
 
 /**
@@ -32,10 +32,6 @@ export async function renderMarkdownWithHighlighting(
   let blockIndex = 0;
   const renderer = {
     code(token: Tokens.Code): string {
-      // Mermaid blocks → render as placeholder for client-side rendering
-      if (token.lang === 'mermaid') {
-        return `<div class="mermaid-block" data-mermaid="${escapeAttr(token.text ?? '')}">${escapeHtml(token.text ?? '')}</div>`;
-      }
       const idx = blockIndex++;
       const lines = idx < highlighted.length ? highlighted[idx] : null;
       const langAttr = token.lang ? ` data-lang="${escapeAttr(token.lang)}"` : '';
@@ -66,7 +62,7 @@ function collectCodeTokens(
   out: { lang: string; text: string }[],
 ): void {
   for (const token of tokens) {
-    if (token.type === 'code' && token.lang !== 'mermaid') {
+    if (token.type === 'code') {
       out.push({ lang: (token.lang as string) ?? '', text: (token.text as string) ?? '' });
     }
     if (Array.isArray(token.tokens)) {
@@ -115,9 +111,37 @@ export function createHighlightedMarkdownState(
   source: () => string | undefined,
   renderer: MarkdownRenderer = renderMarkdownWithHighlighting,
 ): HighlightedMarkdownState {
-  const [html] = createSignal('');
-  const [loading] = createSignal(false);
-  void source;
-  void renderer;
+  const [html, setHtml] = createSignal('');
+  const [loading, setLoading] = createSignal(false);
+  let generation = 0;
+
+  createEffect(() => {
+    const content = source();
+    const currentGeneration = ++generation;
+
+    if (!content) {
+      setHtml('');
+      setLoading(false);
+      return;
+    }
+
+    setLoading(true);
+    renderer(content)
+      .then((result) => {
+        if (currentGeneration === generation) setHtml(result);
+      })
+      .catch(() => {
+        if (currentGeneration !== generation) return;
+        setHtml(
+          DOMPurify.sanitize(new Marked().parse(content, { async: false }) as string, {
+            ADD_ATTR: ['data-lang'],
+          }),
+        );
+      })
+      .finally(() => {
+        if (currentGeneration === generation) setLoading(false);
+      });
+  });
+
   return { html, loading };
 }
