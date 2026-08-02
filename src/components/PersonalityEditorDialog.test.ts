@@ -643,6 +643,10 @@ describe('RED: markdown preview contract', () => {
       /\.personality-markdown \{[\s\S]*?font-size: 16px;[\s\S]*?line-height: 1\.7;/,
     );
     expect(styles).toMatch(
+      /\.personality-markdown h1,[\s\S]*?\{[\s\S]*?font-size: 20px;[\s\S]*?line-height: 1\.2;/,
+    );
+    expect(styles).toMatch(/\.personality-markdown code,[\s\S]*?\{[\s\S]*?font-size: 14px;/);
+    expect(styles).toMatch(
       /@media \(max-width: 719px\) \{[\s\S]*?\.personality-editor-identity-grid \{[\s\S]*?grid-template-columns: minmax\(0, 1fr\);/,
     );
     expect(styles).toMatch(

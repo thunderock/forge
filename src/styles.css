@@ -2593,7 +2593,24 @@ body.dragging-task * {
 .personality-markdown h4,
 .personality-markdown h5,
 .personality-markdown h6 {
+  font-size: 20px;
   font-weight: 600;
+  line-height: 1.2;
+}
+
+.personality-markdown li {
+  line-height: 1.7;
+}
+
+.personality-markdown code,
+.personality-markdown pre,
+.personality-markdown table {
+  font-size: 14px;
+}
+
+.personality-markdown th,
+.personality-markdown pre.shiki-block[data-lang]:not([data-lang=''])::before {
+  font-size: 12px;
 }
 
 .personality-markdown pre,
