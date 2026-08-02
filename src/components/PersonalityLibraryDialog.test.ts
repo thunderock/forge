@@ -437,3 +437,25 @@ describe('RED: edit and copy editor contract', () => {
     expect(appSource).not.toContain('updatePersonality(');
   });
 });
+
+describe('RED: markdown preview contract', () => {
+  it('keeps the catalog compatibility accessor and gives the editor one separate safe sink', () => {
+    const librarySource = readFileSync(
+      new URL('./PersonalityLibraryDialog.tsx', import.meta.url),
+      'utf8',
+    );
+    const editorSource = readFileSync(
+      new URL('./PersonalityEditorDialog.tsx', import.meta.url),
+      'utf8',
+    );
+
+    expect(librarySource).toContain('createHighlightedMarkdown');
+    expect(librarySource).not.toContain('createHighlightedMarkdownState');
+    expect(librarySource.match(/\binnerHTML=/g)).toHaveLength(1);
+    expect(editorSource).toContain('createHighlightedMarkdownState');
+    expect(editorSource.match(/\binnerHTML=/g)).toHaveLength(1);
+    expect(`${librarySource}\n${editorSource}`).not.toMatch(
+      /mermaid\.render|new Marked|DOMPurify\.sanitize/,
+    );
+  });
+});

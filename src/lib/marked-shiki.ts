@@ -1,6 +1,6 @@
 import DOMPurify from 'dompurify';
 import { Marked, type Tokens } from 'marked';
-import { createSignal, createEffect } from 'solid-js';
+import { createSignal } from 'solid-js';
 import { highlightLines } from './shiki-highlighter';
 
 /**
@@ -10,7 +10,12 @@ import { highlightLines } from './shiki-highlighter';
  *  1. Walk tokens to collect code blocks, highlight them in parallel via Shiki.
  *  2. Render markdown, substituting highlighted HTML for each code block.
  */
-export async function renderMarkdownWithHighlighting(markdown: string): Promise<string> {
+type MarkdownHighlighter = (code: string, language: string) => Promise<string[]>;
+
+export async function renderMarkdownWithHighlighting(
+  markdown: string,
+  highlighter: MarkdownHighlighter = highlightLines,
+): Promise<string> {
   const marked = new Marked();
 
   // First pass — collect code blocks
@@ -20,7 +25,7 @@ export async function renderMarkdownWithHighlighting(markdown: string): Promise<
 
   // Highlight all blocks in parallel
   const highlighted = await Promise.all(
-    codeBlocks.map(({ text, lang }) => highlightLines(text, lang || 'plaintext')),
+    codeBlocks.map(({ text, lang }) => highlighter(text, lang || 'plaintext')),
   );
 
   // Second pass — render with a custom renderer that swaps in highlighted HTML
@@ -96,30 +101,23 @@ function escapeHtml(value: string): string {
  * Falls back to plain marked rendering on highlighting failure.
  */
 export function createHighlightedMarkdown(source: () => string | undefined): () => string {
-  const [html, setHtml] = createSignal('');
-  let generation = 0;
+  return createHighlightedMarkdownState(source).html;
+}
 
-  createEffect(() => {
-    const content = source();
-    if (!content) {
-      setHtml('');
-      return;
-    }
-    const thisGen = ++generation;
-    renderMarkdownWithHighlighting(content)
-      .then((result) => {
-        if (thisGen === generation) setHtml(result);
-      })
-      .catch(() => {
-        if (thisGen === generation) {
-          setHtml(
-            DOMPurify.sanitize(new Marked().parse(content, { async: false }) as string, {
-              ADD_ATTR: ['data-lang'],
-            }),
-          );
-        }
-      });
-  });
+export interface HighlightedMarkdownState {
+  html: () => string;
+  loading: () => boolean;
+}
 
-  return html;
+type MarkdownRenderer = (markdown: string) => Promise<string>;
+
+export function createHighlightedMarkdownState(
+  source: () => string | undefined,
+  renderer: MarkdownRenderer = renderMarkdownWithHighlighting,
+): HighlightedMarkdownState {
+  const [html] = createSignal('');
+  const [loading] = createSignal(false);
+  void source;
+  void renderer;
+  return { html, loading };
 }

@@ -578,3 +578,75 @@ describe('RED: edit and copy editor contract', () => {
     expect(source).not.toContain('Delete');
   });
 });
+
+describe('RED: markdown preview contract', () => {
+  it('gates one sanitized HTML sink behind explicit Preview mode', () => {
+    const source = readFileSync(new URL('./PersonalityEditorDialog.tsx', import.meta.url), 'utf8');
+
+    expect(source).toContain('createHighlightedMarkdownState');
+    expect(source).toMatch(
+      /createHighlightedMarkdownState\(\(\) =>\s*\(previewing\(\) \? markdown\(\) : undefined\)\s*\)/,
+    );
+    expect(source.match(/\binnerHTML=/g)).toHaveLength(1);
+    expect(source).toMatch(/innerHTML=\{markdownPreview\.html\(\)\}/);
+    expect(source).not.toMatch(/\bMarked\b|DOMPurify|mermaid\.render/);
+  });
+
+  it('defines keyboard-selecting Edit and Preview tabs with one active panel', async () => {
+    const editorModule = (await import('./PersonalityEditorDialog')) as unknown as {
+      nextPersonalityMarkdownTabIndex?: (key: string, current: number) => number | null;
+    };
+    const nextTab = editorModule.nextPersonalityMarkdownTabIndex;
+    const source = readFileSync(new URL('./PersonalityEditorDialog.tsx', import.meta.url), 'utf8');
+
+    expect(nextTab).toBeTypeOf('function');
+    if (!nextTab) return;
+    expect(nextTab('ArrowRight', 0)).toBe(1);
+    expect(nextTab('ArrowRight', 1)).toBe(0);
+    expect(nextTab('ArrowLeft', 0)).toBe(1);
+    expect(nextTab('Home', 1)).toBe(0);
+    expect(nextTab('End', 0)).toBe(1);
+    expect(nextTab('Enter', 0)).toBeNull();
+    expect(source).toContain('role="tablist"');
+    expect(source.match(/role="tab"/g)).toHaveLength(2);
+    expect(source).toContain('aria-selected');
+    expect(source).toContain('aria-controls');
+    expect(source).toContain('role="tabpanel"');
+    expect(source).toContain('aria-labelledby');
+  });
+
+  it('renders exact empty and current-generation loading preview states', () => {
+    const source = readFileSync(new URL('./PersonalityEditorDialog.tsx', import.meta.url), 'utf8');
+
+    expect(source).toContain('Add Markdown instructions to preview them.');
+    expect(source).toContain('Rendering preview…');
+    expect(source).toMatch(/markdownPreview\.loading\(\)/);
+    expect(source).toContain('role="status"');
+    expect(source).toContain('aria-live="polite"');
+  });
+
+  it('keeps approved editor geometry, typography, scrolling, and responsive minima', () => {
+    const source = readFileSync(new URL('./PersonalityEditorDialog.tsx', import.meta.url), 'utf8');
+    const styles = readFileSync(new URL('../styles.css', import.meta.url), 'utf8');
+
+    expect(source).toContain('width="min(840px, calc(100vw - 32px))"');
+    expect(source).toContain("height: 'min(720px, calc(100vh - 64px))'");
+    expect(styles).toMatch(
+      /\.personality-editor-body \{[\s\S]*?padding: 24px;[\s\S]*?overflow-y: auto;/,
+    );
+    expect(styles).toMatch(/\.personality-editor-form \{[\s\S]*?max-width: 760px;/);
+    expect(styles).toMatch(
+      /\.personality-editor-preview \{[\s\S]*?min-height: 320px;[\s\S]*?padding: 24px;[\s\S]*?overflow: auto;/,
+    );
+    expect(styles).toMatch(/\.personality-editor-heading-copy h2 \{[\s\S]*?font-size: 20px;/);
+    expect(styles).toMatch(
+      /\.personality-markdown \{[\s\S]*?font-size: 16px;[\s\S]*?line-height: 1\.7;/,
+    );
+    expect(styles).toMatch(
+      /@media \(max-width: 719px\) \{[\s\S]*?\.personality-editor-identity-grid \{[\s\S]*?grid-template-columns: minmax\(0, 1fr\);/,
+    );
+    expect(styles).toMatch(
+      /@media \(max-height: 639px\) \{[\s\S]*?\.personality-editor-(?:markdown|preview)[\s\S]*?min-height: 240px;/,
+    );
+  });
+});
