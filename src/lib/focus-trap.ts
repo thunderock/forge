@@ -5,17 +5,19 @@ const FOCUSABLE =
 
 /**
  * Traps Tab / Shift+Tab focus cycling within a container element
- * while `open()` is true.  Intercepts every Tab press and manually
- * moves focus so it can never escape to elements behind the dialog.
+ * while `open()` and `active()` are true. Intercepts every active Tab
+ * press and manually moves focus within the current dialog.
  */
 export function createFocusTrap(
   open: () => boolean,
   container: () => HTMLElement | undefined,
+  active: () => boolean = open,
 ): void {
   createEffect(() => {
     if (!open()) return;
     const handler = (e: KeyboardEvent) => {
       if (e.key !== 'Tab') return;
+      if (!active()) return;
       const el = container();
       if (!el) return;
       e.preventDefault();

@@ -21,11 +21,13 @@ interface DialogProps {
 export function Dialog(props: DialogProps) {
   let panelRef: HTMLDivElement | undefined;
   const dialogId = createUniqueId();
+  const isActive = () => props.open && isTopmost(dialogId);
 
   createFocusRestore(() => props.open);
   createFocusTrap(
     () => props.open,
     () => panelRef,
+    isActive,
   );
 
   // Register / unregister with the global dialog stack so only the
@@ -41,7 +43,7 @@ export function Dialog(props: DialogProps) {
     if (!props.open) return;
     const handler = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
-      if (!isTopmost(dialogId)) return;
+      if (!isActive()) return;
       e.stopPropagation();
       props.onClose();
     };
@@ -95,14 +97,14 @@ export function Dialog(props: DialogProps) {
             'z-index': String(props.zIndex ?? 1000),
           }}
           onClick={(e) => {
-            if (e.target === e.currentTarget) props.onClose();
+            if (e.target === e.currentTarget && isActive()) props.onClose();
           }}
         >
           <div
             ref={panelRef}
             tabIndex={0}
             role="dialog"
-            aria-modal={isTopmost(dialogId) ? 'true' : undefined}
+            aria-modal={isActive() ? 'true' : undefined}
             aria-labelledby={props.labelledBy}
             aria-describedby={props.describedBy}
             class="dialog-panel"

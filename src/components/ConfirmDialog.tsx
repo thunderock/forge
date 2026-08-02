@@ -11,8 +11,11 @@ interface ConfirmDialogProps {
   confirmLoading?: boolean;
   danger?: boolean;
   confirmDisabled?: boolean;
+  cancelDisabled?: boolean;
   autoFocusCancel?: boolean;
   width?: string;
+  zIndex?: number;
+  error?: string | JSX.Element;
   /** When set, takes precedence over the auto-generated title id. */
   labelledBy?: string;
   describedBy?: string;
@@ -24,6 +27,18 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
   let cancelRef: HTMLButtonElement | undefined;
   const generatedTitleId = createUniqueId();
   const useGeneratedId = () => props.labelledBy === undefined;
+  const actionsDisabled = () => Boolean(props.confirmLoading || props.cancelDisabled);
+  const confirmDisabled = () => Boolean(props.confirmDisabled || actionsDisabled());
+
+  function cancel(): void {
+    if (actionsDisabled()) return;
+    props.onCancel();
+  }
+
+  function confirm(): void {
+    if (confirmDisabled()) return;
+    props.onConfirm();
+  }
 
   // Auto-focus the cancel button (or let Dialog's panel get focus)
   createEffect(() => {
@@ -43,8 +58,9 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
   return (
     <Dialog
       open={props.open}
-      onClose={props.onCancel}
+      onClose={cancel}
       width={props.width}
+      zIndex={props.zIndex}
       labelledBy={props.labelledBy ?? generatedTitleId}
       describedBy={props.describedBy}
     >
@@ -64,6 +80,17 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
         {props.message}
       </div>
 
+      <Show when={props.error}>
+        {(error) => (
+          <div
+            role="alert"
+            style={{ color: theme.error, 'font-size': '12px', 'line-height': '1.4' }}
+          >
+            {error()}
+          </div>
+        )}
+      </Show>
+
       <div
         style={{
           display: 'flex',
@@ -76,15 +103,17 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
           ref={cancelRef}
           type="button"
           class="btn-secondary"
-          onClick={() => props.onCancel()}
+          disabled={actionsDisabled()}
+          onClick={cancel}
           style={{
             padding: '9px 18px',
             background: theme.bgInput,
             border: `1px solid ${theme.border}`,
             'border-radius': '8px',
             color: theme.fgMuted,
-            cursor: 'pointer',
+            cursor: actionsDisabled() ? 'not-allowed' : 'pointer',
             'font-size': '14px',
+            opacity: actionsDisabled() ? '0.5' : '1',
           }}
         >
           {props.cancelLabel ?? 'Cancel'}
@@ -92,18 +121,18 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
         <button
           type="button"
           class={props.danger ? 'btn-danger' : 'btn-primary'}
-          disabled={props.confirmDisabled}
-          onClick={() => props.onConfirm()}
+          disabled={props.confirmDisabled || actionsDisabled()}
+          onClick={confirm}
           style={{
             padding: '9px 20px',
             background: props.danger ? theme.error : theme.accent,
             border: 'none',
             'border-radius': '8px',
             color: props.danger ? '#fff' : theme.accentText,
-            cursor: props.confirmDisabled ? 'not-allowed' : 'pointer',
+            cursor: confirmDisabled() ? 'not-allowed' : 'pointer',
             'font-size': '14px',
-            'font-weight': '500',
-            opacity: props.confirmDisabled ? '0.5' : '1',
+            'font-weight': '600',
+            opacity: confirmDisabled() ? '0.5' : '1',
             display: 'inline-flex',
             'align-items': 'center',
             gap: '8px',
