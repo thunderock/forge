@@ -82,6 +82,7 @@ export {
 } from './navigation';
 export { broadcast, getBroadcastTargetCount, getBroadcastPending } from './broadcast';
 export {
+  createPersonality,
   readPersonality,
   refreshPersonalities,
   togglePersonalityLibraryDialog,

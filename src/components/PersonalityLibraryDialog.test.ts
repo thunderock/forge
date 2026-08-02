@@ -6,9 +6,11 @@ import {
   PersonalityCatalogState,
   PersonalityDetailIdentity,
   PersonalityDetailState,
+  PersonalityLibraryRail,
   PersonalityOption,
   createAsyncRequestRunner,
   nextPersonalityIndex,
+  selectPreferredPersonality,
 } from './PersonalityLibraryDialog';
 
 interface Deferred<T> {
@@ -266,5 +268,85 @@ describe('markdown safety contract', () => {
     expect(source).not.toMatch(
       /\bMarked\b|DOMPurify|mermaid\.render|ReviewProvider|openFileInEditor/,
     );
+  });
+});
+
+describe('RED: create editor contract', () => {
+  it('keeps the rail and New Personality action after a successful empty load', () => {
+    const html = renderToString(() =>
+      PersonalityLibraryRail({
+        personalities: [],
+        selectedId: null,
+        detailId: 'personality-detail',
+        onNew: vi.fn(),
+        onSelect: vi.fn(),
+      }),
+    );
+
+    expect(html).toContain('Personalities');
+    expect(html).toContain('New Personality');
+    expect(html).toContain('role="listbox"');
+  });
+
+  it('selects a preferred saved ID after the refreshed list is reordered', () => {
+    const saved: PersonalitySummary = {
+      id: 'incident-commander',
+      name: 'Incident Commander',
+      badge: 'IC',
+      color: '#FF6A2C',
+      builtin: false,
+    };
+
+    expect(selectPreferredPersonality([principal, saved, quality], saved.id, quality.id)).toEqual(
+      saved,
+    );
+    expect(selectPreferredPersonality([principal, quality], 'missing', quality.id)).toEqual(
+      quality,
+    );
+  });
+
+  it('creates and selects a custom personality end to end', async () => {
+    const saved: PersonalitySummary = {
+      id: 'incident-commander',
+      name: 'Incident Commander',
+      badge: 'IC',
+      color: '#FF6A2C',
+      builtin: false,
+    };
+    const create = vi.fn().mockResolvedValue(saved);
+    const refresh = vi
+      .fn<() => Promise<PersonalitySummary[]>>()
+      .mockRejectedValueOnce(new Error('refresh failed'))
+      .mockResolvedValueOnce([principal, saved, quality]);
+
+    const created = await create();
+    await expect(refresh()).rejects.toThrow('refresh failed');
+    const selected = selectPreferredPersonality(await refresh(), created.id);
+
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(refresh).toHaveBeenCalledTimes(2);
+    expect(selected?.id).toBe(saved.id);
+  });
+
+  it('uses the store cache as the only row source and separates reload from creation', () => {
+    const librarySource = readFileSync(
+      new URL('./PersonalityLibraryDialog.tsx', import.meta.url),
+      'utf8',
+    );
+    const appSource = readFileSync(new URL('../App.tsx', import.meta.url), 'utf8');
+
+    expect(librarySource).toContain('store.personalities');
+    expect(librarySource).not.toContain('createSignal<PersonalitySummary[]>([])');
+    expect(librarySource).toContain('reloadGeneration');
+    expect(librarySource).toContain('preferredId');
+    expect(librarySource).toContain(
+      'Personality saved, but the library couldn’t refresh. Select Reload Library to reload it.',
+    );
+    expect(librarySource).toContain('Reload Library');
+    expect(librarySource).not.toContain('IPC.CreatePersonality');
+    expect(appSource).toContain('<PersonalityEditorDialog');
+    expect(appSource.match(/<PersonalityEditorDialog/g)).toHaveLength(1);
+    expect(appSource).toContain('preferredPersonalityId');
+    expect(appSource).toContain('personalityReloadGeneration');
   });
 });

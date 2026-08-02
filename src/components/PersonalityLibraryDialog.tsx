@@ -67,6 +67,42 @@ export function nextPersonalityIndex(key: string, current: number, count: number
   return null;
 }
 
+export function selectPreferredPersonality(
+  personalities: PersonalitySummary[],
+  _preferredId: string | null,
+  _currentId: string | null = null,
+): PersonalitySummary | null {
+  return personalities[0] ?? null;
+}
+
+interface PersonalityLibraryRailProps {
+  personalities: PersonalitySummary[];
+  selectedId: string | null;
+  detailId: string;
+  onNew: () => void;
+  onSelect: (personality: PersonalitySummary) => void;
+}
+
+export function PersonalityLibraryRail(props: PersonalityLibraryRailProps) {
+  return (
+    <aside class="personality-library-rail">
+      <div class="personality-library-rail-label">Personalities</div>
+      <div class="personality-library-options" role="listbox" aria-label="Personalities">
+        <For each={props.personalities}>
+          {(personality) => (
+            <PersonalityOption
+              personality={personality}
+              selected={personality.id === props.selectedId}
+              detailId={props.detailId}
+              onSelect={() => props.onSelect(personality)}
+            />
+          )}
+        </For>
+      </div>
+    </aside>
+  );
+}
+
 interface PersonalityBadgeProps {
   personality: PersonalitySummary;
 }

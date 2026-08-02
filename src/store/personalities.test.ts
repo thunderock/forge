@@ -31,6 +31,7 @@ vi.mock('./core', () => ({
 
 import { IPC } from '../../electron/ipc/channels';
 import {
+  createPersonality,
   readPersonality,
   refreshPersonalities,
   togglePersonalityLibraryDialog,
@@ -63,6 +64,15 @@ const principal: PersonalitySummary = {
   badge: 'PE',
   color: '#7A78FF',
   builtin: true,
+};
+
+const customDetail: PersonalityDetail = {
+  id: 'incident-commander',
+  name: 'Incident Commander',
+  badge: 'IC',
+  color: '#FF6A2C',
+  builtin: false,
+  markdown: '## Role\n\nCoordinate the response.',
 };
 
 beforeEach(() => {
@@ -189,5 +199,47 @@ describe('persistence boundary', () => {
     const persistenceSource = readFileSync(new URL('./persistence.ts', import.meta.url), 'utf8');
 
     expect(persistenceSource).not.toMatch(/personalit(?:y|ies)/i);
+  });
+});
+
+describe('RED: create editor contract', () => {
+  it('invokes one structured create and returns the authoritative detail without cache mutation', async () => {
+    const fields = {
+      name: customDetail.name,
+      badge: customDetail.badge,
+      color: customDetail.color,
+      markdown: customDetail.markdown,
+    };
+    mockStore.personalities = [quality];
+    mockInvoke.mockResolvedValueOnce(customDetail);
+
+    await expect(createPersonality(fields)).resolves.toEqual(customDetail);
+
+    expect(mockInvoke).toHaveBeenCalledTimes(1);
+    expect(mockInvoke).toHaveBeenCalledWith(IPC.CreatePersonality, fields);
+    expect(mockSetStore).not.toHaveBeenCalled();
+    expect(mockStore.personalities).toEqual([quality]);
+  });
+
+  it('keeps a successful create successful when the follow-up refresh fails', async () => {
+    const fields = {
+      name: customDetail.name,
+      badge: customDetail.badge,
+      color: customDetail.color,
+      markdown: customDetail.markdown,
+    };
+    mockInvoke
+      .mockResolvedValueOnce(customDetail)
+      .mockRejectedValueOnce(new Error('refresh failed'));
+
+    const saved = await createPersonality(fields);
+    await expect(refreshPersonalities(() => true)).rejects.toThrow('refresh failed');
+
+    expect(saved.id).toBe(customDetail.id);
+    expect(mockInvoke).toHaveBeenNthCalledWith(1, IPC.CreatePersonality, fields);
+    expect(mockInvoke).toHaveBeenNthCalledWith(2, IPC.ListPersonalities);
+    expect(
+      mockInvoke.mock.calls.filter(([channel]) => channel === IPC.CreatePersonality),
+    ).toHaveLength(1);
   });
 });
