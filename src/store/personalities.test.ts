@@ -35,6 +35,7 @@ import {
   readPersonality,
   refreshPersonalities,
   togglePersonalityLibraryDialog,
+  updatePersonality,
 } from './personalities';
 
 interface Deferred<T> {
@@ -299,5 +300,64 @@ describe('RED: binding editor contract', () => {
       defaultModel: 'provider/custom-model',
       defaultReasoningEffort: 'high',
     });
+  });
+});
+
+describe('RED: edit and copy editor contract', () => {
+  const updateFields: PersonalityWriteFields = {
+    name: 'Response Commander',
+    badge: 'RC',
+    color: '#7A78FF',
+    markdown: '## Role\n\nLead the current response.',
+    defaultAgent: 'codex',
+    defaultModel: '  gpt-5.6-sol  ',
+    defaultReasoningEffort: '  high  ',
+  };
+
+  const updatedDetail: PersonalityDetail = {
+    id: customDetail.id,
+    builtin: false,
+    modifiedFromSeed: false,
+    ...updateFields,
+    defaultModel: 'gpt-5.6-sol',
+    defaultReasoningEffort: 'high',
+  };
+
+  it('invokes one normalized update at the same stable ID without mutating the cache', async () => {
+    mockStore.personalities = [quality];
+    mockInvoke.mockResolvedValueOnce(updatedDetail);
+
+    await expect(updatePersonality(customDetail.id, updateFields)).resolves.toEqual(updatedDetail);
+
+    expect(mockInvoke).toHaveBeenCalledTimes(1);
+    expect(mockInvoke).toHaveBeenCalledWith(IPC.UpdatePersonality, {
+      id: customDetail.id,
+      ...updateFields,
+      defaultModel: 'gpt-5.6-sol',
+      defaultReasoningEffort: 'high',
+    });
+    expect(mockSetStore).not.toHaveBeenCalled();
+    expect(mockStore.personalities).toEqual([quality]);
+  });
+
+  it('keeps update success authoritative when the one follow-up refresh fails', async () => {
+    mockInvoke
+      .mockResolvedValueOnce(updatedDetail)
+      .mockRejectedValueOnce(new Error('refresh failed'));
+
+    const saved = await updatePersonality(customDetail.id, updateFields);
+    await expect(refreshPersonalities(() => true)).rejects.toThrow('refresh failed');
+
+    expect(saved.id).toBe(customDetail.id);
+    expect(mockInvoke).toHaveBeenNthCalledWith(1, IPC.UpdatePersonality, {
+      id: customDetail.id,
+      ...updateFields,
+      defaultModel: 'gpt-5.6-sol',
+      defaultReasoningEffort: 'high',
+    });
+    expect(mockInvoke).toHaveBeenNthCalledWith(2, IPC.ListPersonalities);
+    expect(
+      mockInvoke.mock.calls.filter(([channel]) => channel === IPC.UpdatePersonality),
+    ).toHaveLength(1);
   });
 });

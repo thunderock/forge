@@ -86,6 +86,7 @@ export {
   readPersonality,
   refreshPersonalities,
   togglePersonalityLibraryDialog,
+  updatePersonality,
 } from './personalities';
 export {
   registerFocusFn,

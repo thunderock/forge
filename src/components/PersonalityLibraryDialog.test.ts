@@ -357,3 +357,83 @@ describe('RED: create editor contract', () => {
     expect(appSource).toContain('personalityReloadGeneration');
   });
 });
+
+describe('RED: edit and copy editor contract', () => {
+  it('derives the exact action only from the current freshly loaded detail', async () => {
+    const libraryModule = (await import('./PersonalityLibraryDialog')) as unknown as {
+      personalityEditAction?: (
+        detail: PersonalityDetail | null,
+        selectedId: string | null,
+      ) => { id: string; label: 'Edit' | 'Edit a copy' } | null;
+    };
+
+    expect(libraryModule.personalityEditAction).toBeTypeOf('function');
+    if (!libraryModule.personalityEditAction) return;
+
+    const custom: PersonalityDetail = {
+      id: 'incident-commander',
+      name: 'Incident Commander',
+      badge: 'IC',
+      color: '#FF6A2C',
+      builtin: false,
+      modifiedFromSeed: false,
+      markdown: '## Role\n\nCoordinate the response.',
+    };
+    const builtIn: PersonalityDetail = {
+      ...quality,
+      markdown: '## Role\n\nProtect quality.',
+    };
+
+    expect(libraryModule.personalityEditAction(custom, custom.id)).toEqual({
+      id: custom.id,
+      label: 'Edit',
+    });
+    expect(libraryModule.personalityEditAction(builtIn, builtIn.id)).toEqual({
+      id: builtIn.id,
+      label: 'Edit a copy',
+    });
+    expect(libraryModule.personalityEditAction(custom, builtIn.id)).toBeNull();
+    expect(libraryModule.personalityEditAction(null, custom.id)).toBeNull();
+  });
+
+  it('shows Edit or Edit a copy only after fresh detail and never exposes Delete', () => {
+    const librarySource = readFileSync(
+      new URL('./PersonalityLibraryDialog.tsx', import.meta.url),
+      'utf8',
+    );
+
+    expect(librarySource).toContain('onEdit: (id: string) => void');
+    expect(librarySource).toContain('personalityEditAction');
+    expect(librarySource).toContain('Edit a copy');
+    expect(librarySource).toContain('props.onEdit(action().id)');
+    expect(librarySource).not.toContain('Delete');
+  });
+
+  it('owns a transient edit target and closes the child before the parent', () => {
+    const appSource = readFileSync(new URL('../App.tsx', import.meta.url), 'utf8');
+    const closeStart = appSource.indexOf('function closePersonalityLibrary');
+    const closeEnd = appSource.indexOf('\n  }', closeStart);
+    const closeBody = appSource.slice(closeStart, closeEnd);
+
+    expect(appSource).toContain('personalityEditId');
+    expect(appSource).toContain('editId={personalityEditId()}');
+    expect(appSource).toContain('onEdit=');
+    expect(closeBody).toContain('setPersonalityEditorOpen(false)');
+    expect(closeBody).toContain('setPersonalityEditId(null)');
+    expect(closeBody.indexOf('setPersonalityEditorOpen(false)')).toBeLessThan(
+      closeBody.indexOf('togglePersonalityLibraryDialog(false)'),
+    );
+  });
+
+  it('routes one successful save through returned-ID refresh selection without replaying mutation', () => {
+    const appSource = readFileSync(new URL('../App.tsx', import.meta.url), 'utf8');
+
+    expect(appSource).toContain('setPreferredPersonalityId(id)');
+    expect(appSource).toContain('setPersonalityReloadGeneration((current) => current + 1)');
+    expect(
+      appSource.match(/setPersonalityReloadGeneration\(\(current\) => current \+ 1\)/g),
+    ).toHaveLength(1);
+    expect(appSource).not.toContain('createPersonality(');
+    expect(appSource).not.toContain('updatePersonality(');
+  });
+});

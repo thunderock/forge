@@ -29,6 +29,13 @@ export async function createPersonality(
   });
 }
 
+export async function updatePersonality(
+  _id: string,
+  _fields: PersonalityWriteFields,
+): Promise<PersonalityDetail> {
+  throw new Error('Personality update is not implemented');
+}
+
 export function normalizePersonalityWriteFields(
   fields: PersonalityWriteFields,
 ): PersonalityWriteFields {

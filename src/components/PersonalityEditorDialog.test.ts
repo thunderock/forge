@@ -59,6 +59,41 @@ function agentDef(id: string, name: string, command: string, available = true): 
   };
 }
 
+type PersonalityEditorSaveTarget = { mode: 'create' | 'copy' } | { mode: 'edit'; id: string };
+
+interface LoadedPersonalityDraft {
+  mode: 'edit' | 'copy';
+  sourceId: string;
+  fields: PersonalityWriteFields;
+}
+
+interface PersonalityDraftLoader {
+  load: (id: string) => Promise<void>;
+  invalidate: () => void;
+}
+
+interface EditAndCopyContractModule {
+  personalityDraftFromDetail?: (detail: PersonalityDetail) => LoadedPersonalityDraft;
+  createPersonalityDraftLoader?: (options: {
+    read: (id: string) => Promise<PersonalityDetail | null>;
+    isActive: () => boolean;
+    onLoading: (id: string) => void;
+    onLoaded: (draft: LoadedPersonalityDraft) => void;
+    onError: (id: string) => void;
+  }) => PersonalityDraftLoader;
+  createPersonalityModeSubmitter?: (options: {
+    create: (fields: PersonalityWriteFields) => Promise<PersonalityDetail>;
+    update: (id: string, fields: PersonalityWriteFields) => Promise<PersonalityDetail>;
+    onSaved: (id: string) => void;
+    onPending: (pending: boolean) => void;
+    onError: (target: PersonalityEditorSaveTarget) => void;
+  }) => (target: PersonalityEditorSaveTarget, fields: PersonalityWriteFields) => Promise<boolean>;
+}
+
+async function editAndCopyContract(): Promise<EditAndCopyContractModule> {
+  return (await import('./PersonalityEditorDialog')) as unknown as EditAndCopyContractModule;
+}
+
 describe('RED: create editor contract', () => {
   it('starts blank with Forge orange, no eager errors, and a disabled create action', () => {
     const source = readFileSync(new URL('./PersonalityEditorDialog.tsx', import.meta.url), 'utf8');
@@ -295,5 +330,251 @@ describe('RED: binding editor contract', () => {
     expect(source).toContain('setModelSelection({})');
     expect(source).toMatch(/<Show\s+when=\{selectedBindingAgent\(\)\}/);
     expect(source).not.toContain('customAgents');
+  });
+});
+
+describe('RED: edit and copy editor contract', () => {
+  const customWithBinding: PersonalityDetail = {
+    ...savedDetail,
+    defaultAgent: 'codex',
+    defaultModel: 'gpt-5.6-sol',
+    defaultReasoningEffort: 'high',
+  };
+  const builtinWithBinding: PersonalityDetail = {
+    id: 'principal-engineer',
+    name: 'Principal Engineer',
+    badge: 'PE',
+    color: '#7A78FF',
+    builtin: true,
+    modifiedFromSeed: true,
+    markdown: '## Role\n\nGuide high-leverage architecture.',
+    defaultAgent: 'claude-code',
+    defaultModel: 'fable',
+    defaultReasoningEffort: 'max',
+  };
+
+  it('derives edit versus copy only from fresh detail and copies narrow editable fields', async () => {
+    const { personalityDraftFromDetail } = await editAndCopyContract();
+
+    expect(personalityDraftFromDetail).toBeTypeOf('function');
+    if (!personalityDraftFromDetail) return;
+
+    expect(personalityDraftFromDetail(customWithBinding)).toEqual({
+      mode: 'edit',
+      sourceId: customWithBinding.id,
+      fields: {
+        name: customWithBinding.name,
+        badge: customWithBinding.badge,
+        color: customWithBinding.color,
+        markdown: customWithBinding.markdown,
+        defaultAgent: 'codex',
+        defaultModel: 'gpt-5.6-sol',
+        defaultReasoningEffort: 'high',
+      },
+    });
+
+    const privateBuiltin = {
+      ...builtinWithBinding,
+      path: '/private/personality.md',
+      seedRevision: 42,
+      pristineHash: 'must-not-cross',
+    };
+    const copy = personalityDraftFromDetail(privateBuiltin);
+    expect(copy).toEqual({
+      mode: 'copy',
+      sourceId: builtinWithBinding.id,
+      fields: {
+        name: 'Principal Engineer (Copy)',
+        badge: 'PE',
+        color: '#7A78FF',
+        markdown: builtinWithBinding.markdown,
+        defaultAgent: 'claude-code',
+        defaultModel: 'fable',
+        defaultReasoningEffort: 'max',
+      },
+    });
+    expect(copy.fields).not.toHaveProperty('builtin');
+    expect(copy.fields).not.toHaveProperty('modifiedFromSeed');
+    expect(copy.fields).not.toHaveProperty('path');
+    expect(copy.fields).not.toHaveProperty('seedRevision');
+    expect(copy.fields).not.toHaveProperty('pristineHash');
+  });
+
+  it('accepts only the newest open target and invalidates pending reads on close', async () => {
+    const { createPersonalityDraftLoader } = await editAndCopyContract();
+
+    expect(createPersonalityDraftLoader).toBeTypeOf('function');
+    if (!createPersonalityDraftLoader) return;
+
+    const customRequest = deferred<PersonalityDetail | null>();
+    const builtinRequest = deferred<PersonalityDetail | null>();
+    const closedRequest = deferred<PersonalityDetail | null>();
+    const read = vi
+      .fn<(id: string) => Promise<PersonalityDetail | null>>()
+      .mockImplementationOnce(() => customRequest.promise)
+      .mockImplementationOnce(() => builtinRequest.promise)
+      .mockImplementationOnce(() => closedRequest.promise);
+    const onLoading = vi.fn();
+    const onLoaded = vi.fn();
+    const onError = vi.fn();
+    let open = true;
+    const loader = createPersonalityDraftLoader({
+      read,
+      isActive: () => open,
+      onLoading,
+      onLoaded,
+      onError,
+    });
+
+    const customLoad = loader.load(customWithBinding.id);
+    const builtinLoad = loader.load(builtinWithBinding.id);
+    builtinRequest.resolve(builtinWithBinding);
+    await builtinLoad;
+    customRequest.resolve(customWithBinding);
+    await customLoad;
+
+    expect(read).toHaveBeenNthCalledWith(1, customWithBinding.id);
+    expect(read).toHaveBeenNthCalledWith(2, builtinWithBinding.id);
+    expect(onLoaded).toHaveBeenCalledTimes(1);
+    expect(onLoaded).toHaveBeenCalledWith({
+      mode: 'copy',
+      sourceId: builtinWithBinding.id,
+      fields: expect.objectContaining({ name: 'Principal Engineer (Copy)' }),
+    });
+
+    const closedLoad = loader.load(customWithBinding.id);
+    open = false;
+    loader.invalidate();
+    closedRequest.resolve(customWithBinding);
+    await closedLoad;
+
+    expect(onLoaded).toHaveBeenCalledTimes(1);
+    expect(onError).not.toHaveBeenCalled();
+    expect(onLoading).toHaveBeenCalledTimes(3);
+  });
+
+  it('routes current read failures to recovery without fabricating a draft', async () => {
+    const { createPersonalityDraftLoader } = await editAndCopyContract();
+
+    expect(createPersonalityDraftLoader).toBeTypeOf('function');
+    if (!createPersonalityDraftLoader) return;
+
+    const onLoaded = vi.fn();
+    const onError = vi.fn();
+    const loader = createPersonalityDraftLoader({
+      read: vi.fn().mockRejectedValueOnce(new Error('/private/path stays hidden')),
+      isActive: () => true,
+      onLoading: vi.fn(),
+      onLoaded,
+      onError,
+    });
+
+    await loader.load(customWithBinding.id);
+
+    expect(onLoaded).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledWith(customWithBinding.id);
+  });
+
+  it('updates a custom and creates a built-in copy end to end', async () => {
+    const { personalityDraftFromDetail, createPersonalityModeSubmitter } =
+      await editAndCopyContract();
+
+    expect(personalityDraftFromDetail).toBeTypeOf('function');
+    expect(createPersonalityModeSubmitter).toBeTypeOf('function');
+    if (!personalityDraftFromDetail || !createPersonalityModeSubmitter) return;
+
+    const copiedDetail: PersonalityDetail = {
+      ...builtinWithBinding,
+      id: 'principal-engineer-copy',
+      name: 'Principal Engineer (Copy)',
+      builtin: false,
+      modifiedFromSeed: false,
+    };
+    const create = vi.fn().mockResolvedValue(copiedDetail);
+    const update = vi.fn().mockResolvedValue(customWithBinding);
+    const onSaved = vi.fn();
+    const onPending = vi.fn();
+    const onError = vi.fn();
+    const submit = createPersonalityModeSubmitter({
+      create,
+      update,
+      onSaved,
+      onPending,
+      onError,
+    });
+
+    const customDraft = personalityDraftFromDetail(customWithBinding);
+    const copyDraft = personalityDraftFromDetail(builtinWithBinding);
+    await expect(
+      submit({ mode: 'edit', id: customDraft.sourceId }, customDraft.fields),
+    ).resolves.toBe(true);
+    await expect(submit({ mode: 'copy' }, copyDraft.fields)).resolves.toBe(true);
+
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(update).toHaveBeenCalledWith(customWithBinding.id, customDraft.fields);
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(create).toHaveBeenCalledWith(copyDraft.fields);
+    expect(onSaved.mock.calls).toEqual([[customWithBinding.id], [copiedDetail.id]]);
+    expect(onPending.mock.calls).toEqual([[true], [false], [true], [false]]);
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it('retains a failed mode draft and permits one explicit retry without crossing mutations', async () => {
+    const { createPersonalityModeSubmitter } = await editAndCopyContract();
+
+    expect(createPersonalityModeSubmitter).toBeTypeOf('function');
+    if (!createPersonalityModeSubmitter) return;
+
+    const update = vi
+      .fn<(_id: string, _fields: PersonalityWriteFields) => Promise<PersonalityDetail>>()
+      .mockRejectedValueOnce(new Error('save failed'))
+      .mockResolvedValueOnce(customWithBinding);
+    const create = vi.fn<(_fields: PersonalityWriteFields) => Promise<PersonalityDetail>>();
+    const onSaved = vi.fn();
+    const onError = vi.fn();
+    const submit = createPersonalityModeSubmitter({
+      create,
+      update,
+      onSaved,
+      onPending: vi.fn(),
+      onError,
+    });
+    const fields = { ...validFields };
+    const target: PersonalityEditorSaveTarget = { mode: 'edit', id: customWithBinding.id };
+
+    await expect(submit(target, fields)).resolves.toBe(false);
+    expect(fields).toEqual(validFields);
+    expect(onError).toHaveBeenCalledWith(target);
+    await expect(submit(target, fields)).resolves.toBe(true);
+
+    expect(update).toHaveBeenCalledTimes(2);
+    expect(create).not.toHaveBeenCalled();
+    expect(onSaved).toHaveBeenCalledWith(customWithBinding.id);
+  });
+
+  it('renders exact mode, loading, recovery, busy, and failure copy with no privileged fields', () => {
+    const source = readFileSync(new URL('./PersonalityEditorDialog.tsx', import.meta.url), 'utf8');
+
+    expect(source).toContain('editId?: string | null');
+    expect(source).toContain('Edit Personality');
+    expect(source).toContain('Create Personality Copy');
+    expect(source).toContain(
+      'Update this personality’s identity, instructions, and default binding.',
+    );
+    expect(source).toContain(
+      'The built-in stays unchanged. Saving creates a new custom personality.',
+    );
+    expect(source).toContain('Save Changes');
+    expect(source).toContain('Create Copy');
+    expect(source).toContain('Saving…');
+    expect(source).toContain('Creating copy…');
+    expect(source).toContain('Reload Personality');
+    expect(source).toContain('Close Editor');
+    expect(source).toContain('Couldn’t save changes. Review the fields and try again.');
+    expect(source).toContain('Couldn’t create the copy. Review the fields and try again.');
+    expect(source).not.toContain('seedRevision');
+    expect(source).not.toContain('pristineHash');
+    expect(source).not.toContain('copiedFrom');
+    expect(source).not.toContain('Delete');
   });
 });
