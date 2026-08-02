@@ -151,6 +151,8 @@ function App() {
   const [showDropOverlay, setShowDropOverlay] = createSignal(false);
   const [personalityEditorOpen, setPersonalityEditorOpen] = createSignal(false);
   const [personalityEditId, setPersonalityEditId] = createSignal<string | null>(null);
+  const [personalityResetOpen, setPersonalityResetOpen] = createSignal(false);
+  const [personalityResetDismissGeneration, setPersonalityResetDismissGeneration] = createSignal(0);
   const [preferredPersonalityId, setPreferredPersonalityId] = createSignal<string | null>(null);
   const [personalityReloadGeneration, setPersonalityReloadGeneration] = createSignal(0);
   let dragCounter = 0;
@@ -161,6 +163,10 @@ function App() {
   }
 
   function closePersonalityLibrary(): void {
+    if (personalityResetOpen()) {
+      setPersonalityResetDismissGeneration((current) => current + 1);
+      return;
+    }
     setPersonalityEditorOpen(false);
     setPersonalityEditId(null);
     togglePersonalityLibraryDialog(false);
@@ -718,6 +724,10 @@ function App() {
       toggleFocusMode: () => toggleTaskFocusMode(),
       toggleHelp: () => toggleHelpDialog(),
       togglePersonalityLibrary: () => {
+        if (personalityResetOpen()) {
+          setPersonalityResetDismissGeneration((current) => current + 1);
+          return;
+        }
         if (personalityEditorOpen()) {
           closePersonalityEditor();
           return;
@@ -726,6 +736,10 @@ function App() {
       },
       toggleSettings: () => toggleSettingsDialog(),
       closeDialogs: () => {
+        if (personalityResetOpen()) {
+          setPersonalityResetDismissGeneration((current) => current + 1);
+          return;
+        }
         if (personalityEditorOpen()) {
           closePersonalityEditor();
           return;
@@ -967,6 +981,8 @@ function App() {
           onClose={closePersonalityLibrary}
           onNew={() => openPersonalityEditor(null)}
           onEdit={(id) => openPersonalityEditor(id)}
+          onResetOpenChange={setPersonalityResetOpen}
+          resetDismissGeneration={personalityResetDismissGeneration()}
           reloadGeneration={personalityReloadGeneration()}
           preferredId={preferredPersonalityId()}
         />

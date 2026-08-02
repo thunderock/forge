@@ -712,6 +712,7 @@ describe('RED: topmost dialog contract', () => {
 describe('RED: reset catalog contract', () => {
   it('keeps built-in modification and reset metadata outside every editor draft', async () => {
     const { personalityDraftFromDetail } = await editAndCopyContract();
+    const source = readFileSync(new URL('./PersonalityEditorDialog.tsx', import.meta.url), 'utf8');
 
     expect(personalityDraftFromDetail).toBeTypeOf('function');
     if (!personalityDraftFromDetail) return;
@@ -742,5 +743,9 @@ describe('RED: reset catalog contract', () => {
     expect(draft.fields).not.toHaveProperty('filename');
     expect(draft.fields).not.toHaveProperty('rawYaml');
     expect(draft.fields).not.toHaveProperty('reset');
+    expect(source).not.toContain('resetPersonality');
+    expect(source).not.toContain('seedRevision');
+    expect(source).not.toContain('pristineHash');
+    expect(source).not.toContain('rawYaml');
   });
 });

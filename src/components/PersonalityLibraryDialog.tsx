@@ -25,6 +25,8 @@ interface PersonalityLibraryDialogProps {
   onClose: () => void;
   onNew: () => void;
   onEdit: (id: string) => void;
+  onResetOpenChange: (open: boolean) => void;
+  resetDismissGeneration: number;
   reloadGeneration: number;
   preferredId: string | null;
 }
@@ -129,7 +131,7 @@ export function personalityResetAction(
 interface PersonalityResetSubmitterOptions {
   reset: (id: string) => Promise<PersonalityDetail>;
   onPending: (pending: boolean) => void;
-  onSuccess: (detail: PersonalityDetail) => void | Promise<void>;
+  onSuccess: (detail: PersonalityDetail) => void;
   onError: (target: PersonalityResetTarget) => void;
 }
 
@@ -152,7 +154,7 @@ export function createPersonalityResetSubmitter(options: PersonalityResetSubmitt
       options.onPending(false);
     }
 
-    await options.onSuccess(result);
+    options.onSuccess(result);
     return true;
   };
 }
@@ -385,10 +387,11 @@ export function PersonalityLibraryDialog(props: PersonalityLibraryDialogProps) {
         `Couldn’t reset ${target.name}. The original file was left unchanged. Try again or cancel.`,
       );
     },
-    onSuccess: async (result) => {
+    onSuccess: (result) => {
       setResetTarget(null);
       setResetError(null);
-      await loadLibrary('post-reset', result.id);
+      if (!untrack(() => props.open)) return;
+      void loadLibrary('post-reset', result.id);
     },
   });
 
@@ -545,6 +548,18 @@ export function PersonalityLibraryDialog(props: PersonalityLibraryDialogProps) {
         setResetPending(false);
         setResetError(null);
       },
+    ),
+  );
+
+  createEffect(() => {
+    props.onResetOpenChange(resetTarget() !== null);
+  });
+
+  createEffect(
+    on(
+      () => props.resetDismissGeneration,
+      () => cancelReset(),
+      { defer: true },
     ),
   );
 

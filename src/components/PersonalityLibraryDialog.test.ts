@@ -476,7 +476,7 @@ interface ResetCatalogContractModule {
   createPersonalityResetSubmitter?: (options: {
     reset: (id: string) => Promise<PersonalityDetail>;
     onPending: (pending: boolean) => void;
-    onSuccess: (detail: PersonalityDetail) => void | Promise<void>;
+    onSuccess: (detail: PersonalityDetail) => void;
     onError: (target: PersonalityResetTarget) => void;
   }) => (target: PersonalityResetTarget) => Promise<boolean>;
 }
@@ -623,21 +623,25 @@ describe('RED: reset catalog contract', () => {
     let selected: PersonalitySummary | null = modifiedSummary;
     let presentedDetail: PersonalityDetail | null = modifiedDetail;
     let detailScrollTop = 64;
+    let reload = Promise.resolve();
     const submit = createPersonalityResetSubmitter({
       reset,
       onPending: vi.fn(),
       onError: vi.fn(),
-      onSuccess: async (result) => {
+      onSuccess: (result) => {
         confirmationOpen = false;
-        const rows = await refresh();
-        selected = selectPreferredPersonality(rows, result.id, modifiedDetail.id);
-        presentedDetail = await read(result.id);
-        detailScrollTop = 0;
-        focus(selected?.id);
+        reload = (async () => {
+          const rows = await refresh();
+          selected = selectPreferredPersonality(rows, result.id, modifiedDetail.id);
+          presentedDetail = await read(result.id);
+          detailScrollTop = 0;
+          focus(selected?.id);
+        })();
       },
     });
 
     await expect(submit({ id: modifiedDetail.id, name: modifiedDetail.name })).resolves.toBe(true);
+    await reload;
 
     expect(reset).toHaveBeenCalledTimes(1);
     expect(refresh).toHaveBeenCalledTimes(1);
@@ -647,5 +651,51 @@ describe('RED: reset catalog contract', () => {
     expect(presentedDetail).toEqual(pristineDetail);
     expect(detailScrollTop).toBe(0);
     expect(focus).toHaveBeenCalledWith(quality.id);
+  });
+
+  it('keeps reset success authoritative when presentation recovery fails', async () => {
+    const { createPersonalityResetSubmitter } = await resetCatalogContract();
+
+    expect(createPersonalityResetSubmitter).toBeTypeOf('function');
+    if (!createPersonalityResetSubmitter) return;
+
+    const reset = vi.fn().mockResolvedValue(pristineDetail);
+    const refresh = vi.fn().mockRejectedValue(new Error('refresh failed'));
+    const onResetError = vi.fn();
+    const onRefreshError = vi.fn();
+    let reload = Promise.resolve();
+    const submit = createPersonalityResetSubmitter({
+      reset,
+      onPending: vi.fn(),
+      onError: onResetError,
+      onSuccess: () => {
+        reload = refresh().catch(onRefreshError);
+      },
+    });
+
+    await expect(submit({ id: modifiedDetail.id, name: modifiedDetail.name })).resolves.toBe(true);
+    await reload;
+
+    expect(reset).toHaveBeenCalledTimes(1);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(onResetError).not.toHaveBeenCalled();
+    expect(onRefreshError).toHaveBeenCalledTimes(1);
+  });
+
+  it('routes dialog-safe shortcuts through the reset confirmation before the catalog', () => {
+    const appSource = readFileSync(new URL('../App.tsx', import.meta.url), 'utf8');
+    const librarySource = readFileSync(
+      new URL('./PersonalityLibraryDialog.tsx', import.meta.url),
+      'utf8',
+    );
+
+    expect(appSource).toContain('personalityResetOpen');
+    expect(appSource).toContain('personalityResetDismissGeneration');
+    expect(appSource.match(/if \(personalityResetOpen\(\)\)/g)).toHaveLength(3);
+    expect(appSource).toContain('onResetOpenChange={setPersonalityResetOpen}');
+    expect(appSource).toContain('resetDismissGeneration={personalityResetDismissGeneration()}');
+    expect(librarySource).toContain('if (resetPending()) return;');
+    expect(librarySource).toContain('props.onResetOpenChange(resetTarget() !== null)');
+    expect(librarySource).toContain('props.resetDismissGeneration');
   });
 });
