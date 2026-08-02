@@ -1,4 +1,13 @@
-import { ipcMain, dialog, shell, app, clipboard, BrowserWindow, Notification } from 'electron';
+import {
+  ipcMain,
+  dialog,
+  shell,
+  app,
+  clipboard,
+  BrowserWindow,
+  Notification,
+  type IpcMainInvokeEvent,
+} from 'electron';
 import crypto from 'crypto';
 import fs from 'fs';
 import os from 'os';
@@ -89,7 +98,13 @@ import {
   deleteCustomThemeFile,
   getStateDir,
 } from './persistence.js';
-import { isPersonalityId, listPersonalities, readPersonality } from './personalities.js';
+import {
+  createPersonality,
+  isPersonalityId,
+  listPersonalities,
+  readPersonality,
+} from './personalities.js';
+import type { PersonalityWriteFields } from './shared-types.js';
 import { loadKeybindings, saveKeybindings } from './keybindings.js';
 import {
   initAutoUpdater,
@@ -260,6 +275,39 @@ export async function openExternalHttpUrl(
 const validateBranchName = sharedValidateBranchName;
 
 type IpcArgs = Record<string, unknown>;
+const PERSONALITY_WRITE_KEYS = ['name', 'badge', 'color', 'markdown'] as const;
+const PERSONALITY_WRITE_KEY_SET = new Set<string>(PERSONALITY_WRITE_KEYS);
+
+function assertTrustedPersonalitySender(event: IpcMainInvokeEvent, win: BrowserWindow): void {
+  if (
+    win.isDestroyed() ||
+    event.sender !== win.webContents ||
+    event.senderFrame !== win.webContents.mainFrame
+  ) {
+    throw new Error('Invalid personality request');
+  }
+}
+
+function validatePersonalityWriteFields(args: unknown): PersonalityWriteFields {
+  if (args === null || typeof args !== 'object' || Array.isArray(args)) {
+    throw new Error('Invalid personality request');
+  }
+  const record = args as Record<string, unknown>;
+  const keys = Object.keys(record);
+  if (
+    keys.length !== PERSONALITY_WRITE_KEYS.length ||
+    keys.some((key) => !PERSONALITY_WRITE_KEY_SET.has(key))
+  ) {
+    throw new Error('Invalid personality request');
+  }
+
+  const { name, badge, color, markdown } = record;
+  assertString(name, 'name');
+  assertString(badge, 'badge');
+  assertString(color, 'color');
+  assertString(markdown, 'markdown');
+  return { name, badge, color, markdown };
+}
 
 function absolutePathArg(args: IpcArgs, key: string): string {
   const value = args[key];
@@ -769,6 +817,11 @@ export function registerAllHandlers(win: BrowserWindow): void {
     return readPersonality(personalityLibraryDir, args.id, (message) =>
       logWarn('personalities', message),
     );
+  });
+  ipcMain.handle(IPC.CreatePersonality, (event, args: unknown) => {
+    assertTrustedPersonalitySender(event, win);
+    const fields = validatePersonalityWriteFields(args);
+    return createPersonality(personalityLibraryDir, fields);
   });
 
   // --- Keybindings ---

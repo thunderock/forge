@@ -21,8 +21,13 @@ const FORBIDDEN_WRITE_FIELDS = [
   'seedRevision',
   'pristineHash',
   'filename',
+  'filePath',
   'path',
+  'projectId',
+  'frontmatter',
+  'rawFrontmatter',
   'rawYaml',
+  'yaml',
 ] as const;
 
 function interfaceDeclaration(source: string, name: string): string {
@@ -51,6 +56,7 @@ describe('personality IPC contract', () => {
 
     expect(channels.ListPersonalities).toBe('list_personalities');
     expect(channels.ReadPersonality).toBe('read_personality');
+    expect(channels.CreatePersonality).toBe('create_personality');
   });
 
   it('exposes only the narrow summary and detail DTO fields through type-only renderer exports', () => {
@@ -68,7 +74,8 @@ describe('personality IPC contract', () => {
     }
     expect(rendererTypes).toMatch(/export type \{[\s\S]*PersonalityDetail/);
     expect(rendererTypes).toMatch(/export type \{[\s\S]*PersonalitySummary/);
-    expect(rendererTypes).not.toMatch(/import\s+\{[^}]*Personality(?:Summary|Detail)/);
+    expect(rendererTypes).toMatch(/export type \{[\s\S]*PersonalityWriteFields/);
+    expect(rendererTypes).not.toMatch(/import\s+\{[^}]*Personality(?:Summary|Detail|WriteFields)/);
   });
 
   it('keeps filesystem ownership in an Electron-free path-injected domain module', () => {
@@ -115,6 +122,23 @@ describe('personality IPC contract', () => {
     for (const field of FORBIDDEN_CONTRACT_FIELDS) {
       if (field === 'path') continue;
       expect(readHandler).not.toMatch(new RegExp(`args\\?*\\.${field}\\b`));
+    }
+  });
+
+  it('allows only the registered main frame to create from exact structured fields', () => {
+    const register = readFileSync(REGISTER_PATH, 'utf8');
+    const createHandler = handlerSource(register, 'CreatePersonality');
+
+    expect(register).toMatch(
+      /const PERSONALITY_WRITE_KEYS = \['name', 'badge', 'color', 'markdown'\] as const/,
+    );
+    expect(register).toMatch(/event\.sender !== win\.webContents/);
+    expect(register).toMatch(/event\.senderFrame !== win\.webContents\.mainFrame/);
+    expect(createHandler).toContain('assertTrustedPersonalitySender(event, win)');
+    expect(createHandler).toContain('validatePersonalityWriteFields(args)');
+    expect(createHandler).toMatch(/createPersonality\(personalityLibraryDir, fields\)/);
+    for (const field of FORBIDDEN_WRITE_FIELDS) {
+      expect(createHandler).not.toMatch(new RegExp(`args\\?*\\.${field}\\b`));
     }
   });
 });

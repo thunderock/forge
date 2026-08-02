@@ -14,6 +14,7 @@ export type {
   MergeStatus,
   PersonalityDetail,
   PersonalitySummary,
+  PersonalityWriteFields,
   PrCheckBucket,
   PrCheckRun,
   PrChecksOverall,
