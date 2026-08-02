@@ -83,6 +83,13 @@ export function selectPreferredPersonality(
   );
 }
 
+export function preferredPersonalityIdForReload(
+  postSave: boolean,
+  preferredId: string | null,
+): string | null {
+  return postSave ? preferredId : null;
+}
+
 interface PersonalityLibraryRailProps {
   personalities: PersonalitySummary[];
   selectedId: string | null;
@@ -332,7 +339,10 @@ export function PersonalityLibraryDialog(props: PersonalityLibraryDialogProps) {
 
   function loadLibrary(postSave: boolean = false): Promise<void> {
     const currentId = selectedId();
-    const preferredId = untrack(() => props.preferredId);
+    const preferredId = preferredPersonalityIdForReload(
+      postSave,
+      untrack(() => props.preferredId),
+    );
     detailRequests.invalidate();
     setDetail(null);
     setListError(null);
@@ -422,6 +432,7 @@ export function PersonalityLibraryDialog(props: PersonalityLibraryDialogProps) {
       describedBy={subtitleId}
       panelStyle={{
         height: 'min(720px, calc(100vh - 64px))',
+        'max-height': 'calc(100vh - 64px)',
         overflow: 'hidden',
         padding: '0',
         gap: '0',

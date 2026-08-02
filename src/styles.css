@@ -2554,7 +2554,7 @@ body.dragging-task * {
   min-width: 0;
   max-width: 720px;
   color: var(--fg);
-  font-size: 18px;
+  font-size: 16px;
   font-weight: 400;
   line-height: 1.7;
   overflow-wrap: anywhere;
@@ -2798,7 +2798,7 @@ body.dragging-task * {
   align-items: center;
   justify-content: center;
   background: var(--swatch-color);
-  color: #101014;
+  color: var(--fg);
   cursor: pointer;
 }
 

@@ -158,6 +158,7 @@ describe('RED: create editor contract', () => {
 
   it('renders the fixed create shell, linked validation, swatch state, and busy lock hooks', () => {
     const source = readFileSync(new URL('./PersonalityEditorDialog.tsx', import.meta.url), 'utf8');
+    const styles = readFileSync(new URL('../styles.css', import.meta.url), 'utf8');
 
     expect(source).toContain('Create a reusable personality available in every project.');
     expect(source).toContain('Shown in the library and future task panes.');
@@ -171,5 +172,8 @@ describe('RED: create editor contract', () => {
     expect(source).toContain('role="alert"');
     expect(source).toContain('personality-editor-body');
     expect(source).toContain('personality-editor-footer');
+    expect(source).toContain("'max-height': 'calc(100vh - 64px)'");
+    expect(styles).toMatch(/\.personality-editor-swatch[\s\S]*?color: var\(--fg\);/);
+    expect(styles).toMatch(/\.personality-markdown \{[\s\S]*?font-size: 16px;/);
   });
 });

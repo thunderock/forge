@@ -10,6 +10,7 @@ import {
   PersonalityOption,
   createAsyncRequestRunner,
   nextPersonalityIndex,
+  preferredPersonalityIdForReload,
   selectPreferredPersonality,
 } from './PersonalityLibraryDialog';
 
@@ -303,6 +304,8 @@ describe('RED: create editor contract', () => {
     expect(selectPreferredPersonality([principal, quality], 'missing', quality.id)).toEqual(
       quality,
     );
+    expect(preferredPersonalityIdForReload(true, saved.id)).toBe(saved.id);
+    expect(preferredPersonalityIdForReload(false, saved.id)).toBeNull();
   });
 
   it('creates and selects a custom personality end to end', async () => {

@@ -188,9 +188,13 @@ export function PersonalityEditorDialog(props: PersonalityEditorDialogProps) {
   const errors = createMemo(() => validatePersonalityDraft(draft()));
   const markdownBytes = createMemo(() => personalityMarkdownBytes(markdown()));
   const isValid = createMemo(() => Object.keys(errors()).length === 0);
+  const activeSwatchColor = createMemo(
+    () => normalizePersonalityColor(color()) ?? previewIdentity().color,
+  );
   const selectedSwatchIndex = createMemo(() => {
-    const normalized = normalizePersonalityColor(color());
-    const index = PERSONALITY_COLOR_OPTIONS.findIndex((option) => option.value === normalized);
+    const index = PERSONALITY_COLOR_OPTIONS.findIndex(
+      (option) => option.value === activeSwatchColor(),
+    );
     return index >= 0 ? index : 0;
   });
   const badgePreview = createMemo(() => ({
@@ -316,6 +320,7 @@ export function PersonalityEditorDialog(props: PersonalityEditorDialogProps) {
       describedBy={subtitleId}
       panelStyle={{
         height: 'min(720px, calc(100vh - 64px))',
+        'max-height': 'calc(100vh - 64px)',
         overflow: 'hidden',
         padding: '0',
         gap: '0',
@@ -415,8 +420,7 @@ export function PersonalityEditorDialog(props: PersonalityEditorDialogProps) {
                     <div class="personality-editor-swatches">
                       <For each={PERSONALITY_COLOR_OPTIONS}>
                         {(option, index) => {
-                          const selected = () =>
-                            normalizePersonalityColor(color()) === option.value;
+                          const selected = () => activeSwatchColor() === option.value;
                           return (
                             <button
                               ref={(element) => {
