@@ -585,7 +585,7 @@ describe('RED: markdown preview contract', () => {
 
     expect(source).toContain('createHighlightedMarkdownState');
     expect(source).toMatch(
-      /createHighlightedMarkdownState\(\(\) =>\s*\(previewing\(\) \? markdown\(\) : undefined\)\s*\)/,
+      /createHighlightedMarkdownState\(\(\) =>[\s\S]{0,80}previewing\(\) \? markdown\(\) : undefined/,
     );
     expect(source.match(/\binnerHTML=/g)).toHaveLength(1);
     expect(source).toMatch(/innerHTML=\{markdownPreview\.html\(\)\}/);

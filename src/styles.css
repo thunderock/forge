@@ -2269,7 +2269,7 @@ body.dragging-task * {
 .personality-library-state-copy h3 {
   margin: 0;
   color: var(--fg);
-  font-size: 17px;
+  font-size: 20px;
   font-weight: 600;
   line-height: 1.2;
 }
@@ -2721,7 +2721,8 @@ body.dragging-task * {
   gap: 8px;
 }
 
-.personality-editor-section > h3 {
+.personality-editor-section > h3,
+.personality-editor-instructions-header h3 {
   margin: 0;
   color: var(--fg-muted);
   font-size: 12px;
@@ -2729,6 +2730,50 @@ body.dragging-task * {
   line-height: 1.4;
   letter-spacing: 0.05em;
   text-transform: uppercase;
+}
+
+.personality-editor-instructions-header {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.personality-editor-tabs {
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  background: var(--bg-input);
+}
+
+.personality-editor-tab {
+  min-height: 28px;
+  padding: 4px 12px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg-muted);
+  font-family: var(--font-ui);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.personality-editor-tab:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+
+.personality-editor-tab.is-active {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  background: color-mix(in srgb, var(--accent) 12%, var(--island-bg));
+  color: var(--accent);
 }
 
 .personality-editor-fieldset {
@@ -2797,7 +2842,9 @@ body.dragging-task * {
 .personality-editor-field input:focus-visible,
 .personality-editor-color-input:focus-visible,
 .personality-editor-markdown:focus-visible,
+.personality-editor-preview:focus-visible,
 .personality-editor-swatch:focus-visible,
+.personality-editor-tab:focus-visible,
 .personality-editor-close:focus-visible,
 .personality-editor-actions button:focus-visible {
   outline: 2px solid var(--border-focus);
@@ -2912,6 +2959,42 @@ body.dragging-task * {
   font-family: var(--font-mono);
 }
 
+.personality-editor-edit-panel {
+  min-width: 0;
+}
+
+.personality-editor-preview {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  min-height: 320px;
+  padding: 24px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--island-bg);
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.personality-editor-preview .personality-markdown {
+  max-width: none;
+}
+
+.personality-editor-preview-empty,
+.personality-editor-preview-status {
+  min-height: 270px;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--fg-muted);
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 1.5;
+  text-align: center;
+}
+
 .personality-editor-byte-count {
   align-self: flex-end;
   text-align: right;
@@ -3007,8 +3090,14 @@ body.dragging-task * {
 }
 
 @media (max-height: 639px) {
-  .personality-editor-markdown {
+  .personality-editor-markdown,
+  .personality-editor-preview {
     min-height: 240px;
+  }
+
+  .personality-editor-preview-empty,
+  .personality-editor-preview-status {
+    min-height: 190px;
   }
 }
 

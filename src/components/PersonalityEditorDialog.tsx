@@ -15,6 +15,7 @@ import type {
   PersonalityDetail,
   PersonalityWriteFields,
 } from '../ipc/types';
+import { createHighlightedMarkdownState } from '../lib/marked-shiki';
 import type { ModelSelection } from '../store/types';
 import { createPersonality, readPersonality, store, updatePersonality } from '../store/store';
 import { AgentSelector } from './AgentSelector';
@@ -125,6 +126,14 @@ export function nextPersonalityColorIndex(
   if (key === 'ArrowLeft' || key === 'ArrowUp') return (current - 1 + count) % count;
   if (key === 'Home') return 0;
   if (key === 'End') return count - 1;
+  return null;
+}
+
+export function nextPersonalityMarkdownTabIndex(key: string, current: number): number | null {
+  if (key === 'ArrowRight') return (current + 1) % 2;
+  if (key === 'ArrowLeft') return (current - 1 + 2) % 2;
+  if (key === 'Home') return 0;
+  if (key === 'End') return 1;
   return null;
 }
 
@@ -305,11 +314,17 @@ export function PersonalityEditorDialog(props: PersonalityEditorDialogProps) {
   const markdownErrorId = createUniqueId();
   const bindingHelpId = createUniqueId();
   const noBindingHelpId = createUniqueId();
+  const instructionsId = createUniqueId();
+  const markdownEditTabId = createUniqueId();
+  const markdownPreviewTabId = createUniqueId();
+  const markdownEditPanelId = createUniqueId();
+  const markdownPreviewPanelId = createUniqueId();
 
   const [name, setName] = createSignal('');
   const [badge, setBadge] = createSignal('');
   const [color, setColor] = createSignal('#FF6A2C');
   const [markdown, setMarkdown] = createSignal('');
+  const [previewing, setPreviewing] = createSignal(false);
   const [bindingAgentId, setBindingAgentId] = createSignal<PersonalityDefaultAgent | null>(null);
   const [modelSelection, setModelSelection] = createSignal<ModelSelection>({});
   const [previewIdentity, setPreviewIdentity] = createSignal<PersonalityPreviewIdentity>({
@@ -328,6 +343,11 @@ export function PersonalityEditorDialog(props: PersonalityEditorDialogProps) {
 
   let nameRef: HTMLInputElement | undefined;
   const swatchRefs: HTMLButtonElement[] = [];
+  const markdownTabRefs: HTMLButtonElement[] = [];
+
+  const markdownPreview = createHighlightedMarkdownState(() =>
+    previewing() ? markdown() : undefined,
+  );
 
   const draft = createMemo<PersonalityDraft>(() => ({
     name: name(),
@@ -447,6 +467,19 @@ export function PersonalityEditorDialog(props: PersonalityEditorDialogProps) {
     clearMutationError();
   }
 
+  function selectMarkdownTab(index: number, focus: boolean = false): void {
+    setPreviewing(index === 1);
+    if (focus) queueMicrotask(() => markdownTabRefs[index]?.focus());
+  }
+
+  function handleMarkdownTabKeyDown(event: KeyboardEvent, current: number): void {
+    const next = nextPersonalityMarkdownTabIndex(event.key, current);
+    if (next === null) return;
+    event.preventDefault();
+    event.stopPropagation();
+    selectMarkdownTab(next, true);
+  }
+
   function focusName(selectAll: boolean = false): void {
     queueMicrotask(() => {
       if (!nameRef) return;
@@ -474,6 +507,7 @@ export function PersonalityEditorDialog(props: PersonalityEditorDialogProps) {
     setBadge('');
     setColor('#FF6A2C');
     setMarkdown('');
+    setPreviewing(false);
     setBindingAgentId(null);
     setModelSelection({});
     setPreviewIdentity({ badge: '', color: '#FF6A2C' });
@@ -492,6 +526,7 @@ export function PersonalityEditorDialog(props: PersonalityEditorDialogProps) {
     setBadge(fields.badge);
     setColor(fields.color);
     setMarkdown(fields.markdown);
+    setPreviewing(false);
     setBindingAgentId(fields.defaultAgent ?? null);
     setModelSelection({
       model: fields.defaultModel,
@@ -508,6 +543,7 @@ export function PersonalityEditorDialog(props: PersonalityEditorDialogProps) {
   function close(): void {
     if (saving()) return;
     draftLoader.invalidate();
+    setPreviewing(false);
     props.onClose();
   }
 
@@ -536,6 +572,7 @@ export function PersonalityEditorDialog(props: PersonalityEditorDialogProps) {
     onLoading: (id) => {
       setMode('edit');
       setSourceId(id);
+      setPreviewing(false);
       setDraftReady(false);
       setLoading(true);
       setLoadError(false);
@@ -597,6 +634,7 @@ export function PersonalityEditorDialog(props: PersonalityEditorDialogProps) {
       ([open, editId]) => {
         if (!open) {
           draftLoader.invalidate();
+          setPreviewing(false);
           setDraftReady(false);
           setLoading(false);
           setLoadError(false);
@@ -806,34 +844,125 @@ export function PersonalityEditorDialog(props: PersonalityEditorDialogProps) {
                 </fieldset>
               </section>
 
-              <section
-                class="personality-editor-section"
-                aria-labelledby={`${titleId}-instructions`}
-              >
-                <h3 id={`${titleId}-instructions`}>Instructions</h3>
-                <fieldset class="personality-editor-fieldset" disabled={saving()}>
-                  <div class="personality-editor-field">
-                    <label class="visually-hidden" for={`${titleId}-markdown`}>
-                      Markdown instructions
-                    </label>
-                    <textarea
-                      id={`${titleId}-markdown`}
-                      class="personality-editor-markdown"
-                      value={markdown()}
-                      placeholder="Describe the role, focus, approach, and anti-patterns in Markdown…"
-                      spellcheck={false}
-                      aria-describedby={
-                        markdownError()
-                          ? `${markdownCounterId} ${markdownErrorId}`
-                          : markdownCounterId
-                      }
-                      aria-invalid={markdownError() ? 'true' : undefined}
-                      onInput={(event) => {
-                        setMarkdown(event.currentTarget.value);
-                        clearMutationError();
+              <section class="personality-editor-section" aria-labelledby={instructionsId}>
+                <div class="personality-editor-instructions-header">
+                  <h3 id={instructionsId}>Instructions</h3>
+                  <div
+                    class="personality-editor-tabs"
+                    role="tablist"
+                    aria-label="Instructions view"
+                  >
+                    <button
+                      ref={(element) => {
+                        markdownTabRefs[0] = element;
                       }}
-                      onBlur={() => markTouched('markdown')}
-                    />
+                      id={markdownEditTabId}
+                      type="button"
+                      role="tab"
+                      class={`personality-editor-tab${previewing() ? '' : ' is-active'}`}
+                      aria-selected={!previewing()}
+                      aria-controls={markdownEditPanelId}
+                      tabIndex={previewing() ? -1 : 0}
+                      disabled={saving()}
+                      onClick={() => selectMarkdownTab(0)}
+                      onKeyDown={(event) => handleMarkdownTabKeyDown(event, 0)}
+                    >
+                      Edit
+                    </button>
+                    <button
+                      ref={(element) => {
+                        markdownTabRefs[1] = element;
+                      }}
+                      id={markdownPreviewTabId}
+                      type="button"
+                      role="tab"
+                      class={`personality-editor-tab${previewing() ? ' is-active' : ''}`}
+                      aria-selected={previewing()}
+                      aria-controls={markdownPreviewPanelId}
+                      tabIndex={previewing() ? 0 : -1}
+                      disabled={saving()}
+                      onClick={() => selectMarkdownTab(1)}
+                      onKeyDown={(event) => handleMarkdownTabKeyDown(event, 1)}
+                    >
+                      Preview
+                    </button>
+                  </div>
+                </div>
+                <fieldset
+                  class="personality-editor-fieldset personality-editor-instructions-fieldset"
+                  disabled={saving()}
+                >
+                  <div class="personality-editor-field">
+                    <Show
+                      when={previewing()}
+                      fallback={
+                        <div
+                          id={markdownEditPanelId}
+                          class="personality-editor-edit-panel"
+                          role="tabpanel"
+                          aria-labelledby={markdownEditTabId}
+                        >
+                          <label class="visually-hidden" for={`${titleId}-markdown`}>
+                            Markdown instructions
+                          </label>
+                          <textarea
+                            id={`${titleId}-markdown`}
+                            class="personality-editor-markdown"
+                            value={markdown()}
+                            placeholder="Describe the role, focus, approach, and anti-patterns in Markdown…"
+                            spellcheck={false}
+                            aria-describedby={
+                              markdownError()
+                                ? `${markdownCounterId} ${markdownErrorId}`
+                                : markdownCounterId
+                            }
+                            aria-invalid={markdownError() ? 'true' : undefined}
+                            onInput={(event) => {
+                              setMarkdown(event.currentTarget.value);
+                              clearMutationError();
+                            }}
+                            onBlur={() => markTouched('markdown')}
+                          />
+                        </div>
+                      }
+                    >
+                      <div
+                        id={markdownPreviewPanelId}
+                        class="personality-editor-preview"
+                        role="tabpanel"
+                        aria-labelledby={markdownPreviewTabId}
+                        tabIndex={0}
+                      >
+                        <Show
+                          when={markdown().trim().length > 0}
+                          fallback={
+                            <p class="personality-editor-preview-empty">
+                              Add Markdown instructions to preview them.
+                            </p>
+                          }
+                        >
+                          <Show
+                            when={markdownPreview.loading()}
+                            fallback={
+                              <div
+                                class="plan-markdown plan-markdown-dialog personality-markdown"
+                                // eslint-disable-next-line solid/no-innerhtml -- preview state exposes sanitized highlighted and fallback HTML
+                                innerHTML={markdownPreview.html()}
+                              />
+                            }
+                          >
+                            <div
+                              class="personality-editor-preview-status"
+                              role="status"
+                              aria-live="polite"
+                            >
+                              <span class="inline-spinner" aria-hidden="true" />
+                              <span>Rendering preview…</span>
+                            </div>
+                          </Show>
+                        </Show>
+                      </div>
+                    </Show>
                     <Show when={markdownError()}>
                       {(error) => (
                         <p id={markdownErrorId} class="personality-editor-error">
