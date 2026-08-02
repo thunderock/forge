@@ -3,7 +3,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { isMap, isScalar, parseDocument } from 'yaml';
 import { atomicWriteFileSync } from '../mcp/atomic.js';
-import type { PersonalityDetail, PersonalitySummary } from './shared-types.js';
+import type {
+  PersonalityDetail,
+  PersonalitySummary,
+  PersonalityWriteFields,
+} from './shared-types.js';
 
 export type PersonalityParseMode = 'seed' | 'library';
 
@@ -531,6 +535,13 @@ export function readPersonality(
   } catch (error: unknown) {
     return invalidCatalogRead(id, errorDetail(error), warn);
   }
+}
+
+export function createPersonality(
+  _libraryDir: string,
+  _fields: PersonalityWriteFields,
+): PersonalityDetail {
+  throw new PersonalityParseError('Personality creation is not implemented');
 }
 
 export function resolvePersonalitySeedDir(options: ResolvePersonalitySeedDirOptions): string {

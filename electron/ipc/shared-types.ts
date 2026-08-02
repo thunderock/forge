@@ -50,6 +50,13 @@ export interface PersonalityDetail extends PersonalitySummary {
   markdown: string;
 }
 
+export interface PersonalityWriteFields {
+  name: string;
+  badge: string;
+  color: string;
+  markdown: string;
+}
+
 export interface CreateTaskResult {
   id: string;
   branch_name: string;

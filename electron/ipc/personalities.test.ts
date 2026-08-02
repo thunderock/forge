@@ -8,6 +8,7 @@ import {
   MAX_PERSONALITY_FILE_BYTES,
   PersonalityParseError,
   computeInstalledPersonalityPayloadHash,
+  createPersonality,
   isPersonalityId,
   listPersonalities,
   materializePersonalitySeed,
@@ -16,6 +17,7 @@ import {
   seedBuiltInPersonalities,
   type ParsePersonalityMarkdownOptions,
 } from './personalities.js';
+import type { PersonalityWriteFields } from './shared-types.js';
 
 const BOM = '\uFEFF';
 const VALID_HASH = 'a'.repeat(64);
@@ -237,6 +239,21 @@ function guardReadPaths(blockedPaths: readonly string[]) {
 
 function makeFifo(filePath: string): boolean {
   return spawnSync('mkfifo', [filePath], { stdio: 'ignore' }).status === 0;
+}
+
+function writeFields(overrides: Partial<PersonalityWriteFields> = {}): PersonalityWriteFields {
+  return {
+    name: 'Local Builder',
+    badge: 'LB',
+    color: '#ABC',
+    markdown: 'You are a local builder.',
+    ...overrides,
+  };
+}
+
+function utf8Payload(byteLength: number): string {
+  const pairs = Math.floor(byteLength / 2);
+  return `${'é'.repeat(pairs)}${byteLength % 2 === 0 ? '' : 'x'}`;
 }
 
 describe('D-06 seed parse mode personality document contract', () => {
@@ -1274,3 +1291,176 @@ describe('D-07/D-15/D-16 bounded personality catalog reads', () => {
     },
   );
 });
+
+describe('RED: create persistence contract', () => {
+  let temporaryRoot: string;
+  let libraryDir: string;
+
+  beforeEach(() => {
+    temporaryRoot = fs.mkdtempSync(join(os.tmpdir(), 'personality-create-'));
+    libraryDir = join(temporaryRoot, 'library');
+    fs.mkdirSync(libraryDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    try {
+      fs.chmodSync(libraryDir, 0o700);
+    } catch {
+      // The fixture may intentionally replace or remove the library directory.
+    }
+    fs.rmSync(temporaryRoot, { recursive: true, force: true });
+  });
+
+  it('normalizes the name and suffixes around occupied files without overwriting them', () => {
+    const basePath = join(libraryDir, 'principal-platform-1.md');
+    const secondPath = join(libraryDir, 'principal-platform-1-2.md');
+    fs.writeFileSync(basePath, 'occupied base', 'utf8');
+    fs.writeFileSync(secondPath, 'occupied suffix', 'utf8');
+
+    const detail = createPersonality(
+      libraryDir,
+      writeFields({ name: 'Principal: Platform #1', badge: 'pp', color: '#a1b2c3' }),
+    );
+
+    expect(detail).toMatchObject({
+      id: 'principal-platform-1-3',
+      name: 'Principal: Platform #1',
+      badge: 'PP',
+      color: '#A1B2C3',
+      builtin: false,
+    });
+    expect(readFileSync(basePath, 'utf8')).toBe('occupied base');
+    expect(readFileSync(secondPath, 'utf8')).toBe('occupied suffix');
+  });
+
+  it('falls back for punctuation and Unicode names and truncates before collision suffixes', () => {
+    expect(createPersonality(libraryDir, writeFields({ name: '!!!' })).id).toBe('personality');
+    expect(createPersonality(libraryDir, writeFields({ name: '你好' })).id).toBe('personality-2');
+
+    const longestBase = 'a'.repeat(64);
+    expect(createPersonality(libraryDir, writeFields({ name: longestBase })).id).toBe(longestBase);
+    const suffixed = createPersonality(libraryDir, writeFields({ name: longestBase })).id;
+    expect(suffixed).toBe(`${'a'.repeat(62)}-2`);
+    expect(suffixed).toHaveLength(64);
+  });
+
+  it('treats every existing candidate type as occupied without reading it', () => {
+    const malformedPath = join(libraryDir, 'malformed.md');
+    const symlinkPath = join(libraryDir, 'linked.md');
+    const directoryPath = join(libraryDir, 'folder.md');
+    const fifoPath = join(libraryDir, 'pipe.md');
+    const symlinkTarget = join(temporaryRoot, 'outside.md');
+    fs.writeFileSync(malformedPath, '---\nid: [broken', 'utf8');
+    fs.writeFileSync(symlinkTarget, 'outside bytes', 'utf8');
+    fs.symlinkSync(symlinkTarget, symlinkPath);
+    fs.mkdirSync(directoryPath);
+    if (!makeFifo(fifoPath)) return;
+    const readSpy = guardReadPaths([malformedPath, symlinkPath, directoryPath, fifoPath]);
+
+    expect(createPersonality(libraryDir, writeFields({ name: 'Malformed' })).id).toBe(
+      'malformed-2',
+    );
+    expect(createPersonality(libraryDir, writeFields({ name: 'Linked' })).id).toBe('linked-2');
+    expect(createPersonality(libraryDir, writeFields({ name: 'Folder' })).id).toBe('folder-2');
+    expect(createPersonality(libraryDir, writeFields({ name: 'Pipe' })).id).toBe('pipe-2');
+    expect(
+      readSpy.mock.calls.some(([candidatePath]) =>
+        [malformedPath, symlinkPath, directoryPath, fifoPath].includes(String(candidatePath)),
+      ),
+    ).toBe(false);
+  });
+
+  it('writes strict canonical custom metadata with a double-quoted color and exact Markdown', () => {
+    const markdown = 'You are **careful**.\n\n## Approach\n\n- Preserve bytes';
+    const detail = createPersonality(
+      libraryDir,
+      writeFields({ name: '  Careful Builder  ', badge: ' cb ', color: ' #aBc ', markdown }),
+    );
+    const raw = readFileSync(join(libraryDir, `${detail.id}.md`), 'utf8');
+    const parsed = parsePersonalityMarkdown(raw, {
+      mode: 'library',
+      expectedId: 'careful-builder',
+    });
+
+    expect(detail).toEqual({
+      id: 'careful-builder',
+      name: 'Careful Builder',
+      badge: 'CB',
+      color: '#ABC',
+      builtin: false,
+      markdown,
+    });
+    expect(parsed).toEqual({ metadata: detailWithoutMarkdown(detail), markdown });
+    expect(raw).toContain('color: "#ABC"');
+    expect(raw).toContain('builtin: false');
+    expect(raw).not.toMatch(/seedRevision|pristineHash/);
+  });
+
+  it('keeps YAML-looking names as one scalar instead of injecting metadata', () => {
+    const name = 'Builder: #1\nbuiltin: true\nid: hijacked';
+    const detail = createPersonality(libraryDir, writeFields({ name }));
+    const raw = readFileSync(join(libraryDir, `${detail.id}.md`), 'utf8');
+    const parsed = parsePersonalityMarkdown(raw, {
+      mode: 'library',
+      expectedId: detail.id,
+    });
+
+    expect(parsed.metadata.name).toBe(name);
+    expect(parsed.metadata.builtin).toBe(false);
+    expect(parsed.metadata.id).toBe(detail.id);
+    expect(raw).not.toContain('\nbuiltin: true\n');
+    expect(raw).not.toContain('\nid: hijacked\n');
+  });
+
+  it('enforces the complete UTF-8 document boundary before writing', () => {
+    const fields = writeFields({ name: 'Byte Boundary', markdown: 'x' });
+    const probe = createPersonality(libraryDir, fields);
+    const targetPath = join(libraryDir, `${probe.id}.md`);
+    const overhead = Buffer.byteLength(readFileSync(targetPath, 'utf8'), 'utf8') - 1;
+    fs.unlinkSync(targetPath);
+
+    const boundaryMarkdown = utf8Payload(MAX_PERSONALITY_FILE_BYTES - overhead);
+    const boundary = createPersonality(libraryDir, { ...fields, markdown: boundaryMarkdown });
+    expect(fs.statSync(join(libraryDir, `${boundary.id}.md`)).size).toBe(
+      MAX_PERSONALITY_FILE_BYTES,
+    );
+    expect(boundary.markdown).toBe(boundaryMarkdown);
+    fs.unlinkSync(join(libraryDir, `${boundary.id}.md`));
+
+    expect(() =>
+      createPersonality(libraryDir, { ...fields, markdown: `${boundaryMarkdown}x` }),
+    ).toThrow(/2 MiB|2097152|too large|exceeds/i);
+    expect(fs.existsSync(targetPath)).toBe(false);
+    expect(readdirSync(libraryDir).some((name) => name.startsWith('.forge-atomic-'))).toBe(false);
+  });
+
+  it('preserves occupied state and removes temporary files when the atomic write fails', () => {
+    if (process.getuid?.() === 0) return;
+    const occupiedPath = join(libraryDir, 'stable-target.md');
+    const attemptedPath = join(libraryDir, 'stable-target-2.md');
+    fs.writeFileSync(occupiedPath, 'stable bytes', 'utf8');
+    fs.chmodSync(libraryDir, 0o500);
+
+    let thrown: unknown;
+    try {
+      createPersonality(libraryDir, writeFields({ name: 'Stable Target' }));
+    } catch (error: unknown) {
+      thrown = error;
+    }
+
+    fs.chmodSync(libraryDir, 0o700);
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).not.toMatch(/not implemented/i);
+    expect(readFileSync(occupiedPath, 'utf8')).toBe('stable bytes');
+    expect(fs.existsSync(attemptedPath)).toBe(false);
+    expect(readdirSync(libraryDir).some((name) => name.startsWith('.forge-atomic-'))).toBe(false);
+  });
+});
+
+function detailWithoutMarkdown({
+  markdown: _markdown,
+  ...summary
+}: ReturnType<typeof createPersonality>) {
+  return summary;
+}

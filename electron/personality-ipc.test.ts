@@ -15,6 +15,15 @@ const FORBIDDEN_CONTRACT_FIELDS = [
   'seedRevision',
   'pristineHash',
 ] as const;
+const FORBIDDEN_WRITE_FIELDS = [
+  'id',
+  'builtin',
+  'seedRevision',
+  'pristineHash',
+  'filename',
+  'path',
+  'rawYaml',
+] as const;
 
 function interfaceDeclaration(source: string, name: string): string {
   const match = new RegExp(
@@ -107,5 +116,21 @@ describe('personality IPC contract', () => {
       if (field === 'path') continue;
       expect(readHandler).not.toMatch(new RegExp(`args\\?*\\.${field}\\b`));
     }
+  });
+});
+
+describe('RED: create persistence contract', () => {
+  it('owns the exact structured write DTO in shared types and the create seam in the domain', () => {
+    const sharedTypes = readFileSync(SHARED_TYPES_PATH, 'utf8');
+    const personalities = readFileSync(PERSONALITIES_PATH, 'utf8');
+    const writeFields = interfaceDeclaration(sharedTypes, 'PersonalityWriteFields');
+
+    expect(declaredKeys(writeFields)).toEqual(['name', 'badge', 'color', 'markdown']);
+    for (const field of FORBIDDEN_WRITE_FIELDS) {
+      expect(writeFields).not.toMatch(new RegExp(`\\b${field}\\b`));
+    }
+    expect(personalities).toMatch(
+      /export function createPersonality\(\s*_?libraryDir: string,\s*_?fields: PersonalityWriteFields,?\s*\): PersonalityDetail/,
+    );
   });
 });
