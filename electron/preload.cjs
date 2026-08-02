@@ -55,6 +55,7 @@ const ALLOWED_CHANNELS = new Set([
   'read_personality',
   'create_personality',
   'update_personality',
+  'reset_personality',
   'load_keybindings',
   'save_keybindings',
   '__window_is_focused',

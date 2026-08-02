@@ -11,7 +11,11 @@ import { stopAllPlanWatchers } from './ipc/plans.js';
 import { stopAllStepsWatchers } from './ipc/steps.js';
 import { IPC } from './ipc/channels.js';
 import { getStateDir } from './ipc/persistence.js';
-import { resolvePersonalitySeedDir, seedBuiltInPersonalities } from './ipc/personalities.js';
+import {
+  resolvePersonalitySeedDir,
+  seedBuiltInPersonalities,
+  type PersonalityPaths,
+} from './ipc/personalities.js';
 import { resolveUserShell } from './user-shell.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -124,7 +128,7 @@ function getIconPath(): string | undefined {
   return path.join(__dirname, '..', 'build', 'icon.png');
 }
 
-function createWindow() {
+function createWindow(personalityPaths: PersonalityPaths) {
   mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
@@ -144,7 +148,7 @@ function createWindow() {
   // debug traces (which would triple log volume in dev/verbose).
   registerLogHandler(ipcMain);
   installIpcTracing(ipcMain);
-  registerAllHandlers(mainWindow);
+  registerAllHandlers(mainWindow, personalityPaths);
 
   // Open links in external browser instead of inside Electron
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
@@ -213,22 +217,24 @@ app.whenReady().then(() => {
     },
   );
 
+  const personalityPaths: PersonalityPaths = {
+    libraryDir: path.join(getStateDir(), 'personalities'),
+    seedDir: resolvePersonalitySeedDir({
+      isPackaged: app.isPackaged,
+      resourcesPath: process.resourcesPath,
+      mainModuleDir: __dirname,
+    }),
+  };
+
   try {
-    const personalitySeedReport = seedBuiltInPersonalities({
-      seedDir: resolvePersonalitySeedDir({
-        isPackaged: app.isPackaged,
-        resourcesPath: process.resourcesPath,
-        mainModuleDir: __dirname,
-      }),
-      libraryDir: path.join(getStateDir(), 'personalities'),
-    });
+    const personalitySeedReport = seedBuiltInPersonalities(personalityPaths);
     // eslint-disable-next-line no-console -- Emit one startup report for support diagnostics.
     console.info('[personalities] Seed reconciliation:', personalitySeedReport);
   } catch (error: unknown) {
     console.warn('[personalities] Seed reconciliation failed:', error);
   }
 
-  createWindow();
+  createWindow(personalityPaths);
 });
 
 app.on('before-quit', () => {

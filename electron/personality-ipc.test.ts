@@ -62,6 +62,8 @@ describe('personality IPC contract', () => {
     expect(channels.ListPersonalities).toBe('list_personalities');
     expect(channels.ReadPersonality).toBe('read_personality');
     expect(channels.CreatePersonality).toBe('create_personality');
+    expect(channels.UpdatePersonality).toBe('update_personality');
+    expect(channels.ResetPersonality).toBe('reset_personality');
   });
 
   it('exposes only the narrow summary and detail DTO fields through type-only renderer exports', () => {
@@ -102,14 +104,11 @@ describe('personality IPC contract', () => {
     );
   });
 
-  it('derives the global library in main and registers an argument-free list handler', () => {
+  it('uses the injected global library and registers an argument-free list handler', () => {
     const register = readFileSync(REGISTER_PATH, 'utf8');
     const listHandler = handlerSource(register, 'ListPersonalities');
 
-    expect(register.includes("path.join(getStateDir(), 'personalities')")).toBe(true);
-    expect(
-      /import \{[^}]*getStateDir[^}]*\} from ['"]\.\/persistence\.js['"]/s.test(register),
-    ).toBe(true);
+    expect(register.includes("path.join(getStateDir(), 'personalities')")).toBe(false);
     expect(
       /import \{[^}]*listPersonalities[^}]*readPersonality[^}]*\} from ['"]\.\/personalities\.js['"]/s.test(
         register,
@@ -118,6 +117,7 @@ describe('personality IPC contract', () => {
     expect(listHandler).toMatch(
       /ipcMain\.handle\(IPC\.ListPersonalities,\s*\(\)\s*=>\s*listPersonalities\(/,
     );
+    expect(listHandler).toContain('personalityPaths.libraryDir');
     for (const field of FORBIDDEN_CONTRACT_FIELDS) {
       expect(listHandler).not.toMatch(new RegExp(`args\\?*\\.${field}\\b`));
     }
@@ -148,7 +148,7 @@ describe('personality IPC contract', () => {
     expect(register).toMatch(/event\.senderFrame !== win\.webContents\.mainFrame/);
     expect(createHandler).toContain('assertTrustedPersonalitySender(event, win)');
     expect(createHandler).toContain('validatePersonalityWriteFields(args)');
-    expect(createHandler).toMatch(/createPersonality\(personalityLibraryDir, fields\)/);
+    expect(createHandler).toMatch(/createPersonality\(personalityPaths\.libraryDir, fields\)/);
     for (const field of FORBIDDEN_WRITE_FIELDS) {
       expect(createHandler).not.toMatch(new RegExp(`args\\?*\\.${field}\\b`));
     }
@@ -293,7 +293,7 @@ describe('RED: stable update contract', () => {
     expect(updateHandler).toMatch(/if \(!isPersonalityId\(args\.id\)\)/);
     expect(updateHandler).toMatch(/const \{ id, \.\.\.writeArgs \} = args/);
     expect(updateHandler).toContain('validatePersonalityWriteFields(writeArgs)');
-    expect(updateHandler).toMatch(/updatePersonality\(personalityLibraryDir, id, fields\)/);
+    expect(updateHandler).toMatch(/updatePersonality\(personalityPaths\.libraryDir, id, fields\)/);
     for (const field of FORBIDDEN_WRITE_FIELDS) {
       if (field === 'id') continue;
       expect(updateHandler).not.toMatch(new RegExp(`args\\?*\\.${field}\\b`));

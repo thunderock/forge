@@ -96,14 +96,15 @@ import {
   loadCustomThemeFiles,
   saveCustomThemeFile,
   deleteCustomThemeFile,
-  getStateDir,
 } from './persistence.js';
 import {
   createPersonality,
   isPersonalityId,
   listPersonalities,
   readPersonality,
+  resetPersonality,
   updatePersonality,
+  type PersonalityPaths,
 } from './personalities.js';
 import type { PersonalityDefaultAgent, PersonalityWriteFields } from './shared-types.js';
 import { loadKeybindings, saveKeybindings } from './keybindings.js';
@@ -498,11 +499,10 @@ function createThrottledForwarder(
  * creates `info/` if missing. Best-effort: never throws, since failing to
  * git-exclude a generated file must not block coordinator startup.
  */
-export function registerAllHandlers(win: BrowserWindow): void {
+export function registerAllHandlers(win: BrowserWindow, personalityPaths: PersonalityPaths): void {
   // --- Remote access state ---
   let remoteServer: Awaited<ReturnType<typeof startRemoteServer>> | null = null;
   const taskNames = new Map<string, string>();
-  const personalityLibraryDir = path.join(getStateDir(), 'personalities');
   // Renderer-derived per-task attention (needs input, working, ready, …), pushed
   // from the renderer via Remote_UpdateTaskStatus so the mobile overview can show
   // the same richer status as the desktop. The renderer owns this computation
@@ -846,7 +846,7 @@ export function registerAllHandlers(win: BrowserWindow): void {
     deleteCustomThemeFile(args.id);
   });
   ipcMain.handle(IPC.ListPersonalities, () =>
-    listPersonalities(personalityLibraryDir, (message) => logWarn('personalities', message)),
+    listPersonalities(personalityPaths.libraryDir, (message) => logWarn('personalities', message)),
   );
   ipcMain.handle(IPC.ReadPersonality, (_e, args) => {
     assertString(args?.id, 'id');
@@ -854,14 +854,14 @@ export function registerAllHandlers(win: BrowserWindow): void {
       throw new Error('Invalid personality request');
     }
     if (!isPersonalityId(args.id)) throw new Error('Invalid personality id');
-    return readPersonality(personalityLibraryDir, args.id, (message) =>
+    return readPersonality(personalityPaths.libraryDir, args.id, (message) =>
       logWarn('personalities', message),
     );
   });
   ipcMain.handle(IPC.CreatePersonality, (event, args: unknown) => {
     assertTrustedPersonalitySender(event, win);
     const fields = validatePersonalityWriteFields(args);
-    return createPersonality(personalityLibraryDir, fields);
+    return createPersonality(personalityPaths.libraryDir, fields);
   });
   ipcMain.handle(IPC.UpdatePersonality, (event, args: IpcArgs) => {
     assertTrustedPersonalitySender(event, win);
@@ -869,7 +869,16 @@ export function registerAllHandlers(win: BrowserWindow): void {
     if (!isPersonalityId(args.id)) throw new Error('Invalid personality id');
     const { id, ...writeArgs } = args;
     const fields = validatePersonalityWriteFields(writeArgs);
-    return updatePersonality(personalityLibraryDir, id, fields);
+    return updatePersonality(personalityPaths.libraryDir, id, fields);
+  });
+  ipcMain.handle(IPC.ResetPersonality, (event, args: IpcArgs) => {
+    assertTrustedPersonalitySender(event, win);
+    assertString(args?.id, 'id');
+    if (Object.keys(args).some((key) => key !== 'id')) {
+      throw new Error('Invalid personality request');
+    }
+    if (!isPersonalityId(args.id)) throw new Error('Invalid personality id');
+    return resetPersonality(personalityPaths.libraryDir, personalityPaths.seedDir, args.id);
   });
 
   // --- Keybindings ---

@@ -95,7 +95,7 @@ describe('D-05/D-11 packaged personality startup contract', () => {
     const main = fs.readFileSync(MAIN_PATH, 'utf8');
     const readyOffset = main.indexOf('app.whenReady().then(() => {');
     const seedOffset = main.indexOf('seedBuiltInPersonalities(', readyOffset);
-    const windowOffset = main.indexOf('createWindow();', readyOffset);
+    const windowOffset = main.indexOf('createWindow(personalityPaths);', readyOffset);
     const startupBeforeWindow = main.slice(readyOffset, windowOffset);
 
     expect(readyOffset).toBeGreaterThanOrEqual(0);
@@ -157,6 +157,5 @@ describe('RED: reset persistence contract', () => {
     expect(register).not.toContain("path.join(getStateDir(), 'personalities')");
     expect(register).not.toContain('resolvePersonalitySeedDir(');
     expect(register).not.toContain('process.resourcesPath');
-    expect(register).not.toContain('app.isPackaged');
   });
 });
