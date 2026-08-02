@@ -21,6 +21,7 @@ interface ModelSelectorProps {
   agentDef: AgentDef;
   selection: ModelSelection;
   onChange: (sel: ModelSelection) => void;
+  density?: 'editor';
 }
 
 const inputStyle = {
@@ -158,6 +159,7 @@ export function ModelSelector(props: ModelSelectorProps) {
 
   return (
     <div
+      class={`model-selector${props.density === 'editor' ? ' model-selector-editor' : ''}`}
       data-nav-field="model-selection"
       style={{ display: 'flex', 'flex-direction': 'column', gap: '8px' }}
     >

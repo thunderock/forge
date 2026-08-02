@@ -8,10 +8,18 @@ import {
   on,
   type JSX,
 } from 'solid-js';
-import type { PersonalityDetail, PersonalityWriteFields } from '../ipc/types';
-import { createPersonality } from '../store/store';
+import type {
+  AgentDef,
+  PersonalityDefaultAgent,
+  PersonalityDetail,
+  PersonalityWriteFields,
+} from '../ipc/types';
+import type { ModelSelection } from '../store/types';
+import { createPersonality, store } from '../store/store';
+import { AgentSelector } from './AgentSelector';
 import { Dialog } from './Dialog';
 import { CheckIcon, CloseIcon } from './icons';
+import { ModelSelector } from './ModelSelector';
 import { PersonalityBadge } from './PersonalityLibraryDialog';
 
 export const MAX_PERSONALITY_MARKDOWN_BYTES = 2 * 1024 * 1024;
@@ -40,6 +48,22 @@ export const PERSONALITY_COLOR_OPTIONS: readonly PersonalityColorOption[] = [
   { name: 'Gold', value: '#F5C451' },
   { name: 'Red', value: '#F05D5E' },
 ];
+
+const PERSONALITY_BINDING_AGENT_OPTIONS: readonly {
+  id: PersonalityDefaultAgent;
+  name: string;
+}[] = [
+  { id: 'claude-code', name: 'Claude Code' },
+  { id: 'codex', name: 'Codex' },
+  { id: 'opencode', name: 'opencode' },
+];
+
+export function personalityBindingAgents(agents: AgentDef[]): AgentDef[] {
+  return PERSONALITY_BINDING_AGENT_OPTIONS.flatMap(({ id, name }) => {
+    const agent = agents.find((candidate) => candidate.id === id);
+    return agent ? [{ ...agent, name }] : [];
+  });
+}
 
 const BADGE_PATTERN = /^[A-Z0-9]{1,4}$/;
 const COLOR_PATTERN = /^#(?:[0-9A-F]{3}|[0-9A-F]{6})$/i;
@@ -162,11 +186,15 @@ export function PersonalityEditorDialog(props: PersonalityEditorDialogProps) {
   const colorErrorId = createUniqueId();
   const markdownCounterId = createUniqueId();
   const markdownErrorId = createUniqueId();
+  const bindingHelpId = createUniqueId();
+  const noBindingHelpId = createUniqueId();
 
   const [name, setName] = createSignal('');
   const [badge, setBadge] = createSignal('');
   const [color, setColor] = createSignal('#FF6A2C');
   const [markdown, setMarkdown] = createSignal('');
+  const [bindingAgentId, setBindingAgentId] = createSignal<PersonalityDefaultAgent | null>(null);
+  const [modelSelection, setModelSelection] = createSignal<ModelSelection>({});
   const [previewIdentity, setPreviewIdentity] = createSignal<PersonalityPreviewIdentity>({
     badge: '',
     color: '#FF6A2C',
@@ -201,6 +229,10 @@ export function PersonalityEditorDialog(props: PersonalityEditorDialogProps) {
     badge: previewIdentity().badge || '—',
     color: previewIdentity().color,
   }));
+  const bindingAgents = createMemo(() => personalityBindingAgents(store.availableAgents));
+  const selectedBindingAgent = createMemo(
+    () => bindingAgents().find((agent) => agent.id === bindingAgentId()) ?? null,
+  );
 
   function visibleError(field: PersonalityDraftField): string | undefined {
     const error = errors()[field];
@@ -250,6 +282,20 @@ export function PersonalityEditorDialog(props: PersonalityEditorDialogProps) {
     clearMutationError();
   }
 
+  function selectBindingAgent(agent: AgentDef): void {
+    const option = PERSONALITY_BINDING_AGENT_OPTIONS.find(({ id }) => id === agent.id);
+    if (!option) return;
+    setBindingAgentId(option.id);
+    setModelSelection({});
+    clearMutationError();
+  }
+
+  function clearBindingAgent(): void {
+    setBindingAgentId(null);
+    setModelSelection({});
+    clearMutationError();
+  }
+
   function close(): void {
     if (!saving()) props.onClose();
   }
@@ -275,6 +321,13 @@ export function PersonalityEditorDialog(props: PersonalityEditorDialogProps) {
       badge: badge().trim().toUpperCase(),
       color: normalizedColor,
       markdown: markdown(),
+      ...(bindingAgentId()
+        ? {
+            defaultAgent: bindingAgentId() ?? undefined,
+            defaultModel: modelSelection().model,
+            defaultReasoningEffort: modelSelection().reasoningEffort,
+          }
+        : {}),
     };
     setColor(normalizedColor);
     await submit(fields);
@@ -300,6 +353,8 @@ export function PersonalityEditorDialog(props: PersonalityEditorDialogProps) {
         setBadge('');
         setColor('#FF6A2C');
         setMarkdown('');
+        setBindingAgentId(null);
+        setModelSelection({});
         setPreviewIdentity({ badge: '', color: '#FF6A2C' });
         setTouched({ ...EMPTY_TOUCHED });
         setSubmitted(false);
@@ -513,6 +568,48 @@ export function PersonalityEditorDialog(props: PersonalityEditorDialogProps) {
                     Markdown size: {formatMarkdownBytes(markdownBytes())} / 2 MB
                   </p>
                 </div>
+              </fieldset>
+            </section>
+
+            <section class="personality-editor-section" aria-labelledby={`${titleId}-binding`}>
+              <h3 id={`${titleId}-binding`}>Default binding</h3>
+              <fieldset class="personality-editor-fieldset" disabled={saving()}>
+                <p
+                  id={bindingHelpId}
+                  class="personality-editor-help personality-editor-binding-help"
+                >
+                  Saved with this personality to prefill future task setup. You can override it per
+                  run.
+                </p>
+                <AgentSelector
+                  agents={bindingAgents()}
+                  selectedAgent={selectedBindingAgent()}
+                  onSelect={selectBindingAgent}
+                  showNone
+                  noneLabel="None"
+                  onClear={clearBindingAgent}
+                  density="editor"
+                  describedBy={
+                    bindingAgentId() ? bindingHelpId : `${bindingHelpId} ${noBindingHelpId}`
+                  }
+                />
+                <Show
+                  when={selectedBindingAgent()}
+                  fallback={
+                    <p id={noBindingHelpId} class="personality-editor-help">
+                      Forge will use its normal task default.
+                    </p>
+                  }
+                >
+                  {(agent) => (
+                    <ModelSelector
+                      agentDef={agent()}
+                      selection={modelSelection()}
+                      onChange={setModelSelection}
+                      density="editor"
+                    />
+                  )}
+                </Show>
               </fieldset>
             </section>
           </div>

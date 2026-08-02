@@ -2767,6 +2767,36 @@ body.dragging-task * {
   color: var(--fg-muted);
 }
 
+.personality-editor-binding-help {
+  margin-bottom: 16px;
+}
+
+.personality-editor-fieldset > .agent-selector + .personality-editor-help,
+.personality-editor-fieldset > .agent-selector + .model-selector {
+  margin-top: 16px;
+}
+
+.agent-selector-editor > label,
+.model-selector-editor > label {
+  font-size: 12px !important;
+  font-weight: 600;
+}
+
+.agent-selector-editor .agent-btn,
+.model-selector-editor .project-select,
+.model-selector-editor input,
+.model-selector-editor [role='radiogroup'] button {
+  font-size: 14px !important;
+}
+
+.agent-selector-editor .agent-btn.selected {
+  font-weight: 600 !important;
+}
+
+.agent-selector-editor .agent-btn span {
+  font-size: 12px !important;
+}
+
 .personality-editor-error,
 .personality-editor-byte-count.is-error,
 .personality-editor-save-error {

@@ -13,6 +13,11 @@ interface AgentSelectorProps {
   selectedIds?: Set<string>;
   onToggle?: (agent: AgentDef) => void;
   wrap?: boolean;
+  showNone?: boolean;
+  noneLabel?: string;
+  onClear?: () => void;
+  density?: 'editor';
+  describedBy?: string;
 }
 
 /**
@@ -24,21 +29,33 @@ export function AgentSelector(props: AgentSelectorProps) {
   const btnRefs: HTMLButtonElement[] = [];
   const allowWrap = () => props.wrap ?? true;
   const isMulti = () => props.multiSelect === true;
+  const options = (): (AgentDef | null)[] =>
+    !isMulti() && props.showNone ? [null, ...props.agents] : props.agents;
 
-  const isSelected = (agent: AgentDef) =>
-    isMulti() ? (props.selectedIds?.has(agent.id) ?? false) : props.selectedAgent?.id === agent.id;
+  const isSelected = (agent: AgentDef | null) => {
+    if (!agent) return !isMulti() && !props.selectedAgent;
+    return isMulti()
+      ? (props.selectedIds?.has(agent.id) ?? false)
+      : props.selectedAgent?.id === agent.id;
+  };
 
   // Only multi-select disables uninstalled agents; single-select keeps today's behavior.
-  const isDisabled = (agent: AgentDef) => isMulti() && agent.available === false;
+  const isDisabled = (agent: AgentDef | null) =>
+    agent !== null && isMulti() && agent.available === false;
 
-  function activate(agent: AgentDef) {
+  function activate(agent: AgentDef | null) {
     if (isDisabled(agent)) return;
-    if (isMulti()) props.onToggle?.(agent);
-    else props.onSelect?.(agent);
+    if (!agent) {
+      props.onClear?.();
+    } else if (isMulti()) {
+      props.onToggle?.(agent);
+    } else {
+      props.onSelect?.(agent);
+    }
   }
 
   function handleKeyDown(e: KeyboardEvent, idx: number) {
-    const agents = props.agents;
+    const agents = options();
     let nextIdx: number | null = null;
 
     if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
@@ -51,18 +68,22 @@ export function AgentSelector(props: AgentSelectorProps) {
 
     if (nextIdx !== null) {
       // Radio semantics select on arrow; checkbox group only moves focus (Space/Enter toggles).
-      if (!isMulti()) props.onSelect?.(agents[nextIdx]);
+      if (!isMulti()) activate(agents[nextIdx] ?? null);
       btnRefs[nextIdx]?.focus();
     }
   }
 
-  const tabIndexFor = (agent: AgentDef) => {
+  const tabIndexFor = (agent: AgentDef | null) => {
     if (isMulti()) return isDisabled(agent) ? -1 : 0;
     return isSelected(agent) ? 0 : -1;
   };
 
   return (
-    <div data-nav-field="agent" style={{ display: 'flex', 'flex-direction': 'column', gap: '8px' }}>
+    <div
+      class={`agent-selector${props.density === 'editor' ? ' agent-selector-editor' : ''}`}
+      data-nav-field="agent"
+      style={{ display: 'flex', 'flex-direction': 'column', gap: '8px' }}
+    >
       <label
         style={{
           'font-size': '12px',
@@ -75,6 +96,7 @@ export function AgentSelector(props: AgentSelectorProps) {
       </label>
       <div
         role={isMulti() ? 'group' : 'radiogroup'}
+        aria-describedby={props.describedBy}
         style={{
           display: 'flex',
           'flex-wrap': allowWrap() ? 'wrap' : 'nowrap',
@@ -84,7 +106,7 @@ export function AgentSelector(props: AgentSelectorProps) {
           'padding-bottom': allowWrap() ? undefined : '2px',
         }}
       >
-        <For each={props.agents}>
+        <For each={options()}>
           {(agent, i) => (
             <button
               ref={(el) => (btnRefs[i()] = el)}
@@ -120,8 +142,8 @@ export function AgentSelector(props: AgentSelectorProps) {
                 'white-space': 'nowrap',
               }}
             >
-              {agent.name}
-              <Show when={agent.available === false}>
+              {agent?.name ?? props.noneLabel ?? 'None'}
+              <Show when={agent?.available === false}>
                 <span
                   style={{
                     'font-size': '11px',

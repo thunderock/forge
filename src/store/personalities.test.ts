@@ -285,16 +285,16 @@ describe('RED: binding editor contract', () => {
 
     await createPersonality({
       ...baseFields,
-      defaultAgent: 'opencode',
+      defaultAgent: 'codex',
       defaultModel: '  provider/custom-model  ',
-      defaultReasoningEffort: '  max  ',
+      defaultReasoningEffort: '  high  ',
     });
 
     expect(mockInvoke).toHaveBeenCalledWith(IPC.CreatePersonality, {
       ...baseFields,
-      defaultAgent: 'opencode',
+      defaultAgent: 'codex',
       defaultModel: 'provider/custom-model',
-      defaultReasoningEffort: 'max',
+      defaultReasoningEffort: 'high',
     });
   });
 });

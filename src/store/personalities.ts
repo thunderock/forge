@@ -24,7 +24,25 @@ export async function readPersonality(id: string): Promise<PersonalityDetail | n
 export async function createPersonality(
   fields: PersonalityWriteFields,
 ): Promise<PersonalityDetail> {
-  return invoke<PersonalityDetail>(IPC.CreatePersonality, { ...fields });
+  return invoke<PersonalityDetail>(IPC.CreatePersonality, {
+    ...normalizePersonalityWriteFields(fields),
+  });
+}
+
+export function normalizePersonalityWriteFields(
+  fields: PersonalityWriteFields,
+): PersonalityWriteFields {
+  const { defaultAgent, defaultModel, defaultReasoningEffort, ...identity } = fields;
+  if (!defaultAgent) return identity;
+
+  const model = defaultModel?.trim();
+  const reasoningEffort = defaultReasoningEffort?.trim();
+  return {
+    ...identity,
+    defaultAgent,
+    ...(model ? { defaultModel: model } : {}),
+    ...(reasoningEffort ? { defaultReasoningEffort: reasoningEffort } : {}),
+  };
 }
 
 export function togglePersonalityLibraryDialog(show?: boolean): void {

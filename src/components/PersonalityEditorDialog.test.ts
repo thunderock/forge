@@ -283,8 +283,8 @@ describe('RED: binding editor contract', () => {
     const source = readFileSync(new URL('./PersonalityEditorDialog.tsx', import.meta.url), 'utf8');
 
     expect(source).toContain('Default binding');
-    expect(source).toContain(
-      'Saved with this personality to prefill future task setup. You can override it per run.',
+    expect(source).toMatch(
+      /Saved with this personality to prefill future task setup\. You can override it per\s+run\./,
     );
     expect(source).toContain('Forge will use its normal task default.');
     expect(source).toContain('<AgentSelector');
@@ -292,7 +292,7 @@ describe('RED: binding editor contract', () => {
     expect(source).toContain('noneLabel="None"');
     expect(source).toContain('<ModelSelector');
     expect(source).toContain('setModelSelection({})');
-    expect(source).toMatch(/<Show when=\{selectedBindingAgent\(\)\}>/);
+    expect(source).toMatch(/<Show\s+when=\{selectedBindingAgent\(\)\}/);
     expect(source).not.toContain('customAgents');
   });
 });
