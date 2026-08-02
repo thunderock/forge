@@ -22,6 +22,7 @@ import { TilingLayout } from './components/TilingLayout';
 import { NewTaskDialog } from './components/NewTaskDialog';
 import { BroadcastDialog } from './components/BroadcastDialog';
 import { HelpDialog } from './components/HelpDialog';
+import { PersonalityEditorDialog } from './components/PersonalityEditorDialog';
 import { PersonalityLibraryDialog } from './components/PersonalityLibraryDialog';
 import { SettingsDialog } from './components/SettingsDialog';
 import { WindowTitleBar } from './components/WindowTitleBar';
@@ -148,11 +149,25 @@ function App() {
   const [windowFocused, setWindowFocused] = createSignal(true);
   const [windowMaximized, setWindowMaximized] = createSignal(false);
   const [showDropOverlay, setShowDropOverlay] = createSignal(false);
+  const [personalityEditorOpen, setPersonalityEditorOpen] = createSignal(false);
+  const [preferredPersonalityId, setPreferredPersonalityId] = createSignal<string | null>(null);
+  const [personalityReloadGeneration, setPersonalityReloadGeneration] = createSignal(0);
   let dragCounter = 0;
 
   function closeArena() {
     void resetForNewMatch();
     toggleArena(false);
+  }
+
+  function closePersonalityLibrary(): void {
+    setPersonalityEditorOpen(false);
+    togglePersonalityLibraryDialog(false);
+  }
+
+  function handlePersonalitySaved(id: string): void {
+    setPersonalityEditorOpen(false);
+    setPreferredPersonalityId(id);
+    setPersonalityReloadGeneration((generation) => generation + 1);
   }
 
   function extractGitHubUrl(dt: DataTransfer): string | null {
@@ -277,6 +292,10 @@ function App() {
   createEffect(() => {
     osIsDark(); // reactive dependency
     applyAppearanceMode();
+  });
+
+  createEffect(() => {
+    if (!store.showPersonalityLibraryDialog) setPersonalityEditorOpen(false);
   });
 
   // Sync theme to <html> so Portal content (dialogs, tooltips) inherits CSS variables.
@@ -686,11 +705,21 @@ function App() {
       toggleSidebar: () => toggleSidebar(),
       toggleFocusMode: () => toggleTaskFocusMode(),
       toggleHelp: () => toggleHelpDialog(),
-      togglePersonalityLibrary: () => togglePersonalityLibraryDialog(),
+      togglePersonalityLibrary: () => {
+        if (personalityEditorOpen()) {
+          setPersonalityEditorOpen(false);
+          return;
+        }
+        togglePersonalityLibraryDialog();
+      },
       toggleSettings: () => toggleSettingsDialog(),
       closeDialogs: () => {
+        if (personalityEditorOpen()) {
+          setPersonalityEditorOpen(false);
+          return;
+        }
         if (store.showPersonalityLibraryDialog) {
-          togglePersonalityLibraryDialog(false);
+          closePersonalityLibrary();
           return;
         }
         if (store.showArena) {
@@ -923,7 +952,15 @@ function App() {
         />
         <PersonalityLibraryDialog
           open={store.showPersonalityLibraryDialog}
-          onClose={() => togglePersonalityLibraryDialog(false)}
+          onClose={closePersonalityLibrary}
+          onNew={() => setPersonalityEditorOpen(true)}
+          reloadGeneration={personalityReloadGeneration()}
+          preferredId={preferredPersonalityId()}
+        />
+        <PersonalityEditorDialog
+          open={personalityEditorOpen()}
+          onClose={() => setPersonalityEditorOpen(false)}
+          onSaved={handlePersonalitySaved}
         />
         <Show when={store.showArena}>
           <ArenaOverlay onClose={closeArena} />

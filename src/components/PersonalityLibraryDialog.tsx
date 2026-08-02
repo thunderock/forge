@@ -12,13 +12,16 @@ import {
 } from 'solid-js';
 import type { PersonalityDetail, PersonalitySummary } from '../ipc/types';
 import { createHighlightedMarkdown } from '../lib/marked-shiki';
-import { readPersonality, refreshPersonalities } from '../store/store';
+import { readPersonality, refreshPersonalities, store } from '../store/store';
 import { Dialog } from './Dialog';
 import { CloseIcon } from './icons';
 
 interface PersonalityLibraryDialogProps {
   open: boolean;
   onClose: () => void;
+  onNew: () => void;
+  reloadGeneration: number;
+  preferredId: string | null;
 }
 
 export interface AsyncRequestRunner {
@@ -69,10 +72,15 @@ export function nextPersonalityIndex(key: string, current: number, count: number
 
 export function selectPreferredPersonality(
   personalities: PersonalitySummary[],
-  _preferredId: string | null,
-  _currentId: string | null = null,
+  preferredId: string | null,
+  currentId: string | null = null,
 ): PersonalitySummary | null {
-  return personalities[0] ?? null;
+  return (
+    personalities.find((personality) => personality.id === preferredId) ??
+    personalities.find((personality) => personality.id === currentId) ??
+    personalities[0] ??
+    null
+  );
 }
 
 interface PersonalityLibraryRailProps {
@@ -81,20 +89,34 @@ interface PersonalityLibraryRailProps {
   detailId: string;
   onNew: () => void;
   onSelect: (personality: PersonalitySummary) => void;
+  onKeyDown?: (event: KeyboardEvent, index: number) => void;
+  onElement?: (element: HTMLButtonElement, index: number) => void;
 }
 
 export function PersonalityLibraryRail(props: PersonalityLibraryRailProps) {
   return (
     <aside class="personality-library-rail">
-      <div class="personality-library-rail-label">Personalities</div>
-      <div class="personality-library-options" role="listbox" aria-label="Personalities">
+      <div class="personality-library-rail-toolbar">
+        <div class="personality-library-rail-label">Personalities</div>
+        <button type="button" class="personality-library-new" onClick={() => props.onNew()}>
+          New Personality
+        </button>
+      </div>
+      <div
+        class="personality-library-options"
+        role="listbox"
+        aria-label="Personalities"
+        aria-orientation="vertical"
+      >
         <For each={props.personalities}>
-          {(personality) => (
+          {(personality, index) => (
             <PersonalityOption
               personality={personality}
               selected={personality.id === props.selectedId}
               detailId={props.detailId}
               onSelect={() => props.onSelect(personality)}
+              onKeyDown={(event) => props.onKeyDown?.(event, index())}
+              onElement={(element) => props.onElement?.(element, index())}
             />
           )}
         </For>
@@ -157,6 +179,7 @@ type CatalogStateKind = 'loading' | 'empty' | 'error';
 interface PersonalityCatalogStateProps {
   kind: CatalogStateKind;
   onRetry: () => void;
+  postSave?: boolean;
 }
 
 export function PersonalityCatalogState(props: PersonalityCatalogStateProps) {
@@ -176,16 +199,20 @@ export function PersonalityCatalogState(props: PersonalityCatalogStateProps) {
         <div class="personality-library-state-copy">
           <h3>No personalities available</h3>
           <p>
-            No readable personality files were found. Restore the files, or restart Forge to restore
-            missing built-ins, then reopen the library.
+            Create a personality to get started. If built-ins are missing, restart Forge and reopen
+            the library.
           </p>
         </div>
       </Show>
       <Show when={props.kind === 'error'}>
         <div class="personality-library-state-copy is-error">
-          <p>Couldn’t load the personality library. Select Retry to read the files again.</p>
+          <p>
+            {props.postSave
+              ? 'Personality saved, but the library couldn’t refresh. Select Reload Library to reload it.'
+              : 'Couldn’t load the personality library. Select Reload Library to read the files again.'}
+          </p>
           <button type="button" class="personality-library-action" onClick={() => props.onRetry()}>
-            Retry
+            Reload Library
           </button>
         </div>
       </Show>
@@ -227,7 +254,7 @@ export function PersonalityDetailState(props: PersonalityDetailStateProps) {
       <Show when={props.kind === 'error'}>
         <p>Couldn’t load {props.name}. The file may have changed on disk.</p>
         <button type="button" class="personality-library-action" onClick={() => props.onRefresh()}>
-          Refresh library
+          Reload Personality
         </button>
       </Show>
     </div>
@@ -242,11 +269,10 @@ export function PersonalityLibraryDialog(props: PersonalityLibraryDialogProps) {
   const listRequests = createAsyncRequestRunner();
   const detailRequests = createAsyncRequestRunner();
 
-  const [rows, setRows] = createSignal<PersonalitySummary[]>([]);
   const [selectedId, setSelectedId] = createSignal<string | null>(null);
   const [detail, setDetail] = createSignal<PersonalityDetail | null>(null);
   const [listLoading, setListLoading] = createSignal(false);
-  const [listError, setListError] = createSignal(false);
+  const [listError, setListError] = createSignal<'initial' | 'post-save' | null>(null);
   const [detailLoading, setDetailLoading] = createSignal(false);
   const [detailError, setDetailError] = createSignal(false);
 
@@ -254,6 +280,7 @@ export function PersonalityLibraryDialog(props: PersonalityLibraryDialogProps) {
   let detailScrollRef: HTMLDivElement | undefined;
   const optionRefs: HTMLButtonElement[] = [];
 
+  const rows = () => store.personalities;
   const selectedPersonality = createMemo(
     () => rows().find((personality) => personality.id === selectedId()) ?? null,
   );
@@ -303,12 +330,12 @@ export function PersonalityLibraryDialog(props: PersonalityLibraryDialogProps) {
     void loadDetail(personality);
   }
 
-  function loadLibrary(): Promise<void> {
-    const preferredId = selectedId();
+  function loadLibrary(postSave: boolean = false): Promise<void> {
+    const currentId = selectedId();
+    const preferredId = untrack(() => props.preferredId);
     detailRequests.invalidate();
-    setRows([]);
     setDetail(null);
-    setListError(false);
+    setListError(null);
     setDetailError(false);
     setDetailLoading(false);
     setListLoading(true);
@@ -319,21 +346,28 @@ export function PersonalityLibraryDialog(props: PersonalityLibraryDialogProps) {
       (result) => {
         setListLoading(false);
         if (result === null) return;
-        setRows(result);
         if (result.length === 0) {
           setSelectedId(null);
           return;
         }
 
-        const selected = result.find((personality) => personality.id === preferredId) ?? result[0];
+        const selected = selectPreferredPersonality(result, preferredId, currentId);
+        if (!selected) {
+          setSelectedId(null);
+          return;
+        }
         const selectedIndex = result.indexOf(selected);
         setSelectedId(selected.id);
         void loadDetail(selected);
-        focusSelectedFromPanel(selectedIndex);
+        if (postSave && selected.id === preferredId) {
+          focusOption(selectedIndex);
+        } else {
+          focusSelectedFromPanel(selectedIndex);
+        }
       },
       () => {
         setListLoading(false);
-        setListError(true);
+        setListError(postSave ? 'post-save' : 'initial');
       },
     );
   }
@@ -357,18 +391,19 @@ export function PersonalityLibraryDialog(props: PersonalityLibraryDialogProps) {
 
   createEffect(
     on(
-      () => props.open,
-      (open) => {
+      () => [props.open, props.reloadGeneration] as const,
+      ([open, reloadGeneration], previous) => {
         if (open) {
-          void loadLibrary();
+          const postSave = Boolean(previous?.[0] && previous[1] !== reloadGeneration);
+          void loadLibrary(postSave);
           return;
         }
         listRequests.invalidate();
         detailRequests.invalidate();
-        setRows([]);
         setDetail(null);
         setListLoading(false);
         setDetailLoading(false);
+        setListError(null);
       },
     ),
   );
@@ -397,7 +432,7 @@ export function PersonalityLibraryDialog(props: PersonalityLibraryDialogProps) {
           <div class="personality-library-heading-copy">
             <h2 id={titleId}>Personality Library</h2>
             <p id={subtitleId}>
-              Browse the built-in engineering personalities available in every project.
+              Create, inspect, and customize personalities available in every project.
             </p>
           </div>
           <button
@@ -416,36 +451,30 @@ export function PersonalityLibraryDialog(props: PersonalityLibraryDialogProps) {
             <PersonalityCatalogState kind="loading" onRetry={() => void loadLibrary()} />
           </Show>
           <Show when={!listLoading() && listError()}>
-            <PersonalityCatalogState kind="error" onRetry={() => void loadLibrary()} />
+            <PersonalityCatalogState
+              kind="error"
+              postSave={listError() === 'post-save'}
+              onRetry={() => void loadLibrary(listError() === 'post-save')}
+            />
           </Show>
-          <Show when={!listLoading() && !listError() && rows().length === 0}>
-            <PersonalityCatalogState kind="empty" onRetry={() => void loadLibrary()} />
-          </Show>
-          <Show when={!listLoading() && !listError() && rows().length > 0}>
-            <aside class="personality-library-rail">
-              <div class="personality-library-rail-label">Personalities</div>
-              <div
-                class="personality-library-options"
-                role="listbox"
-                aria-label="Personalities"
-                aria-orientation="vertical"
-              >
-                <For each={rows()}>
-                  {(personality, index) => (
-                    <PersonalityOption
-                      personality={personality}
-                      selected={personality.id === selectedId()}
-                      detailId={detailRegionId}
-                      onSelect={() => selectPersonality(personality)}
-                      onKeyDown={(event) => handleOptionKeyDown(event, index())}
-                      onElement={(element) => {
-                        optionRefs[index()] = element;
-                      }}
-                    />
-                  )}
-                </For>
-              </div>
-            </aside>
+          <Show when={!listLoading() && !listError()}>
+            <PersonalityLibraryRail
+              personalities={rows()}
+              selectedId={selectedId()}
+              detailId={detailRegionId}
+              onNew={() => props.onNew()}
+              onSelect={selectPersonality}
+              onKeyDown={handleOptionKeyDown}
+              onElement={(element, index) => {
+                optionRefs[index] = element;
+              }}
+            />
+
+            <Show when={rows().length === 0}>
+              <section class="personality-library-detail">
+                <PersonalityCatalogState kind="empty" onRetry={() => void loadLibrary()} />
+              </section>
+            </Show>
 
             <Show when={selectedPersonality()} keyed>
               {(personality) => (
@@ -464,14 +493,14 @@ export function PersonalityLibraryDialog(props: PersonalityLibraryDialogProps) {
                       <PersonalityDetailState
                         kind="loading"
                         name={personality.name}
-                        onRefresh={() => void loadLibrary()}
+                        onRefresh={() => void loadDetail(personality)}
                       />
                     </Show>
                     <Show when={!detailLoading() && detailError()}>
                       <PersonalityDetailState
                         kind="error"
                         name={personality.name}
-                        onRefresh={() => void loadLibrary()}
+                        onRefresh={() => void loadDetail(personality)}
                       />
                     </Show>
                     <Show when={!detailLoading() && !detailError() && detail()}>

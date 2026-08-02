@@ -2386,16 +2386,41 @@ body.dragging-task * {
   border-right: 1px solid var(--border);
 }
 
-.personality-library-rail-label {
+.personality-library-rail-toolbar {
   padding: 16px;
   border-bottom: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
   flex-shrink: 0;
+}
+
+.personality-library-rail-label {
   color: var(--fg-muted);
   font-size: 12px;
   font-weight: 600;
   line-height: 1.4;
   letter-spacing: 0.05em;
   text-transform: uppercase;
+}
+
+.personality-library-new {
+  width: 100%;
+  min-height: 36px;
+  padding: 8px 16px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: var(--accent);
+  color: var(--accent-text);
+  font-family: var(--font-ui);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.personality-library-new:hover {
+  background: var(--accent-hover);
 }
 
 .personality-library-options {

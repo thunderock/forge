@@ -116,13 +116,13 @@ describe('personality catalog presentation', () => {
     expect(loading).toContain('Loading personalities…');
     expect(empty).toContain('No personalities available');
     expect(empty).toContain(
-      'No readable personality files were found. Restore the files, or restart Forge to restore missing built-ins, then reopen the library.',
+      'Create a personality to get started. If built-ins are missing, restart Forge and reopen the library.',
     );
     expect(error).toContain('role="alert"');
     expect(error).toContain(
-      'Couldn’t load the personality library. Select Retry to read the files again.',
+      'Couldn’t load the personality library. Select Reload Library to read the files again.',
     );
-    expect(error).toContain('Retry');
+    expect(error).toContain('Reload Library');
   });
 
   it('renders exact detail loading and error recovery copy', () => {
@@ -141,7 +141,7 @@ describe('personality catalog presentation', () => {
     expect(visibleText(error)).toContain(
       `Couldn’t load ${quality.name}. The file may have changed on disk.`,
     );
-    expect(error).toContain('Refresh library');
+    expect(error).toContain('Reload Personality');
   });
 });
 
