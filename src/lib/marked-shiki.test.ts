@@ -156,16 +156,15 @@ describe('RED: markdown preview contract', () => {
     preview.dispose();
   });
 
-  it('treats Mermaid as inert code instead of a second rendering system', async () => {
-    mockHighlightLines.mockResolvedValueOnce(['graph TD; A--&gt;B']);
-
+  it('preserves inert Mermaid placeholders without executing a second rendering system', async () => {
     const html = await renderMarkdownWithHighlighting(
       '```mermaid\ngraph TD; A-->B\n```',
       mockHighlightLines,
     );
 
-    expect(mockHighlightLines).toHaveBeenCalledWith('graph TD; A-->B', 'mermaid');
-    expect(html).not.toContain('mermaid-block');
-    expect(html).toContain('shiki-block');
+    expect(mockHighlightLines).not.toHaveBeenCalled();
+    expect(html).toContain('class="mermaid-block"');
+    expect(html).toContain('data-mermaid="graph TD; A--&gt;B"');
+    expect(html).not.toContain('<svg');
   });
 });
