@@ -540,7 +540,7 @@ export function PersonalityEditorDialog(props: PersonalityEditorDialogProps) {
     focusName(loaded.mode === 'copy');
   }
 
-  function close(): void {
+  function requestClose(): void {
     if (saving()) return;
     draftLoader.invalidate();
     setPreviewing(false);
@@ -655,7 +655,7 @@ export function PersonalityEditorDialog(props: PersonalityEditorDialogProps) {
   return (
     <Dialog
       open={props.open}
-      onClose={close}
+      onClose={requestClose}
       width="min(840px, calc(100vw - 32px))"
       zIndex={1200}
       labelledBy={titleId}
@@ -684,7 +684,7 @@ export function PersonalityEditorDialog(props: PersonalityEditorDialogProps) {
             aria-label="Close Personality Editor"
             title="Close Personality Editor"
             disabled={saving()}
-            onClick={close}
+            onClick={requestClose}
           >
             <CloseIcon />
           </button>
@@ -1029,7 +1029,12 @@ export function PersonalityEditorDialog(props: PersonalityEditorDialogProps) {
             when={draftReady()}
             fallback={
               <div class="personality-editor-actions">
-                <button type="button" class="personality-editor-secondary" onClick={close}>
+                <button
+                  type="button"
+                  class="personality-editor-secondary"
+                  disabled={saving()}
+                  onClick={requestClose}
+                >
                   Close Editor
                 </button>
               </div>
@@ -1047,7 +1052,7 @@ export function PersonalityEditorDialog(props: PersonalityEditorDialogProps) {
                 type="button"
                 class="personality-editor-secondary"
                 disabled={saving()}
-                onClick={close}
+                onClick={requestClose}
               >
                 Discard Changes
               </button>
