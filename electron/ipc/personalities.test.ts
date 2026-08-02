@@ -52,6 +52,7 @@ const PACKAGED_SEED_CONTRACTS = [
     badge: 'QE',
     color: '#2FD198',
     sourcePersona: 'quality.md',
+    sha256: '811e35ddd32204614710bfd63c52b9fae2d2ea75fb1c9a543a50987257b64258',
     topics: ['readability', 'naming', 'complexity', 'consistent error handling'],
   },
   {
@@ -62,6 +63,7 @@ const PACKAGED_SEED_CONTRACTS = [
     badge: 'PE',
     color: '#7A78FF',
     sourcePersona: 'principal.md',
+    sha256: '2d75b1894c8096df090bfa7055505e7b5e67a3ceb84ac1447670724cb96451d4',
     topics: [
       'architecture',
       'maintainability',
@@ -78,6 +80,7 @@ const PACKAGED_SEED_CONTRACTS = [
     badge: 'AI',
     color: '#FF944D',
     sourcePersona: 'ai.md',
+    sha256: 'be0162e663ca598b3745eb8d5884c99d8bfbb36860141690e4087a3e2abce473',
     topics: [
       'prompt design',
       'robust model integration',
@@ -674,6 +677,258 @@ describe('D-01/D-02/D-03/D-04 packaged personality seed contract', () => {
     for (const section of requiredSections) expect(license).toContain(section);
     expect(license).toContain('END OF TERMS AND CONDITIONS');
     expect(license).toContain('Copyright 2026 Open Code Review Contributors');
+  });
+});
+
+describe('RED: binding storage contract', () => {
+  let temporaryRoot: string;
+  let libraryDir: string;
+
+  beforeEach(() => {
+    temporaryRoot = fs.mkdtempSync(join(os.tmpdir(), 'personality-binding-'));
+    libraryDir = join(temporaryRoot, 'library');
+    fs.mkdirSync(libraryDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    fs.rmSync(temporaryRoot, { recursive: true, force: true });
+  });
+
+  function writeBindingDocument(metadata: readonly string[]): string {
+    const filePath = join(libraryDir, 'local-builder.md');
+    fs.writeFileSync(filePath, personalityDocument([...CUSTOM_METADATA, ...metadata]), 'utf8');
+    return filePath;
+  }
+
+  it('omits every binding key when a custom write has no binding', () => {
+    const detail = createPersonality(libraryDir, writeFields());
+    const raw = readFileSync(join(libraryDir, `${detail.id}.md`), 'utf8');
+
+    expect(detail).toEqual({
+      id: 'local-builder',
+      name: 'Local Builder',
+      badge: 'LB',
+      color: '#ABC',
+      builtin: false,
+      markdown: 'You are a local builder.',
+    });
+    expect(raw).not.toMatch(/defaultAgent|defaultModel|defaultReasoningEffort/);
+  });
+
+  it.each(['claude-code', 'codex', 'opencode'] as const)(
+    'round-trips exact agent %s while omitting host-default model and effort keys',
+    (defaultAgent) => {
+      const detail = createPersonality(libraryDir, writeFields({ defaultAgent }));
+      const raw = readFileSync(join(libraryDir, `${detail.id}.md`), 'utf8');
+
+      expect(detail).toMatchObject({ defaultAgent });
+      expect(detail).not.toHaveProperty('defaultModel');
+      expect(detail).not.toHaveProperty('defaultReasoningEffort');
+      expect(raw).toContain(`defaultAgent: ${defaultAgent}`);
+      expect(raw).not.toMatch(/defaultModel|defaultReasoningEffort/);
+    },
+  );
+
+  it('trims and round-trips free-form model and reasoning effort scalars', () => {
+    const detail = createPersonality(
+      libraryDir,
+      writeFields({
+        defaultAgent: 'opencode',
+        defaultModel: '  anthropic/claude:opus#beta  ',
+        defaultReasoningEffort: '  max  ',
+      }),
+    );
+    const raw = readFileSync(join(libraryDir, `${detail.id}.md`), 'utf8');
+
+    expect(detail).toMatchObject({
+      defaultAgent: 'opencode',
+      defaultModel: 'anthropic/claude:opus#beta',
+      defaultReasoningEffort: 'max',
+    });
+    expect(raw).toMatch(/defaultModel: ['"]anthropic\/claude:opus#beta['"]/);
+    expect(raw).toContain('defaultReasoningEffort: max');
+  });
+
+  it.each([
+    { label: 'unknown agent', fields: { defaultAgent: 'custom-agent' } },
+    { label: 'empty agent', fields: { defaultAgent: '' } },
+    { label: 'wrong-type agent', fields: { defaultAgent: 42 } },
+    { label: 'orphan model', fields: { defaultModel: 'gpt-5.6-sol' } },
+    { label: 'orphan effort', fields: { defaultReasoningEffort: 'high' } },
+    {
+      label: 'orphan model and effort',
+      fields: { defaultModel: 'gpt-5.6-sol', defaultReasoningEffort: 'high' },
+    },
+    { label: 'empty model', fields: { defaultAgent: 'codex', defaultModel: '   ' } },
+    { label: 'wrong-type model', fields: { defaultAgent: 'codex', defaultModel: false } },
+    {
+      label: 'empty effort',
+      fields: { defaultAgent: 'claude-code', defaultReasoningEffort: '   ' },
+    },
+    {
+      label: 'wrong-type effort',
+      fields: { defaultAgent: 'claude-code', defaultReasoningEffort: 1 },
+    },
+  ])('rejects a custom write with $label', ({ fields }) => {
+    expect(() =>
+      createPersonality(
+        libraryDir,
+        writeFields(fields as unknown as Partial<PersonalityWriteFields>),
+      ),
+    ).toThrow();
+  });
+
+  it('keeps valid bindings on detail reads without exposing them on summaries', () => {
+    writeBindingDocument([
+      'defaultAgent: codex',
+      "defaultModel: 'openai/gpt-5.6:sol#preview'",
+      'defaultReasoningEffort: xhigh',
+    ]);
+    const warnings: string[] = [];
+
+    const detail = readPersonality(libraryDir, 'local-builder', (message) =>
+      warnings.push(message),
+    );
+    const summaries = listPersonalities(libraryDir, (message) => warnings.push(message));
+
+    expect(detail).toEqual({
+      id: 'local-builder',
+      name: 'Local Builder',
+      badge: 'LB',
+      color: '#ABC',
+      builtin: false,
+      markdown: markdownBody(),
+      defaultAgent: 'codex',
+      defaultModel: 'openai/gpt-5.6:sol#preview',
+      defaultReasoningEffort: 'xhigh',
+    });
+    expect(Object.keys(detail ?? {})).toEqual([
+      'id',
+      'name',
+      'badge',
+      'color',
+      'builtin',
+      'markdown',
+      'defaultAgent',
+      'defaultModel',
+      'defaultReasoningEffort',
+    ]);
+    expect(summaries).toEqual([
+      {
+        id: 'local-builder',
+        name: 'Local Builder',
+        badge: 'LB',
+        color: '#ABC',
+        builtin: false,
+      },
+    ]);
+    expect(warnings).toEqual([]);
+  });
+
+  it.each([
+    {
+      label: 'unknown agent and its entire binding',
+      metadata: [
+        'defaultAgent: custom-agent',
+        'defaultModel: gpt-5.6-sol',
+        'defaultReasoningEffort: high',
+      ],
+      kept: {},
+      dropped: ['defaultAgent', 'defaultModel', 'defaultReasoningEffort'],
+    },
+    {
+      label: 'empty agent and its entire binding',
+      metadata: ["defaultAgent: ''", 'defaultModel: gpt-5.6-sol', 'defaultReasoningEffort: high'],
+      kept: {},
+      dropped: ['defaultAgent', 'defaultModel', 'defaultReasoningEffort'],
+    },
+    {
+      label: 'wrong-type agent and its entire binding',
+      metadata: ['defaultAgent: 42', 'defaultModel: gpt-5.6-sol', 'defaultReasoningEffort: high'],
+      kept: {},
+      dropped: ['defaultAgent', 'defaultModel', 'defaultReasoningEffort'],
+    },
+    {
+      label: 'invalid model independently',
+      metadata: ['defaultAgent: codex', 'defaultModel: false', 'defaultReasoningEffort: high'],
+      kept: { defaultAgent: 'codex', defaultReasoningEffort: 'high' },
+      dropped: ['defaultModel'],
+    },
+    {
+      label: 'empty model independently',
+      metadata: ['defaultAgent: codex', "defaultModel: '   '", 'defaultReasoningEffort: high'],
+      kept: { defaultAgent: 'codex', defaultReasoningEffort: 'high' },
+      dropped: ['defaultModel'],
+    },
+    {
+      label: 'invalid effort independently',
+      metadata: [
+        'defaultAgent: claude-code',
+        'defaultModel: fable',
+        'defaultReasoningEffort: false',
+      ],
+      kept: { defaultAgent: 'claude-code', defaultModel: 'fable' },
+      dropped: ['defaultReasoningEffort'],
+    },
+    {
+      label: 'empty effort independently',
+      metadata: [
+        'defaultAgent: claude-code',
+        'defaultModel: fable',
+        "defaultReasoningEffort: '   '",
+      ],
+      kept: { defaultAgent: 'claude-code', defaultModel: 'fable' },
+      dropped: ['defaultReasoningEffort'],
+    },
+    {
+      label: 'orphan model and effort',
+      metadata: ['defaultModel: gpt-5.6-sol', 'defaultReasoningEffort: high'],
+      kept: {},
+      dropped: ['defaultAgent', 'defaultModel', 'defaultReasoningEffort'],
+    },
+  ])('drops $label, keeps the core detail, and warns once', ({ metadata, kept, dropped }) => {
+    writeBindingDocument(metadata);
+    const warnings: string[] = [];
+
+    const detail = readPersonality(libraryDir, 'local-builder', (message) =>
+      warnings.push(message),
+    );
+
+    expect(detail).toMatchObject({
+      id: 'local-builder',
+      name: 'Local Builder',
+      markdown: markdownBody(),
+      ...kept,
+    });
+    for (const key of dropped) expect(detail).not.toHaveProperty(key);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('local-builder');
+    expect(warnings[0].length).toBeLessThanOrEqual(500);
+  });
+
+  it('lists a record with invalid bindings and emits only one bounded warning', () => {
+    writeBindingDocument([
+      'defaultAgent: codex',
+      'defaultModel: false',
+      'defaultReasoningEffort: 42',
+    ]);
+    const warnings: string[] = [];
+
+    const summaries = listPersonalities(libraryDir, (message) => warnings.push(message));
+
+    expect(summaries.map(({ id }) => id)).toEqual(['local-builder']);
+    expect(Object.keys(summaries[0])).toEqual(['id', 'name', 'badge', 'color', 'builtin']);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0].length).toBeLessThanOrEqual(500);
+  });
+
+  it('keeps all packaged seeds byte-identical and binding-free', () => {
+    for (const contract of PACKAGED_SEED_CONTRACTS) {
+      const raw = readRequiredRepositoryFile(join(PACKAGED_SEED_DIR, contract.filename));
+      expect(sha256(raw)).toBe(contract.sha256);
+      expect(raw).not.toMatch(/defaultAgent|defaultModel|defaultReasoningEffort/);
+    }
   });
 });
 

@@ -4,6 +4,7 @@ import path from 'node:path';
 import { Document, isMap, isScalar, parseDocument } from 'yaml';
 import { atomicWriteFileSync } from '../mcp/atomic.js';
 import type {
+  PersonalityDefaultAgent,
   PersonalityDetail,
   PersonalitySummary,
   PersonalityWriteFields,
@@ -19,6 +20,9 @@ export interface PersonalityMetadata {
   builtin: boolean;
   seedRevision?: number;
   pristineHash?: string;
+  defaultAgent?: PersonalityDefaultAgent;
+  defaultModel?: string;
+  defaultReasoningEffort?: string;
 }
 
 export interface ParsedPersonalityMarkdown {
@@ -480,6 +484,13 @@ function normalizeWriteFields(fields: PersonalityWriteFields): PersonalityWriteF
   if (typeof fields?.color !== 'string') return fail('Personality field color must be a string');
   if (typeof fields?.markdown !== 'string') {
     return fail('Personality field markdown must be a string');
+  }
+  if (
+    fields.defaultAgent !== undefined ||
+    fields.defaultModel !== undefined ||
+    fields.defaultReasoningEffort !== undefined
+  ) {
+    return fail('Personality binding storage is not implemented');
   }
 
   const normalized = {

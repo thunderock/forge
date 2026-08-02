@@ -46,8 +46,13 @@ export interface PersonalitySummary {
   builtin: boolean;
 }
 
+export type PersonalityDefaultAgent = 'claude-code' | 'codex' | 'opencode';
+
 export interface PersonalityDetail extends PersonalitySummary {
   markdown: string;
+  defaultAgent?: PersonalityDefaultAgent;
+  defaultModel?: string;
+  defaultReasoningEffort?: string;
 }
 
 export interface PersonalityWriteFields {
@@ -55,6 +60,9 @@ export interface PersonalityWriteFields {
   badge: string;
   color: string;
   markdown: string;
+  defaultAgent?: PersonalityDefaultAgent;
+  defaultModel?: string;
+  defaultReasoningEffort?: string;
 }
 
 export interface CreateTaskResult {

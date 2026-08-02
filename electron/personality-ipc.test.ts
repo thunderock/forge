@@ -67,7 +67,7 @@ describe('personality IPC contract', () => {
 
     expect(declaredKeys(summary)).toEqual(['id', 'name', 'badge', 'color', 'builtin']);
     expect(detail).toMatch(/^export interface PersonalityDetail extends PersonalitySummary \{/);
-    expect(declaredKeys(detail)).toEqual(['markdown']);
+    expect(declaredKeys(detail)[0]).toBe('markdown');
     for (const field of FORBIDDEN_CONTRACT_FIELDS) {
       expect(summary).not.toMatch(new RegExp(`\\b${field}\\b`));
       expect(detail).not.toMatch(new RegExp(`\\b${field}\\b`));
@@ -130,7 +130,7 @@ describe('personality IPC contract', () => {
     const createHandler = handlerSource(register, 'CreatePersonality');
 
     expect(register).toMatch(
-      /const PERSONALITY_WRITE_KEYS = \['name', 'badge', 'color', 'markdown'\] as const/,
+      /const PERSONALITY_WRITE_KEYS = \[[^\]]*'name'[^\]]*'badge'[^\]]*'color'[^\]]*'markdown'[^\]]*\] as const/,
     );
     expect(register).toMatch(/event\.sender !== win\.webContents/);
     expect(register).toMatch(/event\.senderFrame !== win\.webContents\.mainFrame/);
@@ -149,12 +149,60 @@ describe('RED: create persistence contract', () => {
     const personalities = readFileSync(PERSONALITIES_PATH, 'utf8');
     const writeFields = interfaceDeclaration(sharedTypes, 'PersonalityWriteFields');
 
-    expect(declaredKeys(writeFields)).toEqual(['name', 'badge', 'color', 'markdown']);
+    expect(declaredKeys(writeFields).slice(0, 4)).toEqual(['name', 'badge', 'color', 'markdown']);
     for (const field of FORBIDDEN_WRITE_FIELDS) {
       expect(writeFields).not.toMatch(new RegExp(`\\b${field}\\b`));
     }
     expect(personalities).toMatch(
       /export function createPersonality\(\s*_?libraryDir: string,\s*_?fields: PersonalityWriteFields,?\s*\): PersonalityDetail/,
     );
+  });
+});
+
+describe('RED: binding storage contract', () => {
+  it('owns the exact agent union and optional detail/write fields without widening summaries', () => {
+    const sharedTypes = readFileSync(SHARED_TYPES_PATH, 'utf8');
+    const rendererTypes = readFileSync(RENDERER_TYPES_PATH, 'utf8');
+    const summary = interfaceDeclaration(sharedTypes, 'PersonalitySummary');
+    const detail = interfaceDeclaration(sharedTypes, 'PersonalityDetail');
+    const writeFields = interfaceDeclaration(sharedTypes, 'PersonalityWriteFields');
+
+    expect(sharedTypes).toMatch(
+      /export type PersonalityDefaultAgent = 'claude-code' \| 'codex' \| 'opencode'/,
+    );
+    expect(declaredKeys(summary)).toEqual(['id', 'name', 'badge', 'color', 'builtin']);
+    expect(declaredKeys(detail)).toEqual([
+      'markdown',
+      'defaultAgent',
+      'defaultModel',
+      'defaultReasoningEffort',
+    ]);
+    expect(declaredKeys(writeFields)).toEqual([
+      'name',
+      'badge',
+      'color',
+      'markdown',
+      'defaultAgent',
+      'defaultModel',
+      'defaultReasoningEffort',
+    ]);
+    expect(rendererTypes).toMatch(/export type \{[\s\S]*PersonalityDefaultAgent/);
+    expect(rendererTypes).not.toMatch(/import\s+\{[^}]*PersonalityDefaultAgent/);
+  });
+
+  it('accepts exactly the three optional binding keys on CreatePersonality', () => {
+    const register = readFileSync(REGISTER_PATH, 'utf8');
+    const createHandler = handlerSource(register, 'CreatePersonality');
+
+    expect(register).toMatch(
+      /const PERSONALITY_WRITE_KEYS = \[\s*'name',\s*'badge',\s*'color',\s*'markdown',\s*'defaultAgent',\s*'defaultModel',\s*'defaultReasoningEffort',?\s*\] as const/,
+    );
+    for (const value of ['claude-code', 'codex', 'opencode']) expect(register).toContain(value);
+    for (const field of ['defaultAgent', 'defaultModel', 'defaultReasoningEffort']) {
+      expect(createHandler).not.toMatch(new RegExp(`args\\?*\\.${field}\\b`));
+    }
+    for (const field of FORBIDDEN_WRITE_FIELDS) {
+      expect(createHandler).not.toMatch(new RegExp(`args\\?*\\.${field}\\b`));
+    }
   });
 });

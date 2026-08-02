@@ -136,7 +136,7 @@ interface PersonalityEditorDialogProps {
   onSaved: (id: string) => void;
 }
 
-type PersonalityDraftField = keyof PersonalityDraft;
+type PersonalityDraftField = keyof PersonalityDraftErrors;
 type TouchedFields = Record<PersonalityDraftField, boolean>;
 
 const EMPTY_TOUCHED: TouchedFields = {
