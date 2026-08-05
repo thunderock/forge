@@ -902,7 +902,7 @@ export function PersonalityEditorDialog(props: PersonalityEditorDialogProps) {
                           role="tabpanel"
                           aria-labelledby={markdownEditTabId}
                         >
-                          <label class="visually-hidden" for={`${titleId}-markdown`}>
+                          <label class="dialog-sr-only" for={`${titleId}-markdown`}>
                             Markdown instructions
                           </label>
                           <textarea
